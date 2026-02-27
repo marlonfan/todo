@@ -1,0 +1,22 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+database:
+  driver: sqlite  # sqlite 或 postgres
+  dsn: "todo.db"  # SQLite 文件路径 或 Postgres DSN
+
+jwt:
+  secret: "change-this-secret-in-production"
+  expire: 72h
+
+notify:
+  check_interval: 60s  # 通知检查间隔
+
+plugins:
+  telegram:
+    enabled: true
+  ntfy:
+    enabled: true
+  webhook:
+    enabled: true

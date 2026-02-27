@@ -1,0 +1,368 @@
+import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { notifyAPI } from '../api/client';
+
+function NotificationSettings() {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  
+  // Form state
+  const [selectedChannel, setSelectedChannel] = useState('');
+  const [config, setConfig] = useState({});
+  const [newSettingDefault, setNewSettingDefault] = useState(false);
+
+  useEffect(() => {
+    fetchSettings();
+    fetchChannels();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await notifyAPI.getSettings();
+      setSettings(res.data);
+    } catch (err) {
+      setError(t('notification.loadSettingsFailed'));
+    }
+  };
+
+  const fetchChannels = async () => {
+    try {
+      const res = await notifyAPI.getChannels();
+      setChannels(res.data.channels);
+      if (res.data.channels.length > 0) {
+        setSelectedChannel(res.data.channels[0]);
+      }
+    } catch (err) {
+      console.error('Failed to fetch channels:', err);
+    }
+  };
+
+  const handleAddSetting = async () => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      await notifyAPI.createSetting({
+        channel: selectedChannel,
+        config,
+        is_default: newSettingDefault,
+      });
+      setConfig({});
+      setNewSettingDefault(false);
+      await fetchSettings();
+      setSuccess(t('settings.saveSuccess'));
+    } catch (err) {
+      setError(err.response?.data?.error || t('common.loading'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteSetting = async (id) => {
+    if (!confirm(t('common.confirm'))) return;
+
+    try {
+      await notifyAPI.deleteSetting(id);
+      fetchSettings();
+    } catch (err) {
+      setError(err.response?.data?.error || t('notification.deleteFailed'));
+    }
+  };
+
+  const handleTest = async (channel, config) => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      await notifyAPI.test({ channel, config });
+      setSuccess(t('notification.testSuccess'));
+    } catch (err) {
+      setError(err.response?.data?.error || t('notification.testFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSetDefault = async (id) => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      await notifyAPI.setDefaultSetting(id);
+      await fetchSettings();
+      setSuccess(t('settings.saveSuccess'));
+    } catch (err) {
+      setError(err.response?.data?.error || t('settings.saveFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderConfigFields = () => {
+    switch (selectedChannel) {
+      case 'telegram':
+        return (
+          <>
+            <div>
+              <label className="form-label">{t('notification.telegram.botToken')}</label>
+              <input
+                type="text"
+                value={config.bot_token || ''}
+                onChange={(e) => setConfig({ ...config, bot_token: e.target.value })}
+                placeholder={t('notification.telegram.botTokenPlaceholder')}
+                className="form-input"
+              />
+            </div>
+            <div>
+              <label className="form-label">{t('notification.telegram.chatId')}</label>
+              <input
+                type="text"
+                value={config.chat_id || ''}
+                onChange={(e) => setConfig({ ...config, chat_id: e.target.value })}
+                placeholder={t('notification.telegram.chatIdPlaceholder')}
+                className="form-input"
+              />
+            </div>
+          </>
+        );
+      case 'ntfy':
+        return (
+          <>
+            <div>
+              <label className="form-label">{t('notification.ntfy.serverUrl')}</label>
+              <input
+                type="text"
+                value={config.server_url || ''}
+                onChange={(e) => setConfig({ ...config, server_url: e.target.value })}
+                placeholder="https://ntfy.sh"
+                className="form-input"
+              />
+            </div>
+            <div>
+              <label className="form-label">{t('notification.ntfy.topic')}</label>
+              <input
+                type="text"
+                value={config.topic || ''}
+                onChange={(e) => setConfig({ ...config, topic: e.target.value })}
+                placeholder={t('notification.ntfy.topicPlaceholder')}
+                className="form-input"
+              />
+            </div>
+            <div>
+              <label className="form-label">{t('notification.ntfy.priority')}</label>
+              <input
+                type="number"
+                min="1"
+                max="5"
+                value={config.priority || '3'}
+                onChange={(e) => setConfig({ ...config, priority: e.target.value })}
+                className="form-input"
+              />
+            </div>
+            <div>
+              <label className="form-label">{t('notification.ntfy.token')}</label>
+              <input
+                type="password"
+                value={config.token || ''}
+                onChange={(e) => setConfig({ ...config, token: e.target.value })}
+                placeholder={t('notification.ntfy.tokenPlaceholder')}
+                className="form-input"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                {t('notification.ntfy.tokenHint')}
+              </p>
+            </div>
+          </>
+        );
+      case 'webhook':
+        return (
+          <>
+            <div>
+              <label className="form-label">{t('notification.webhook.url')}</label>
+              <input
+                type="text"
+                value={config.url || ''}
+                onChange={(e) => setConfig({ ...config, url: e.target.value })}
+                placeholder={t('notification.webhook.urlPlaceholder')}
+                className="form-input"
+              />
+            </div>
+            <div>
+              <label className="form-label">{t('notification.webhook.method')}</label>
+              <select
+                value={config.method || 'POST'}
+                onChange={(e) => setConfig({ ...config, method: e.target.value })}
+                className="form-select"
+              >
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+              </select>
+            </div>
+          </>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const getChannelIcon = (channel) => {
+    switch (channel) {
+      case 'telegram': return '📱';
+      case 'ntfy': return '🔔';
+      case 'webhook': return '🔗';
+      default: return '📢';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
+          {success}
+        </div>
+      )}
+
+      {/* Add New Setting */}
+      <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+        <h3 className="text-lg font-medium mb-4">{t('notification.addChannel')}</h3>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="form-label">{t('notification.channel')}</label>
+            <select
+              value={selectedChannel}
+              onChange={(e) => {
+                setSelectedChannel(e.target.value);
+                setConfig({});
+              }}
+              className="form-select"
+            >
+              {channels.map((ch) => (
+                <option key={ch} value={ch}>
+                  {getChannelIcon(ch)} {ch.charAt(0).toUpperCase() + ch.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {renderConfigFields()}
+
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={newSettingDefault}
+              onChange={(e) => setNewSettingDefault(e.target.checked)}
+            />
+            {t('common.default')}
+          </label>
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleAddSetting}
+              disabled={loading}
+              className="btn-primary"
+            >
+              {t('common.add')}
+            </button>
+            <button
+              onClick={() => handleTest(selectedChannel, config)}
+              disabled={loading}
+              className="btn-secondary"
+            >
+              {t('notification.test')}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Existing Settings */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="p-4 border-b border-gray-200">
+          <h3 className="font-medium">{t('settings.notifications')}</h3>
+        </div>
+        
+        {settings.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            {t('notification.noSettings')}
+          </div>
+        ) : (
+          <ul className="divide-y divide-gray-200">
+            {settings.map((setting) => (
+              <li key={setting.id} className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span>{getChannelIcon(setting.channel)}</span>
+                      <span className="font-medium capitalize">{setting.channel}</span>
+                      {setting.is_default && (
+                        <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded">
+                          {t('common.default')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-sm text-gray-600">
+                      {Object.entries(setting.config).map(([key, value]) => {
+                        if (key === 'token') return null;
+                        return (
+                          <div key={key}>
+                            <span className="font-medium">{key}:</span>{' '}
+                            {key.includes('token') || key.includes('password')
+                              ? '***'
+                              : value}
+                          </div>
+                        );
+                      })}
+                      {setting.config.token && (
+                        <div className="text-xs text-gray-400">
+                          {t('notification.authEnabled')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {!setting.is_default && (
+                      <button
+                        onClick={() => handleSetDefault(setting.id)}
+                        disabled={loading}
+                        className="text-indigo-600 hover:text-indigo-800 text-sm"
+                      >
+                        {t('common.default')}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleTest(setting.channel, setting.config)}
+                      disabled={loading}
+                      className="text-blue-600 hover:text-blue-800 text-sm"
+                    >
+                      {t('notification.test')}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteSetting(setting.id)}
+                      className="text-red-600 hover:text-red-800 text-sm"
+                    >
+                      {t('common.delete')}
+                    </button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default NotificationSettings;
