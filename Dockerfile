@@ -9,8 +9,9 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
+ARG GO_VERSION=1.25.5
+FROM golang:${GO_VERSION}-bookworm AS go-builder
 
-FROM golang:1.23-bookworm AS go-builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
