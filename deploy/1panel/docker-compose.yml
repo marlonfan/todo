@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  todo:
+    image: ghcr.io/marlonfan/todo:latest
+    container_name: todo-app
+    restart: unless-stopped
+    command: ["-config", "/app/config.yaml"]
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    networks:
+      - 1panel-network
+
+networks:
+  1panel-network:
+    external: true
+    name: 1panel-network
