@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { tasksAPI } from '../api/client';
+import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
@@ -9,6 +9,7 @@ import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery } from '../query/hooks';
+import { cancelTaskLocal, createTaskLocal, updateTaskLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 
@@ -58,6 +59,7 @@ function getDefaultStartParts() {
 
 function TaskModal({ task, initialRange, onClose, onSaved }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const { register, handleSubmit, watch, setValue, getValues } = useForm();
   const { data: categories = [] } = useCategoriesQuery();
   const [loading, setLoading] = useState(false);
@@ -312,11 +314,9 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
       let savedTask;
       if (isEditing) {
-        const res = await tasksAPI.update(task.id, payload);
-        savedTask = res.data;
+        savedTask = await updateTaskLocal(queryClient, task.id, payload);
       } else {
-        const res = await tasksAPI.create(payload);
-        savedTask = res.data;
+        savedTask = await createTaskLocal(queryClient, payload);
       }
 
       onSaved(savedTask);
@@ -334,8 +334,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
     setLoading(true);
     try {
-      await tasksAPI.updateStatus(task.id, 'cancelled');
-      onSaved();
+      const savedTask = await cancelTaskLocal(queryClient, task.id);
+      onSaved(savedTask || { ...task, status: 'cancelled' });
     } catch (err) {
       setError(err.response?.data?.error || t('task.deleteFailed'));
     } finally {

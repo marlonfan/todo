@@ -8,5 +8,7 @@ export const queryKeys = {
   calendar: {
     events: (start, end, timezone) => ['calendar', 'events', start, end, timezone],
   },
+  sync: {
+    lastPull: ['sync', 'last_pull_at'],
+  },
 };
-

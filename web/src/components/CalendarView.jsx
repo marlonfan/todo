@@ -6,12 +6,14 @@ import interactionPlugin from '@fullcalendar/interaction';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { calendarAPI, tasksAPI } from '../api/client';
+import { calendarAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { queryKeys } from '../query/keys';
 import { IconList, IconSearch } from './icons/TaskIcons';
+import { buildCalendarRangeKey, getCalendarRange, putCalendarRange } from '../data/localStore';
+import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -242,6 +244,38 @@ function CalendarView() {
     return dayjs(isoString).tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]');
   }, [timezone]);
 
+  const fetchCalendarRangeFromServer = useCallback(async (rangeStart, rangeEnd, options = {}) => {
+    if (!rangeStart || !rangeEnd) return [];
+
+    const res = await calendarAPI.getEvents({
+      start: toServerISO(rangeStart),
+      end: toServerISO(rangeEnd),
+    });
+    const list = Array.isArray(res.data) ? res.data : [];
+    const mapped = list.map((event) => ({
+      ...event,
+      start: toCalendarISO(event.start),
+      end: event.end ? toCalendarISO(event.end) : undefined,
+    }));
+    const annotated = annotateOverlapCount(mapped, Math.max(15, timeGranularity));
+    const cacheKey = buildCalendarRangeKey(rangeStart, rangeEnd, timezone);
+
+    await putCalendarRange({
+      key: cacheKey,
+      start: rangeStart,
+      end: rangeEnd,
+      timezone,
+      events: mapped,
+      updated_at: Date.now(),
+    });
+
+    if (options.updateQuery) {
+      queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), annotated);
+    }
+
+    return annotated;
+  }, [queryClient, timeGranularity, timezone, toCalendarISO, toServerISO]);
+
   const {
     data: events = [],
     isFetching: loading,
@@ -249,19 +283,79 @@ function CalendarView() {
     queryKey: currentCalendarQueryKey,
     enabled: Boolean(dateRange.start && dateRange.end),
     queryFn: async () => {
-      const res = await calendarAPI.getEvents({
-        start: toServerISO(dateRange.start),
-        end: toServerISO(dateRange.end),
-      });
-      const list = Array.isArray(res.data) ? res.data : [];
-      const mapped = list.map((event) => ({
-        ...event,
-        start: toCalendarISO(event.start),
-        end: event.end ? toCalendarISO(event.end) : undefined,
-      }));
-      return annotateOverlapCount(mapped, Math.max(15, timeGranularity));
+      const cacheKey = buildCalendarRangeKey(dateRange.start, dateRange.end, timezone);
+      const cached = await getCalendarRange(cacheKey);
+      if (cached?.events && Array.isArray(cached.events)) {
+        const age = Date.now() - Number(cached.updated_at || 0);
+        if (age > 60 * 1000) {
+          fetchCalendarRangeFromServer(dateRange.start, dateRange.end, { updateQuery: true }).catch((err) => {
+            console.error('Failed to refresh stale calendar cache:', err);
+          });
+        }
+        return annotateOverlapCount(cached.events, Math.max(15, timeGranularity));
+      }
+
+      return fetchCalendarRangeFromServer(dateRange.start, dateRange.end);
     },
   });
+
+  const updateCurrentCalendarEvents = useCallback((updater) => {
+    let nextEventsSnapshot = null;
+    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+      const base = Array.isArray(prev) ? prev : [];
+      const next = typeof updater === 'function' ? updater(base) : updater;
+      nextEventsSnapshot = Array.isArray(next) ? next : base;
+      return nextEventsSnapshot;
+    });
+
+    if (!dateRange.start || !dateRange.end || !Array.isArray(nextEventsSnapshot)) return;
+    const cacheKey = buildCalendarRangeKey(dateRange.start, dateRange.end, timezone);
+    putCalendarRange({
+      key: cacheKey,
+      start: dateRange.start,
+      end: dateRange.end,
+      timezone,
+      events: nextEventsSnapshot,
+      updated_at: Date.now(),
+    }).catch((error) => {
+      console.error('Failed to persist calendar range cache:', error);
+    });
+  }, [currentCalendarQueryKey, dateRange.end, dateRange.start, queryClient, timezone]);
+
+  useEffect(() => {
+    if (!dateRange.start || !dateRange.end) return;
+    let cancelled = false;
+
+    const prefetchAdjacentRanges = async () => {
+      const rangeStart = dayjs(dateRange.start);
+      const rangeEnd = dayjs(dateRange.end);
+      const spanDays = Math.max(1, rangeEnd.diff(rangeStart, 'day'));
+      const candidates = [1, -1, 2];
+
+      for (const multiplier of candidates) {
+        if (cancelled) return;
+        const start = rangeStart.add(spanDays * multiplier, 'day').toISOString();
+        const end = rangeEnd.add(spanDays * multiplier, 'day').toISOString();
+        const key = buildCalendarRangeKey(start, end, timezone);
+        const cached = await getCalendarRange(key);
+        const age = Date.now() - Number(cached?.updated_at || 0);
+        if (cached?.events && age < 5 * 60 * 1000) {
+          continue;
+        }
+
+        try {
+          await fetchCalendarRangeFromServer(start, end);
+        } catch (error) {
+          console.error('Failed to prefetch adjacent calendar range:', error);
+        }
+      }
+    };
+
+    prefetchAdjacentRanges();
+    return () => {
+      cancelled = true;
+    };
+  }, [dateRange.end, dateRange.start, fetchCalendarRangeFromServer, timezone]);
 
   const handleDatesSet = (dateInfo) => {
     setDateRange({
@@ -476,23 +570,11 @@ function CalendarView() {
       });
       setSelectedRange(null);
       setModalOpen(true);
+      return;
     }
 
-    try {
-      const res = await tasksAPI.get(taskId);
-      const taskData = res.data;
-      setSelectedTask({
-        id: taskId,
-        instanceId,
-        ...taskData,
-      });
-      setSelectedRange(null);
-      setModalOpen(true);
-    } catch (err) {
-      console.error('Failed to fetch task:', err);
-      if (!cachedTask) {
-        alert(t('calendar.loadTaskFailed'));
-      }
+    if (!cachedTask) {
+      alert(t('calendar.loadTaskFailed'));
     }
   };
 
@@ -513,23 +595,11 @@ function CalendarView() {
       });
       setSelectedRange(null);
       setModalOpen(true);
+      return;
     }
 
-    try {
-      const res = await tasksAPI.get(taskId);
-      const taskData = res.data;
-      setSelectedTask({
-        id: taskId,
-        instanceId,
-        ...taskData,
-      });
-      setSelectedRange(null);
-      setModalOpen(true);
-    } catch (err) {
-      console.error('Failed to fetch task:', err);
-      if (!cachedTask) {
-        alert(t('calendar.loadTaskFailed'));
-      }
+    if (!cachedTask) {
+      alert(t('calendar.loadTaskFailed'));
     }
   }, [queryClient, t]);
 
@@ -556,10 +626,11 @@ function CalendarView() {
   const handleQuickComplete = async (event) => {
     const taskId = event.extendedProps.taskId;
     const instanceId = event.extendedProps.instanceId || event.id;
+    const isRecurring = !!event.extendedProps.isRecurring;
     const currentStatus = event.extendedProps.status || 'pending';
     const nextStatus = currentStatus === 'completed' ? 'pending' : 'completed';
     const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+    updateCurrentCalendarEvents((prev) => {
       if (!Array.isArray(prev)) return prev;
       return prev.map((item) => {
         if (item.id !== event.id) return item;
@@ -574,16 +645,16 @@ function CalendarView() {
     });
 
     try {
-      await tasksAPI.updateStatus(taskId, {
+      const payload = {
         status: nextStatus,
-        instance_id: instanceId,
-      });
+      };
+      if (isRecurring) {
+        payload.instance_id = instanceId;
+      }
+      await updateTaskStatusLocal(queryClient, taskId, payload);
     } catch (err) {
-      queryClient.setQueryData(currentCalendarQueryKey, previousEvents);
+      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to update task status:', err);
-    } finally {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
     }
   };
 
@@ -603,24 +674,21 @@ function CalendarView() {
     const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
     const optimisticStart = dayjs(info.event.start).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
     const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().format('YYYY-MM-DDTHH:mm:ss[Z]') : undefined;
-    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+    updateCurrentCalendarEvents((prev) => {
       if (!Array.isArray(prev)) return prev;
       return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
     });
 
     try {
-      await tasksAPI.updateSchedule(taskId, {
+      await updateTaskScheduleLocal(queryClient, taskId, {
         start_time: newStart,
         end_time: newEnd,
         all_day: info.event.allDay,
       });
     } catch (err) {
-      queryClient.setQueryData(currentCalendarQueryKey, previousEvents);
+      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to update schedule:', err);
       info.revert();
-    } finally {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
     }
   };
 
@@ -640,24 +708,21 @@ function CalendarView() {
     const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
     const optimisticStart = dayjs(info.event.start).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
     const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().format('YYYY-MM-DDTHH:mm:ss[Z]') : undefined;
-    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+    updateCurrentCalendarEvents((prev) => {
       if (!Array.isArray(prev)) return prev;
       return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
     });
 
     try {
-      await tasksAPI.updateSchedule(taskId, {
+      await updateTaskScheduleLocal(queryClient, taskId, {
         start_time: newStart,
         end_time: newEnd,
         all_day: info.event.allDay,
       });
     } catch (err) {
-      queryClient.setQueryData(currentCalendarQueryKey, previousEvents);
+      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to resize event:', err);
       info.revert();
-    } finally {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
     }
   };
 
@@ -679,8 +744,11 @@ function CalendarView() {
         return [savedTask, ...base];
       });
     }
-    queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
+    if (dateRange.start && dateRange.end) {
+      fetchCalendarRangeFromServer(dateRange.start, dateRange.end, { updateQuery: true }).catch((error) => {
+        console.error('Failed to refresh calendar after save:', error);
+      });
+    }
   };
 
   const renderEventContent = (arg) => {

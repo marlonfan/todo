@@ -3,7 +3,6 @@ import { useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
-import { tasksAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
@@ -12,6 +11,12 @@ import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconT
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
+import {
+  cancelTaskLocal,
+  createTaskLocal,
+  updateTaskLocal,
+  updateTaskStatusLocal,
+} from '../data/taskMutations';
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -473,30 +478,23 @@ function TaskList() {
   };
 
   const handleStatusChange = async (task, newStatus) => {
-    const previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
-    setTasksCache((prev) => prev.map((item) => (item.id === task.id ? { ...item, status: newStatus } : item)));
-
     try {
       if (task.recurrence_rule) {
-        await tasksAPI.updateStatus(task.id, {
+        await updateTaskStatusLocal(queryClient, task.id, {
           status: newStatus,
           occurrence_date: dayjs().tz(timezone).format('YYYY-MM-DD'),
         });
       } else {
-        await tasksAPI.updateStatus(task.id, newStatus);
+        await updateTaskStatusLocal(queryClient, task.id, newStatus);
       }
     } catch (err) {
-      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to update task status:', err);
-    } finally {
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     }
   };
 
   const handleQuickCreate = async () => {
     const title = quickTitle.trim();
     if (!title) return;
-    let previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
 
     try {
       let storedUser = {};
@@ -523,32 +521,12 @@ function TaskList() {
         payload.category_ids = [activeCategoryID];
       }
 
-      const tempTaskID = -Date.now();
-      const selectedCategory = categories.find((cat) => cat.id === activeCategoryID);
-      const optimisticTask = {
-        id: tempTaskID,
-        title: normalizedTitle,
-        description: '',
-        priority: 0,
-        status: 'pending',
-        start_time: payload.start_time,
-        end_time: null,
-        due_date: null,
-        all_day: false,
-        recurrence_rule: null,
-        categories: selectedCategory ? [selectedCategory] : [],
-      };
-      setTasksCache((prev) => [optimisticTask, ...prev]);
-      setSelectedTaskID(tempTaskID);
-      const res = await tasksAPI.create(payload);
+      const createdTask = await createTaskLocal(queryClient, payload);
       setQuickTitle('');
-      if (res?.data?.id) {
-        setTasksCache((prev) => prev.map((taskItem) => (taskItem.id === tempTaskID ? res.data : taskItem)));
-        setSelectedTaskID(res.data.id);
+      if (createdTask?.id) {
+        setSelectedTaskID(createdTask.id);
       }
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     } catch (err) {
-      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to create task:', err);
     }
   };
@@ -642,7 +620,6 @@ function TaskList() {
     if (savingDraft) return;
     const title = (draft.title || '').trim();
     if (!title) return;
-    let previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
 
     setSavingDraft(true);
     try {
@@ -680,29 +657,9 @@ function TaskList() {
         payload.recurrence_rule = null;
       }
 
-      const optimisticCategories = categories.filter((cat) => (draft.category_ids || []).includes(String(cat.id)));
-      const optimisticTask = {
-        ...selectedTask,
-        title: payload.title,
-        description: payload.description,
-        priority: payload.priority,
-        status: payload.status,
-        all_day: payload.all_day,
-        start_time: payload.start_time,
-        end_time: payload.end_time,
-        recurrence_rule: payload.recurrence_rule,
-        categories: optimisticCategories,
-      };
-      setTasksCache((prev) => prev.map((taskItem) => (taskItem.id === selectedTask.id ? optimisticTask : taskItem)));
-
-      const res = await tasksAPI.update(selectedTask.id, payload);
-      if (res?.data?.id) {
-        const savedTask = res.data;
-        setTasksCache((prev) => prev.map((taskItem) => (taskItem.id === savedTask.id ? savedTask : taskItem)));
-      }
+      await updateTaskLocal(queryClient, selectedTask.id, payload);
       setLastSavedAt(dayjs().format('HH:mm:ss'));
     } catch (err) {
-      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to save task details:', err);
     } finally {
       setSavingDraft(false);
@@ -713,16 +670,9 @@ function TaskList() {
     if (!selectedTask) return;
     if (!confirm(t('task.deleteConfirm'))) return;
 
-    const previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
-    setTasksCache((prev) =>
-      prev.map((taskItem) => (taskItem.id === selectedTask.id ? { ...taskItem, status: 'cancelled' } : taskItem))
-    );
-
     try {
-      await tasksAPI.updateStatus(selectedTask.id, 'cancelled');
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      await cancelTaskLocal(queryClient, selectedTask.id);
     } catch (err) {
-      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to delete task:', err);
     }
   };
@@ -771,8 +721,8 @@ function TaskList() {
         }
         return [savedTask, ...prev];
       });
+      setSelectedTaskID(savedTask.id);
     }
-    await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
   };
 
   const renderTaskRow = (task) => {

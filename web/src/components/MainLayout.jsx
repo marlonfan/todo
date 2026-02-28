@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { tasksAPI } from '../api/client';
 import CalendarView from './CalendarView';
 import TaskList from './TaskList';
 import CategoryManager from './CategoryManager';
@@ -21,7 +20,7 @@ import {
 } from './icons/TaskIcons';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { useCategoriesQuery } from '../query/hooks';
-import { queryKeys } from '../query/keys';
+import { moveTaskToCategoryLocal } from '../data/taskMutations';
 
 function normalizeMobileDefaultTab(value) {
   if (value === 'calendar' || value === 'settings') return value;
@@ -123,24 +122,9 @@ function MainLayout({ user, setUser }) {
     const taskID = Number.parseInt(rawTaskID || '', 10);
     if (!taskID) return;
 
-    const droppedCategory = categories.find((cat) => cat.id === categoryID);
-    const previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
-    queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.map((task) => {
-        if (task.id !== taskID) return task;
-        return {
-          ...task,
-          categories: droppedCategory ? [droppedCategory] : task.categories,
-        };
-      });
-    });
-
     try {
-      await tasksAPI.update(taskID, { category_ids: [categoryID] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      await moveTaskToCategoryLocal(queryClient, taskID, categoryID);
     } catch (error) {
-      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to move task to category:', error);
     }
   };
