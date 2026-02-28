@@ -110,7 +110,7 @@ function CategoryManager() {
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit(onSubmit)} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6">
+          <form onSubmit={handleSubmit(onSubmit)} className="bg-white p-4 border border-gray-200 mb-6">
             <h3 className="text-lg font-medium mb-4">
               {editingCategory ? t('category.editCategory') : t('category.newCategory')}
             </h3>
@@ -166,7 +166,7 @@ function CategoryManager() {
           </form>
 
           {/* Categories List */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="bg-white border border-gray-200">
             {isLoading && (
               <div className="p-4 text-sm text-gray-500">{t('common.loading')}</div>
             )}

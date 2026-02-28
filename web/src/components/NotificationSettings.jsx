@@ -235,7 +235,7 @@ function NotificationSettings() {
       )}
 
       {/* Add New Setting */}
-      <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+      <div className="bg-white p-4 border border-gray-200">
         <h3 className="text-lg font-medium mb-4">{t('notification.addChannel')}</h3>
         
         <div className="space-y-4">
@@ -288,7 +288,7 @@ function NotificationSettings() {
       </div>
 
       {/* Existing Settings */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <div className="bg-white border border-gray-200">
         <div className="p-4 border-b border-gray-200">
           <h3 className="font-medium">{t('settings.notifications')}</h3>
         </div>

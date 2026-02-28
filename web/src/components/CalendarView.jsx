@@ -614,16 +614,14 @@ function CalendarView() {
 
   const renderEventContent = (arg) => {
     const completed = arg.event.extendedProps.status === 'completed';
-    const overlapCount = Number(arg.event.extendedProps?.overlapCount || 1);
-    const compactOverlap = overlapCount > 1;
     return (
       <div
-        className={`flex min-w-0 gap-1 ${compactOverlap ? 'items-start py-0.5' : 'items-center'} ${isCompactMobile ? 'px-0.5 text-[11px]' : 'px-1'}`}
+        className={`flex min-w-0 items-center gap-1 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`}
         title={arg.event.title}
       >
         <button
           type="button"
-          className={`shrink-0 leading-none ${isCompactMobile ? 'text-[11px]' : 'text-xs'} ${
+          className={`shrink-0 leading-none ${isCompactMobile ? 'text-[10px]' : 'text-[11px]'} ${
             completed ? 'text-green-700' : 'text-gray-700'
           }`}
           title={completed ? t('task.markPending') : t('task.markComplete')}
@@ -637,19 +635,7 @@ function CalendarView() {
         </button>
         <div className="min-w-0 flex-1">
           <span
-            className={`block min-w-0 leading-tight ${completed ? 'line-through opacity-80' : ''} ${
-              compactOverlap ? 'break-words whitespace-normal' : 'truncate'
-            }`}
-            style={
-              compactOverlap
-                ? {
-                    display: '-webkit-box',
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden',
-                  }
-                : undefined
-            }
+            className={`block min-w-0 truncate leading-tight ${completed ? 'line-through opacity-80' : ''}`}
           >
             {arg.event.title}
           </span>
@@ -775,7 +761,7 @@ function CalendarView() {
       )}
 
       <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'px-1 pt-1 pb-16' : 'overflow-auto p-4'}`}>
-        <div className={`h-full ${isCompactMobile ? 'rounded-xl border border-slate-200 bg-white shadow-sm' : ''}`}>
+        <div className="h-full overflow-hidden border border-slate-200 bg-white">
           <FullCalendar
             key={`${activeCalendarView}-${timezone}-${calendarLocale}-${isCompactMobile ? 'mobile' : 'desktop'}`}
             ref={calendarRef}
@@ -809,6 +795,8 @@ function CalendarView() {
             selectable={true}
             selectMirror={true}
             dayMaxEvents={true}
+            dayMaxEventRows={true}
+            fixedWeekCount={false}
             weekends={true}
             events={events}
             eventContent={renderEventContent}
@@ -831,9 +819,7 @@ function CalendarView() {
             snapDuration={slotDuration}
             displayEventEnd={true}
             slotEventOverlap={true}
-            eventMinHeight={isCompactMobile ? 28 : 34}
-            eventShortHeight={isCompactMobile ? 22 : 26}
-            className={isCompactMobile ? 'mobile-calendar' : ''}
+            className={`todo-calendar ${isCompactMobile ? 'mobile-calendar' : 'desktop-calendar'}`}
           />
         </div>
       </div>

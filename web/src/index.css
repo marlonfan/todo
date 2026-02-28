@@ -10,35 +10,206 @@ body {
   @apply bg-slate-100 text-slate-800 antialiased;
 }
 
-/* FullCalendar Custom Styles */
-.fc {
-  @apply font-sans;
-  font-size: 0.9rem;
+/* FullCalendar polish inspired by Schedule-X */
+.todo-calendar.fc {
+  @apply h-full font-sans;
+  font-size: 0.82rem;
+  padding: 10px 12px 8px;
+  box-sizing: border-box;
+  --fc-border-color: #e2e8f0;
+  --fc-page-bg-color: #ffffff;
+  --fc-neutral-bg-color: #f8fafc;
+  --fc-list-event-hover-bg-color: #f1f5f9;
+  --fc-now-indicator-color: #ef4444;
 }
 
-.fc .fc-toolbar-title {
-  @apply text-lg font-semibold;
+.todo-calendar.fc .fc-scrollgrid {
+  border: 0;
 }
 
-.fc .fc-button {
-  @apply bg-blue-600 hover:bg-blue-700 border-none shadow-sm rounded-md;
+.todo-calendar.fc .fc-toolbar.fc-header-toolbar {
+  @apply mb-0 gap-2 px-3 py-2;
+  margin: 0 0 6px !important;
 }
 
-.fc .fc-button-primary:not(:disabled).fc-button-active,
-.fc .fc-button-primary:not(:disabled):active {
-  @apply bg-blue-800;
+.todo-calendar.fc .fc-toolbar-title {
+  @apply text-sm font-semibold tracking-tight text-slate-800;
 }
 
-.fc-event {
-  @apply cursor-pointer border-0;
+.todo-calendar.fc .fc-button {
+  @apply rounded-lg border border-blue-600 bg-blue-600 px-2.5 py-1 text-xs font-medium text-white shadow-none transition-colors;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-.fc-daygrid-event {
-  @apply rounded-md px-2 py-1;
+.todo-calendar.fc .fc-button:hover {
+  @apply border-blue-700 bg-blue-700 text-white;
 }
 
-.fc-timegrid-event {
-  @apply rounded;
+.todo-calendar.fc .fc-button:focus {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.todo-calendar.fc .fc-button:focus-visible {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.todo-calendar.fc .fc-button-primary:focus,
+.todo-calendar.fc .fc-button-primary:not(:disabled):active:focus,
+.todo-calendar.fc .fc-button-primary:not(:disabled).fc-button-active:focus {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.todo-calendar.fc .fc-button:active {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.todo-calendar.fc .fc-button-primary:not(:disabled).fc-button-active,
+.todo-calendar.fc .fc-button-primary:not(:disabled):active {
+  @apply border-blue-800 bg-blue-800 text-white;
+}
+
+.todo-calendar.fc .fc-button-primary:disabled {
+  @apply opacity-50;
+}
+
+.todo-calendar.fc .fc-button-group {
+  @apply rounded-lg border border-blue-600 bg-transparent p-0;
+}
+
+.todo-calendar.fc .fc-button-group .fc-button {
+  @apply rounded-none border-0 bg-blue-600 text-white;
+}
+
+.todo-calendar.fc .fc-button-group .fc-button + .fc-button {
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.todo-calendar.fc .fc-button-group .fc-button:first-child {
+  border-top-left-radius: 0.45rem;
+  border-bottom-left-radius: 0.45rem;
+}
+
+.todo-calendar.fc .fc-button-group .fc-button:last-child {
+  border-top-right-radius: 0.45rem;
+  border-bottom-right-radius: 0.45rem;
+}
+
+/* Strong fallback override to ensure toolbar spacing/focus styles apply */
+.fc .fc-toolbar.fc-header-toolbar {
+  margin: 10px 12px 8px !important;
+  padding: 8px 12px !important;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent;
+}
+
+.fc .fc-toolbar.fc-header-toolbar .fc-toolbar-chunk:first-child {
+  padding-left: 4px;
+}
+
+.fc .fc-toolbar.fc-header-toolbar .fc-toolbar-chunk:last-child {
+  padding-right: 4px;
+}
+
+.fc .fc-button:focus,
+.fc .fc-button:focus-visible,
+.fc .fc-button:active,
+.fc .fc-button-primary:focus,
+.fc .fc-button-primary:not(:disabled):active:focus,
+.fc .fc-button-primary:not(:disabled).fc-button-active:focus {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.todo-calendar.fc .fc-button-group .fc-button.fc-button-active {
+  @apply border border-blue-800 bg-blue-800 text-white;
+}
+
+.todo-calendar.fc .fc-col-header-cell-cushion {
+  @apply py-1.5 text-[11px] font-medium text-slate-500;
+}
+
+.todo-calendar.fc .fc-timegrid-axis-cushion,
+.todo-calendar.fc .fc-timegrid-slot-label-cushion {
+  @apply text-[11px] text-slate-400;
+}
+
+.todo-calendar.fc .fc-day-today {
+  background-color: #eff6ff !important;
+}
+
+.todo-calendar.fc .fc-timegrid-slot {
+  height: 2.35rem;
+}
+
+.todo-calendar.fc .fc-timegrid-slot-minor {
+  border-top-style: dotted;
+  border-top-color: #e5e7eb;
+}
+
+.todo-calendar.fc .fc-timegrid-now-indicator-line {
+  border-color: #ef4444;
+  border-width: 2px;
+}
+
+.todo-calendar.fc .fc-timegrid-now-indicator-arrow {
+  border-color: #ef4444;
+}
+
+.todo-calendar.fc .fc-event {
+  @apply cursor-pointer border-0 shadow-none;
+}
+
+.todo-calendar.fc .fc-timegrid-event {
+  @apply rounded-md;
+  box-shadow: none;
+  margin: 0 !important;
+  box-sizing: border-box;
+}
+
+.todo-calendar.fc .fc-daygrid-event {
+  @apply rounded border border-slate-200 bg-white px-1 py-0 text-[11px] text-slate-700;
+  line-height: 1.2;
+  min-height: 16px;
+}
+
+.todo-calendar.fc .fc-daygrid-event .fc-event-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.todo-calendar.fc .fc-daygrid-day-top {
+  @apply pb-0.5;
+}
+
+.todo-calendar.fc .fc-daygrid-day-number {
+  @apply text-[11px] font-medium text-slate-500;
+}
+
+.todo-calendar.fc .fc-daygrid-day-events {
+  margin-top: 1px;
+  margin-bottom: 0;
+}
+
+.todo-calendar.fc .fc-daygrid-more-link {
+  @apply rounded px-1.5 text-[11px] text-slate-500 hover:bg-slate-100;
+}
+
+.todo-calendar.fc .fc-daygrid-day-bottom {
+  margin-top: 0;
+}
+
+.todo-calendar.fc .fc-daygrid-event-harness {
+  margin-top: 1px;
 }
 
 /* Modal Styles */
@@ -194,7 +365,7 @@ body {
 
 /* Mobile calendar layout modeled after compact Feishu-style day timeline */
 .mobile-calendar.fc {
-  font-size: 0.82rem;
+  font-size: 0.76rem;
 }
 
 .mobile-calendar .fc-toolbar {
@@ -251,5 +422,5 @@ body {
 .mobile-calendar .fc-event-title {
   overflow: hidden;
   text-overflow: ellipsis;
-  word-break: break-word;
+  white-space: nowrap;
 }
