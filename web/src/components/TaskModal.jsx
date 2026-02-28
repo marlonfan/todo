@@ -366,6 +366,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     { key: 'SA', label: t('calendar.weekday.sa') },
     { key: 'SU', label: t('calendar.weekday.su') },
   ];
+  const workDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR'];
+  const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -398,52 +400,29 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50/60 p-6">
+            <div className="flex-1 min-h-0 overflow-hidden bg-white">
               {error && (
-                <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
+                <div className="mx-4 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
                   {error}
                 </div>
               )}
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <label className="form-label">{t('task.title')} *</label>
-                <input
-                  {...register('title', { required: true })}
-                  type="text"
-                  className="form-input text-lg font-medium"
-                  placeholder={t('task.title')}
-                  autoFocus
-                  onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
-                />
-                <p className="mt-1 text-xs text-slate-500">{t('task.titleNaturalHint')}</p>
-                {parsePreview && <p className="mt-1 text-xs text-emerald-600">{parsePreview}</p>}
-
-                <div className="mt-4 border-t border-slate-200 pt-3">
-                  <input type="hidden" {...register('description')} />
-                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
-                  <LiveMarkdownEditor
-                    value={descriptionValue}
-                    onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}
-                    placeholder={t('task.description')}
-                    minHeight={380}
-                  />
-                </div>
-              </section>
-
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="border-b border-slate-200 px-4 py-3">
                 <input type="hidden" {...register('priority')} />
                 {isEditing && <input type="hidden" {...register('status')} />}
                 <input type="checkbox" {...register('all_day')} className="hidden" />
                 <input type="hidden" {...register('start_time')} />
                 <input type="hidden" {...register('end_time')} />
+                <input type="hidden" {...register('description')} />
+                <input type="hidden" {...register('category_ids')} />
                 <div ref={basicPanelRef} className="relative flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setBasicPanel(basicPanel === 'priority' ? '' : 'priority')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
                         basicPanel === 'priority'
-                          ? 'bg-amber-100 text-amber-700'
+                          ? 'bg-amber-50 text-amber-700'
                           : 'text-slate-500 hover:bg-slate-100'
                       }`}
                       title={t('task.priority')}
@@ -455,7 +434,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       onClick={() => setBasicPanel(basicPanel === 'time' ? '' : 'time')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
                         basicPanel === 'time'
-                          ? 'bg-rose-100 text-rose-700'
+                          ? 'bg-rose-50 text-rose-700'
                           : 'text-slate-500 hover:bg-slate-100'
                       }`}
                       title={t('task.startTime')}
@@ -467,7 +446,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       onClick={() => setBasicPanel(basicPanel === 'category' ? '' : 'category')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
                         basicPanel === 'category'
-                          ? 'bg-indigo-100 text-indigo-700'
+                          ? 'bg-indigo-50 text-indigo-700'
                           : 'text-slate-500 hover:bg-slate-100'
                       }`}
                       title={t('task.categories')}
@@ -479,7 +458,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       onClick={() => setBasicPanel(basicPanel === 'recurrence' ? '' : 'recurrence')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
                         basicPanel === 'recurrence' || showRecurrence
-                          ? 'bg-emerald-100 text-emerald-700'
+                          ? 'bg-emerald-50 text-emerald-700'
                           : 'text-slate-500 hover:bg-slate-100'
                       }`}
                       title={t('task.repeat')}
@@ -499,8 +478,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     {t('task.allDay')}
                   </button>
 
-                  {basicPanel === 'priority' && (
-                    <div className="absolute left-0 right-0 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                    {basicPanel === 'priority' && (
+                    <div className="absolute left-0 top-10 z-20 w-[min(22rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
                       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
                       <div className="flex flex-wrap gap-2">
                         {[
@@ -529,7 +508,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   )}
 
                   {basicPanel === 'time' && (
-                    <div className="absolute left-0 right-0 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                    <div className="absolute left-0 top-10 z-20 w-[min(30rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
                       <div className="mb-3 flex flex-wrap gap-2">
                         <button type="button" onClick={() => applyQuickDatePreset('today')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
                           {t('task.quickToday')}
@@ -604,84 +583,141 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   )}
 
                   {basicPanel === 'category' && (
-                    <div className="absolute left-0 right-0 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <div className="mb-2 flex items-center justify-between">
-                        <label className="form-label mb-0">{t('task.categories')}</label>
-                        <span className="text-xs text-slate-400">{selectedCategoryValues.length}</span>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div className="absolute left-0 top-10 z-20 w-[min(26rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <label className="form-label">{t('task.categories')}</label>
+                      <div className="flex flex-wrap gap-2">
                         {categories.map(cat => {
                           const active = selectedCategoryValues.includes(String(cat.id));
                           return (
-                            <label
+                            <button
                               key={cat.id}
-                              className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 transition ${
+                              type="button"
+                              onClick={() => {
+                                const current = getValues('category_ids');
+                                const asArray = Array.isArray(current) ? current.map(String) : current ? [String(current)] : [];
+                                const next = asArray.includes(String(cat.id))
+                                  ? asArray.filter((id) => id !== String(cat.id))
+                                  : [...asArray, String(cat.id)];
+                                setValue('category_ids', next);
+                              }}
+                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
                                 active
-                                  ? 'border-indigo-300 bg-indigo-50'
-                                  : 'border-slate-200 hover:bg-slate-50'
+                                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                               }`}
                             >
-                              <input
-                                {...register('category_ids')}
-                                type="checkbox"
-                                value={cat.id}
-                                className="rounded"
-                              />
-                              <span
-                                className="h-3.5 w-3.5 rounded"
-                                style={{ backgroundColor: cat.color }}
-                              />
                               {showCategoryEmoji && cat.emoji ? (
-                                <span className="text-base leading-none">{cat.emoji}</span>
+                                <span>{cat.emoji}</span>
                               ) : null}
-                              <span className="text-sm text-slate-700">{cat.name}</span>
-                            </label>
+                              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: cat.color }} />
+                              <span>{cat.name}</span>
+                            </button>
                           );
                         })}
                       </div>
                       {categories.length === 0 && (
-                        <p className="text-sm text-slate-500">{t('category.noCategories')}</p>
+                        <p className="text-xs text-slate-500">{t('category.noCategories')}</p>
                       )}
                     </div>
                   )}
 
                   {basicPanel === 'recurrence' && (
-                    <div className="absolute left-0 right-0 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                    <div className="absolute left-0 top-10 z-20 w-[min(24rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
                       <div className="mb-2 flex items-center justify-between">
-                        <label htmlFor="recurrence-inline" className="text-sm font-medium text-slate-700">
-                          {t('task.repeat')}
-                        </label>
-                        <input
-                          type="checkbox"
-                          id="recurrence-inline"
-                          checked={showRecurrence}
-                          onChange={(e) => {
-                            const enabled = e.target.checked;
-                            setShowRecurrence(enabled);
-                            if (!enabled) {
+                        <label className="text-sm font-medium text-slate-700">{t('task.repeat')}</label>
+                        <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowRecurrence(false);
                               setSelectedDays([]);
                               setRecurrenceType('daily');
-                            }
-                          }}
-                        />
+                            }}
+                            className={`rounded-full px-2.5 py-1 text-xs ${
+                              !showRecurrence
+                                ? 'bg-slate-100 text-slate-700'
+                                : 'text-slate-500 hover:bg-slate-50'
+                            }`}
+                          >
+                            {t('task.repeatOff')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowRecurrence(true);
+                              if (recurrenceType === 'weekly' && selectedDays.length === 0) {
+                                setSelectedDays(workDayKeys);
+                              }
+                            }}
+                            className={`rounded-full px-2.5 py-1 text-xs ${
+                              showRecurrence
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'text-slate-500 hover:bg-slate-50'
+                            }`}
+                          >
+                            {t('task.repeatOn')}
+                          </button>
+                        </div>
                       </div>
 
                       {showRecurrence && (
                         <div className="space-y-3">
-                          <select
-                            value={recurrenceType}
-                            onChange={(e) => setRecurrenceType(e.target.value)}
-                            className="form-select"
-                          >
-                            <option value="daily">{t('task.daily')}</option>
-                            <option value="weekly">{t('task.weekly')}</option>
-                            <option value="monthly">{t('task.monthly')}</option>
-                            <option value="yearly">{t('task.yearly')}</option>
-                          </select>
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              { value: 'daily', label: t('task.daily') },
+                              { value: 'weekly', label: t('task.weekly') },
+                              { value: 'monthly', label: t('task.monthly') },
+                              { value: 'yearly', label: t('task.yearly') },
+                            ].map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setRecurrenceType(option.value);
+                                  if (option.value === 'weekly' && selectedDays.length === 0) {
+                                    setSelectedDays(workDayKeys);
+                                  }
+                                  if (option.value !== 'weekly') {
+                                    setSelectedDays([]);
+                                  }
+                                }}
+                                className={`rounded-full border px-3 py-1 text-xs ${
+                                  recurrenceType === option.value
+                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
 
                           {recurrenceType === 'weekly' && (
                             <div>
                               <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
+                              <div className="mb-2 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedDays(workDayKeys)}
+                                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                >
+                                  {t('task.weekdaysWorkdays')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedDays(allDayKeys)}
+                                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                >
+                                  {t('task.weekdaysAll')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedDays([])}
+                                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50"
+                                >
+                                  {t('task.weekdaysClear')}
+                                </button>
+                              </div>
                               <div className="flex flex-wrap gap-2">
                                 {weekDays.map(day => (
                                   <button
@@ -705,11 +741,37 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     </div>
                   )}
                 </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  {startInputValue ? `${t('task.startTime')}: ${startInputValue}` : t('task.noDate')}
-                </div>
-              </section>
+              </div>
 
+              <div className="flex min-h-0 h-full flex-1 flex-col gap-3 overflow-auto p-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <input
+                    {...register('title', { required: true })}
+                    type="text"
+                    className="w-full border-none bg-transparent text-2xl font-semibold text-slate-900 outline-none placeholder:text-slate-300"
+                    placeholder={t('task.title')}
+                    autoFocus
+                    onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
+                  />
+                  <p className="mt-1 text-xs text-slate-500">{t('task.titleNaturalHint')}</p>
+                  {parsePreview && <p className="mt-1 text-xs text-emerald-600">{parsePreview}</p>}
+                  <p className="mt-1 text-xs text-slate-500">
+                    {startInputValue ? `${t('task.startTime')}: ${startInputValue}` : t('task.noDate')}
+                  </p>
+                </div>
+
+                <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
+                  <LiveMarkdownEditor
+                    value={descriptionValue}
+                    onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}
+                    placeholder={t('task.description')}
+                    className="min-h-0 flex-1"
+                    fill
+                    minHeight={320}
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="sticky bottom-0 z-20 flex items-center justify-between border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">

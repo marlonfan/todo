@@ -7,8 +7,19 @@ import TaskModal from './TaskModal';
 import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+
+function parseRecurrenceRule(rawRule) {
+  if (!rawRule) return null;
+  if (typeof rawRule === 'object') return rawRule;
+  if (typeof rawRule !== 'string') return null;
+  try {
+    return JSON.parse(rawRule);
+  } catch {
+    return null;
+  }
+}
 
 function normalizeDraftForCompare(draft) {
   if (!draft) return null;
@@ -21,6 +32,9 @@ function normalizeDraftForCompare(draft) {
     start_time: draft.start_time || '',
     end_time: draft.end_time || '',
     category_ids: [...(draft.category_ids || [])].map(String).sort(),
+    recurrence_enabled: !!draft.recurrence_enabled,
+    recurrence_type: draft.recurrence_type || 'daily',
+    recurrence_days: [...(draft.recurrence_days || [])].map(String).sort(),
   };
 }
 
@@ -228,6 +242,9 @@ function TaskList() {
     const allDay = !!(taskValue.all_day || taskValue.allDay);
     const startTime = taskValue.start_time || taskValue.startTime || taskValue.due_date || '';
     const endTime = taskValue.end_time || taskValue.endTime || '';
+    const recurrenceRule = parseRecurrenceRule(taskValue.recurrence_rule || taskValue.recurrenceRule);
+    const recurrenceType = recurrenceRule?.freq || 'daily';
+    const byDay = recurrenceRule?.byday || recurrenceRule?.byDay;
     return {
       title: taskValue.title || '',
       description: taskValue.description || '',
@@ -237,6 +254,9 @@ function TaskList() {
       start_time: startTime ? toInputFormat(startTime, null, allDay) : '',
       end_time: endTime ? toInputFormat(endTime, null, allDay) : '',
       category_ids: (taskValue.categories || []).map((cat) => String(cat.id)),
+      recurrence_enabled: !!recurrenceRule,
+      recurrence_type: recurrenceType,
+      recurrence_days: Array.isArray(byDay) ? byDay.map((day) => String(day)) : [],
     };
   };
 
@@ -431,6 +451,31 @@ function TaskList() {
     });
   };
 
+  const toggleDraftRecurrenceDay = (dayKey) => {
+    draftTouchedRef.current = true;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const current = Array.isArray(prev.recurrence_days) ? prev.recurrence_days : [];
+      const exists = current.includes(dayKey);
+      return {
+        ...prev,
+        recurrence_days: exists ? current.filter((day) => day !== dayKey) : [...current, dayKey],
+      };
+    });
+  };
+
+  const weekDays = [
+    { key: 'MO', label: t('calendar.weekday.mo') },
+    { key: 'TU', label: t('calendar.weekday.tu') },
+    { key: 'WE', label: t('calendar.weekday.we') },
+    { key: 'TH', label: t('calendar.weekday.th') },
+    { key: 'FR', label: t('calendar.weekday.fr') },
+    { key: 'SA', label: t('calendar.weekday.sa') },
+    { key: 'SU', label: t('calendar.weekday.su') },
+  ];
+  const workDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR'];
+  const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
   const handleSaveDraft = async () => {
     if (!selectedTask || !draft) return;
@@ -460,6 +505,19 @@ function TaskList() {
 
       if (draft.start_time) payload.start_time_local = draft.start_time;
       if (draft.end_time) payload.end_time_local = draft.end_time;
+
+      if (draft.recurrence_enabled) {
+        const rule = {
+          freq: draft.recurrence_type || 'daily',
+          interval: 1,
+        };
+        if (rule.freq === 'weekly' && Array.isArray(draft.recurrence_days) && draft.recurrence_days.length > 0) {
+          rule.byday = draft.recurrence_days;
+        }
+        payload.recurrence_rule = rule;
+      } else {
+        payload.recurrence_rule = null;
+      }
 
       const res = await tasksAPI.update(selectedTask.id, payload);
       if (res?.data?.id) {
@@ -726,6 +784,18 @@ function TaskList() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setDetailPanel(detailPanel === 'recurrence' ? '' : 'recurrence')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                        detailPanel === 'recurrence' || draft.recurrence_enabled
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                      title={t('task.repeat')}
+                    >
+                      <IconRepeat className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleResetDraft}
                       disabled={!isDraftDirty || savingDraft}
                       className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
@@ -874,6 +944,126 @@ function TaskList() {
                             );
                           })}
                         </div>
+                      </div>
+                    )}
+
+                    {detailPanel === 'recurrence' && (
+                      <div className="absolute right-0 top-10 z-20 w-[24rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                        <div className="mb-2 flex items-center justify-between">
+                          <label className="text-sm font-medium text-slate-700">{t('task.repeat')}</label>
+                          <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleDraftFieldChange('recurrence_enabled', false);
+                                handleDraftFieldChange('recurrence_type', 'daily');
+                                handleDraftFieldChange('recurrence_days', []);
+                              }}
+                              className={`rounded-full px-2.5 py-1 text-xs ${
+                                !draft.recurrence_enabled
+                                  ? 'bg-slate-100 text-slate-700'
+                                  : 'text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.repeatOff')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleDraftFieldChange('recurrence_enabled', true);
+                                if ((draft.recurrence_type || 'daily') === 'weekly' && (draft.recurrence_days || []).length === 0) {
+                                  handleDraftFieldChange('recurrence_days', workDayKeys);
+                                }
+                              }}
+                              className={`rounded-full px-2.5 py-1 text-xs ${
+                                draft.recurrence_enabled
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.repeatOn')}
+                            </button>
+                          </div>
+                        </div>
+
+                        {draft.recurrence_enabled && (
+                          <div className="space-y-3">
+                            <div className="flex flex-wrap gap-2">
+                              {[
+                                { value: 'daily', label: t('task.daily') },
+                                { value: 'weekly', label: t('task.weekly') },
+                                { value: 'monthly', label: t('task.monthly') },
+                                { value: 'yearly', label: t('task.yearly') },
+                              ].map((option) => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => {
+                                    handleDraftFieldChange('recurrence_type', option.value);
+                                    if (option.value === 'weekly' && (draft.recurrence_days || []).length === 0) {
+                                      handleDraftFieldChange('recurrence_days', workDayKeys);
+                                    }
+                                    if (option.value !== 'weekly') {
+                                      handleDraftFieldChange('recurrence_days', []);
+                                    }
+                                  }}
+                                  className={`rounded-full border px-3 py-1 text-xs ${
+                                    (draft.recurrence_type || 'daily') === option.value
+                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            {(draft.recurrence_type || 'daily') === 'weekly' && (
+                              <div>
+                                <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
+                                <div className="mb-2 flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDraftFieldChange('recurrence_days', workDayKeys)}
+                                    className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                  >
+                                    {t('task.weekdaysWorkdays')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDraftFieldChange('recurrence_days', allDayKeys)}
+                                    className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                  >
+                                    {t('task.weekdaysAll')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDraftFieldChange('recurrence_days', [])}
+                                    className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50"
+                                  >
+                                    {t('task.weekdaysClear')}
+                                  </button>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  {weekDays.map((day) => (
+                                    <button
+                                      key={day.key}
+                                      type="button"
+                                      onClick={() => toggleDraftRecurrenceDay(day.key)}
+                                      className={`rounded-full px-3 py-1 text-sm ${
+                                        (draft.recurrence_days || []).includes(day.key)
+                                          ? 'bg-blue-600 text-white'
+                                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                      }`}
+                                    >
+                                      {day.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
