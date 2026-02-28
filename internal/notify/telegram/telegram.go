@@ -54,13 +54,17 @@ func (t *TelegramNotifier) Send(ctx context.Context, userID int64, config map[st
 	title := escapeMarkdown(msg.Title)
 	description := escapeMarkdown(msg.Description)
 	text := fmt.Sprintf("🔔 *%s*\n\n%s", title, description)
-	if msg.DueDate != nil {
-		loc := time.UTC
-		if msg.Timezone != "" {
-			if loaded, err := time.LoadLocation(msg.Timezone); err == nil {
-				loc = loaded
-			}
+	loc := time.UTC
+	if msg.Timezone != "" {
+		if loaded, err := time.LoadLocation(msg.Timezone); err == nil {
+			loc = loaded
 		}
+	}
+
+	if msg.NotifyAt != nil {
+		text += fmt.Sprintf("\n\n⏰ Reminder: %s", escapeMarkdown(msg.NotifyAt.In(loc).Format("2006-01-02 15:04:05")))
+	}
+	if msg.DueDate != nil {
 		text += fmt.Sprintf("\n\n📅 Due: %s", escapeMarkdown(msg.DueDate.In(loc).Format("2006-01-02 15:04:05")))
 	}
 

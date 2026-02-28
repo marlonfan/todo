@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const processingLockTTL = 15 * time.Minute
+
 type NotifyService struct {
 	notifyRepo *repository.NotificationRepository
 	registry   *notify.Registry
@@ -44,7 +46,8 @@ func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.Cre
 		Status:   models.NotifyStatusPending,
 	}
 
-	if err := s.notifyRepo.Create(notification); err != nil {
+	// Keep only one active reminder per task to avoid duplicates when users edit repeatedly.
+	if err := s.notifyRepo.ReplaceActiveByTask(notification); err != nil {
 		return nil, err
 	}
 
@@ -163,21 +166,26 @@ func (s *NotifyService) TestNotification(userID int64, req *models.TestNotificat
 }
 
 func (s *NotifyService) ProcessPendingNotifications() error {
-	notifications, err := s.notifyRepo.GetPendingNotifications(time.Now())
+	now := time.Now().UTC()
+	processingStaleBefore := now.Add(-processingLockTTL)
+	notifications, err := s.notifyRepo.GetPendingNotifications(now, processingStaleBefore)
 	if err != nil {
 		return err
 	}
 
 	for _, n := range notifications {
-		// Fix 7: 先更新状态为 processing，防止多实例重复发送
-		if err := s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusProcessing, nil, ""); err != nil {
+		claimed, err := s.notifyRepo.TryMarkProcessing(n.ID, processingStaleBefore)
+		if err != nil {
 			log.Printf("Failed to mark notification %d as processing: %v", n.ID, err)
+			continue
+		}
+		if !claimed {
 			continue
 		}
 
 		notifier, ok := s.registry.Get(string(n.Channel))
 		if !ok {
-			now := time.Now()
+			now := time.Now().UTC()
 			s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusFailed, &now, "unsupported channel")
 			continue
 		}
@@ -186,6 +194,7 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 			TaskID:      n.TaskID,
 			Title:       n.Task.Title,
 			Description: n.Task.Description,
+			NotifyAt:    &n.NotifyAt,
 			UserID:      n.Task.UserID,
 			Timezone:    "UTC",
 		}
@@ -200,10 +209,10 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := notifier.Send(ctx, n.Task.UserID, n.Config, msg)
+		err = notifier.Send(ctx, n.Task.UserID, n.Config, msg)
 		cancel()
 
-		now := time.Now()
+		now := time.Now().UTC()
 		if err != nil {
 			log.Printf("Failed to send notification %d: %v", n.ID, err)
 			s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusFailed, &now, err.Error())

@@ -34,12 +34,47 @@ func (r *NotificationRepository) GetByTask(taskID int64) ([]models.Notification,
 	return notifications, err
 }
 
-func (r *NotificationRepository) GetPendingNotifications(before time.Time) ([]models.Notification, error) {
+func (r *NotificationRepository) GetPendingNotifications(before, processingStaleBefore time.Time) ([]models.Notification, error) {
 	var notifications []models.Notification
 	err := r.db.Preload("Task").Preload("Task.User").
-		Where("(status = ? OR status = ?) AND notify_at <= ?", models.NotifyStatusPending, models.NotifyStatusFailed, before).
+		Where(`notify_at <= ? AND (
+			status = ? OR
+			status = ? OR
+			(status = ? AND updated_at <= ?)
+		)`, before, models.NotifyStatusPending, models.NotifyStatusFailed, models.NotifyStatusProcessing, processingStaleBefore).
 		Find(&notifications).Error
 	return notifications, err
+}
+
+func (r *NotificationRepository) ReplaceActiveByTask(notification *models.Notification) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("task_id = ? AND status IN ?", notification.TaskID, []models.NotifyStatus{
+			models.NotifyStatusPending,
+			models.NotifyStatusFailed,
+			models.NotifyStatusProcessing,
+		}).Delete(&models.Notification{}).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(notification).Error
+	})
+}
+
+func (r *NotificationRepository) TryMarkProcessing(id int64, processingStaleBefore time.Time) (bool, error) {
+	result := r.db.Model(&models.Notification{}).
+		Where(`id = ? AND (
+			status IN ? OR
+			(status = ? AND updated_at <= ?)
+		)`, id, []models.NotifyStatus{models.NotifyStatusPending, models.NotifyStatusFailed}, models.NotifyStatusProcessing, processingStaleBefore).
+		Updates(map[string]interface{}{
+			"status":    models.NotifyStatusProcessing,
+			"error_msg": "",
+		})
+
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 func (r *NotificationRepository) UpdateStatus(id int64, status models.NotifyStatus, sentAt *time.Time, errorMsg string) error {

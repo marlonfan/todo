@@ -60,6 +60,7 @@ type Notification struct {
 	Status    NotifyStatus    `json:"status" gorm:"size:20;default:'pending'"`
 	ErrorMsg  string          `json:"error_msg,omitempty" gorm:"type:text"`
 	CreatedAt time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
 
 	// Relations
 	Task *Task `json:"task,omitempty" gorm:"foreignKey:TaskID"`

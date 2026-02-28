@@ -10,6 +10,7 @@ type Message struct {
 	TaskID      int64
 	Title       string
 	Description string
+	NotifyAt    *time.Time
 	DueDate     *time.Time
 	Timezone    string
 	UserID      int64
