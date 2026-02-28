@@ -79,13 +79,6 @@ function annotateOverlapCount(events, defaultDurationMinutes = 30) {
   }));
 }
 
-function parsePercent(value) {
-  const raw = String(value || '').trim();
-  if (!raw.endsWith('%')) return null;
-  const parsed = Number.parseFloat(raw.slice(0, -1));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function CalendarView() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -665,24 +658,6 @@ function CalendarView() {
     );
   };
 
-  const handleEventDidMount = (arg) => {
-    const overlapCount = Number(arg.event.extendedProps?.overlapCount || 1);
-    if (overlapCount <= 1) return;
-
-    const harness = arg.el?.parentElement;
-    if (!harness || !harness.classList?.contains('fc-timegrid-event-harness-inset')) return;
-
-    const leftPct = parsePercent(harness.style.left);
-    const rightPct = parsePercent(harness.style.right);
-    if (leftPct === null || rightPct === null) return;
-
-    const nextLeft = Math.max(0, leftPct - 12);
-    const nextRight = Math.max(0, rightPct - 2);
-    harness.style.left = `${nextLeft}%`;
-    harness.style.right = `${nextRight}%`;
-    harness.style.zIndex = '4';
-  };
-
   return (
     <div className="relative h-full flex flex-col bg-slate-100">
       {!isCompactMobile && (
@@ -830,14 +805,13 @@ function CalendarView() {
               week: t('calendar.week'),
               day: t('calendar.day'),
             }}
-            editable={!isCompactMobile}
+            editable={true}
             selectable={true}
             selectMirror={true}
             dayMaxEvents={true}
             weekends={true}
             events={events}
             eventContent={renderEventContent}
-            eventDidMount={handleEventDidMount}
             dateClick={handleDateClick}
             select={handleSelect}
             eventClick={handleEventClick}
@@ -857,7 +831,6 @@ function CalendarView() {
             snapDuration={slotDuration}
             displayEventEnd={true}
             slotEventOverlap={true}
-            eventMaxStack={isCompactMobile ? 2 : 3}
             eventMinHeight={isCompactMobile ? 28 : 34}
             eventShortHeight={isCompactMobile ? 22 : 26}
             className={isCompactMobile ? 'mobile-calendar' : ''}
