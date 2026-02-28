@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ALLOWED_TIME_GRANULARITIES,
@@ -29,6 +29,14 @@ const TIMEZONES = [
   { value: 'UTC', label: 'Coordinated Universal Time (UTC)' },
 ];
 
+const MOBILE_DEFAULT_TABS = ['tasks', 'calendar', 'settings'];
+const MOBILE_TAB_PRESETS = [
+  'tasks_calendar_settings',
+  'tasks_calendar_categories_settings',
+  'tasks_inbox_calendar_settings',
+];
+const CALENDAR_DEFAULT_VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'];
+
 function normalizeClockValue(value, fallback) {
   return /^\d{2}:\d{2}$/.test(String(value || '')) ? String(value) : fallback;
 }
@@ -38,6 +46,18 @@ function buildReminderOptions(granularity, currentValue) {
   const current = Number.parseInt(currentValue, 10);
   if (Number.isFinite(current) && current > 0) values.add(current);
   return [...values].filter((value) => value > 0 && value <= 10080).sort((a, b) => a - b);
+}
+
+function normalizeMobileDefaultTab(value) {
+  return MOBILE_DEFAULT_TABS.includes(value) ? value : 'tasks';
+}
+
+function normalizeMobileTabPreset(value) {
+  return MOBILE_TAB_PRESETS.includes(value) ? value : 'tasks_calendar_settings';
+}
+
+function normalizeCalendarDefaultView(value) {
+  return CALENDAR_DEFAULT_VIEWS.includes(value) ? value : 'timeGridDay';
 }
 
 function Settings() {
@@ -84,9 +104,36 @@ function Settings() {
   );
   const [showCategoryEmoji, setShowCategoryEmojiState] = useState(getShowCategoryEmoji());
   const [activeTab, setActiveTab] = useState('general');
-  const [saveMessage, setSaveMessage] = useState('');
-  const [saveError, setSaveError] = useState('');
+  const [calendarDefaultView, setCalendarDefaultView] = useState(
+    normalizeCalendarDefaultView(cachedUser.calendar_default_view)
+  );
+  const [mobileDefaultTab, setMobileDefaultTab] = useState(
+    normalizeMobileDefaultTab(cachedUser.mobile_default_tab)
+  );
+  const [mobileTabPreset, setMobileTabPreset] = useState(
+    normalizeMobileTabPreset(cachedUser.mobile_tab_preset)
+  );
+  const [saveToast, setSaveToast] = useState(null);
+  const toastTimerRef = useRef(null);
   const defaultReminderOptions = buildReminderOptions(defaultTimeGranularity, defaultReminderMinutes);
+
+  const showToast = (type, message) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setSaveToast({ type, message });
+    toastTimerRef.current = setTimeout(() => {
+      setSaveToast(null);
+      toastTimerRef.current = null;
+    }, 2500);
+  };
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -99,6 +146,7 @@ function Settings() {
           setTimezone(user.timezone);
           setUserTimezone(user.timezone, true, 'settings');
         }
+        setCalendarDefaultView(normalizeCalendarDefaultView(user.calendar_default_view));
         setDefaultReminderEnabled(!!user.default_reminder_enabled);
         setDefaultReminderMinutes(String(user.default_reminder_minutes > 0 ? user.default_reminder_minutes : 5));
         setDefaultTimeGranularity(normalizeTimeGranularity(user.default_time_granularity, 15));
@@ -127,6 +175,8 @@ function Settings() {
             ? user.default_evening_time
             : '20:00'
         );
+        setMobileDefaultTab(normalizeMobileDefaultTab(user.mobile_default_tab));
+        setMobileTabPreset(normalizeMobileTabPreset(user.mobile_tab_preset));
       })
       .catch(() => {
         // ignore loading errors in settings page
@@ -138,15 +188,16 @@ function Settings() {
   }, []);
 
   const persistProfile = async (payload, rollback) => {
-    setSaveMessage('');
-    setSaveError('');
+    setSaveToast(null);
     try {
       const res = await authAPI.updateProfile(payload);
       const user = res.data || {};
       localStorage.setItem('user', JSON.stringify(user));
+      window.dispatchEvent(new CustomEvent('user:profile-updated', { detail: user }));
       if (user.timezone) {
         setUserTimezone(user.timezone, true, 'settings');
       }
+      setCalendarDefaultView(normalizeCalendarDefaultView(user.calendar_default_view));
       setDefaultReminderEnabled(!!user.default_reminder_enabled);
       setDefaultReminderMinutes(String(user.default_reminder_minutes > 0 ? user.default_reminder_minutes : 5));
       setDefaultTimeGranularity(normalizeTimeGranularity(user.default_time_granularity, 15));
@@ -175,11 +226,12 @@ function Settings() {
           ? user.default_evening_time
           : '20:00'
       );
-      setSaveMessage(t('settings.saveSuccess'));
-      setTimeout(() => setSaveMessage(''), 3000);
+      setMobileDefaultTab(normalizeMobileDefaultTab(user.mobile_default_tab));
+      setMobileTabPreset(normalizeMobileTabPreset(user.mobile_tab_preset));
+      showToast('success', t('settings.saveSuccess'));
     } catch (err) {
       if (typeof rollback === 'function') rollback();
-      setSaveError(err.response?.data?.error || t('settings.saveFailed'));
+      showToast('error', err.response?.data?.error || t('settings.saveFailed'));
     }
   };
 
@@ -249,8 +301,48 @@ function Settings() {
     setShowCategoryEmoji(enabled);
   };
 
+  const handleMobileDefaultTabChange = async (nextValue) => {
+    const previous = mobileDefaultTab;
+    const normalized = normalizeMobileDefaultTab(nextValue);
+    setMobileDefaultTab(normalized);
+    await persistProfile({ mobile_default_tab: normalized }, () => {
+      setMobileDefaultTab(previous);
+    });
+  };
+
+  const handleCalendarDefaultViewChange = async (nextValue) => {
+    const previous = calendarDefaultView;
+    const normalized = normalizeCalendarDefaultView(nextValue);
+    setCalendarDefaultView(normalized);
+    await persistProfile({ calendar_default_view: normalized }, () => {
+      setCalendarDefaultView(previous);
+    });
+  };
+
+  const handleMobileTabPresetChange = async (nextValue) => {
+    const previous = mobileTabPreset;
+    const normalized = normalizeMobileTabPreset(nextValue);
+    setMobileTabPreset(normalized);
+    await persistProfile({ mobile_tab_preset: normalized }, () => {
+      setMobileTabPreset(previous);
+    });
+  };
+
   return (
     <div className="h-full flex flex-col">
+      {saveToast && (
+        <div className="fixed right-4 top-4 z-[70]">
+          <div
+            className={`rounded-lg border px-4 py-2 text-sm shadow-lg ${
+              saveToast.type === 'error'
+                ? 'border-rose-200 bg-rose-50 text-rose-700'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            }`}
+          >
+            {saveToast.message}
+          </div>
+        </div>
+      )}
       <div className="p-4 border-b border-gray-200 bg-white">
         <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
       </div>
@@ -285,17 +377,6 @@ function Settings() {
           {activeTab === 'general' && (
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
               <h3 className="text-lg font-medium mb-4">{t('settings.title')}</h3>
-              
-              {saveMessage && (
-                <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-4">
-                  {saveMessage}
-                </div>
-              )}
-              {saveError && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
-                  {saveError}
-                </div>
-              )}
 
               <div className="space-y-6">
                 <PWAInstallCard />
@@ -334,6 +415,21 @@ function Settings() {
                   <p className="text-xs text-gray-500 mt-1">
                     {t('settings.timezoneHint')}
                   </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    {t('settings.calendarDefaultView')}
+                  </label>
+                  <select
+                    value={calendarDefaultView}
+                    onChange={(e) => handleCalendarDefaultViewChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="dayGridMonth">{t('settings.calendarViewMonth')}</option>
+                    <option value="timeGridWeek">{t('settings.calendarViewWeek')}</option>
+                    <option value="timeGridDay">{t('settings.calendarViewDay')}</option>
+                  </select>
                 </div>
 
                 <div>
@@ -449,6 +545,36 @@ function Settings() {
                     />
                     {t('settings.showCategoryEmoji')}
                   </label>
+                </div>
+
+                <div className="rounded-md border border-gray-200 p-3">
+                  <p className="mb-3 text-sm font-medium text-gray-700">{t('settings.mobileNavigation')}</p>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileDefaultTab')}</label>
+                      <select
+                        value={mobileDefaultTab}
+                        onChange={(e) => handleMobileDefaultTabChange(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="tasks">{t('settings.mobileTabTasks')}</option>
+                        <option value="calendar">{t('settings.mobileTabCalendar')}</option>
+                        <option value="settings">{t('settings.mobileTabSettings')}</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileTabPreset')}</label>
+                      <select
+                        value={mobileTabPreset}
+                        onChange={(e) => handleMobileTabPresetChange(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="tasks_calendar_settings">{t('settings.mobilePresetBasic')}</option>
+                        <option value="tasks_calendar_categories_settings">{t('settings.mobilePresetWithCategories')}</option>
+                        <option value="tasks_inbox_calendar_settings">{t('settings.mobilePresetInbox')}</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

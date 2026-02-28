@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { categoriesAPI, tasksAPI } from '../api/client';
 import CalendarView from './CalendarView';
@@ -9,14 +9,44 @@ import Settings from './Settings';
 import { IconCalendar, IconClock, IconInbox, IconList, IconLogout, IconSettings, IconStatus, IconTag, IconTrash } from './icons/TaskIcons';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 
+function normalizeMobileDefaultTab(value) {
+  if (value === 'calendar' || value === 'settings') return value;
+  return 'tasks';
+}
+
+function normalizeMobileTabPreset(value) {
+  if (value === 'tasks_calendar_categories_settings' || value === 'tasks_inbox_calendar_settings') {
+    return value;
+  }
+  return 'tasks_calendar_settings';
+}
+
+function readMobilePrefsFromStorage() {
+  try {
+    const rawUser = JSON.parse(localStorage.getItem('user') || '{}');
+    return {
+      defaultTab: normalizeMobileDefaultTab(rawUser.mobile_default_tab),
+      tabPreset: normalizeMobileTabPreset(rawUser.mobile_tab_preset),
+    };
+  } catch {
+    return {
+      defaultTab: 'tasks',
+      tabPreset: 'tasks_calendar_settings',
+    };
+  }
+}
+
 function MainLayout({ user, setUser }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('calendar');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [categories, setCategories] = useState([]);
   const [dragOverCategoryID, setDragOverCategoryID] = useState(0);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
+  const [mobilePrefs, setMobilePrefs] = useState(readMobilePrefsFromStorage);
+  const didApplyMobileDefaultRef = useRef(false);
 
   useEffect(() => {
     // 根据当前路径设置活动标签
@@ -36,6 +66,34 @@ function MainLayout({ user, setUser }) {
   }, [location.pathname]);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
+
+  useEffect(() => {
+    const syncMobilePrefs = () => {
+      setMobilePrefs(readMobilePrefsFromStorage());
+    };
+    window.addEventListener('user:profile-updated', syncMobilePrefs);
+    window.addEventListener('storage', syncMobilePrefs);
+    return () => {
+      window.removeEventListener('user:profile-updated', syncMobilePrefs);
+      window.removeEventListener('storage', syncMobilePrefs);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.innerWidth >= 768) return;
+    if (didApplyMobileDefaultRef.current) return;
+    if (location.pathname !== '/' || location.search) return;
+
+    didApplyMobileDefaultRef.current = true;
+    if (mobilePrefs.defaultTab === 'tasks') {
+      navigate('/tasks?view=all', { replace: true });
+      return;
+    }
+    if (mobilePrefs.defaultTab === 'settings') {
+      navigate('/settings', { replace: true });
+    }
+  }, [location.pathname, location.search, mobilePrefs.defaultTab, navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -66,6 +124,52 @@ function MainLayout({ user, setUser }) {
     { key: 'upcoming', to: '/tasks?view=upcoming', label: t('task.upcoming'), icon: IconClock },
   ];
 
+  const mobileTabs = useMemo(() => {
+    const baseTabs = {
+      tasks: {
+        key: 'tasks',
+        to: '/tasks?view=all',
+        label: t('nav.tasks'),
+        icon: IconList,
+        matchTasks: true,
+      },
+      inbox: {
+        key: 'inbox',
+        to: '/tasks?view=inbox',
+        label: t('task.inbox'),
+        icon: IconInbox,
+        matchTasks: true,
+      },
+      calendar: {
+        key: 'calendar',
+        to: '/',
+        label: t('nav.calendar'),
+        icon: IconCalendar,
+      },
+      categories: {
+        key: 'categories',
+        to: '/categories',
+        label: t('nav.categories'),
+        icon: IconTag,
+      },
+      settings: {
+        key: 'settings',
+        to: '/settings',
+        label: t('nav.settings'),
+        icon: IconSettings,
+      },
+    };
+
+    switch (mobilePrefs.tabPreset) {
+      case 'tasks_calendar_categories_settings':
+        return [baseTabs.tasks, baseTabs.calendar, baseTabs.categories, baseTabs.settings];
+      case 'tasks_inbox_calendar_settings':
+        return [baseTabs.inbox, baseTabs.calendar, baseTabs.settings];
+      default:
+        return [baseTabs.tasks, baseTabs.calendar, baseTabs.settings];
+    }
+  }, [mobilePrefs.tabPreset, t]);
+
   const isTaskNavActive = (to) => {
     if (location.pathname !== '/tasks') return false;
     const target = new URLSearchParams(to.split('?')[1] || '');
@@ -76,17 +180,37 @@ function MainLayout({ user, setUser }) {
       (target.get('category_id') || '') === (current.get('category_id') || '');
   };
 
+  const isMobileTabActive = (item) => {
+    if (item.matchTasks) return location.pathname === '/tasks';
+    const path = item.to.split('?')[0];
+    return location.pathname === path;
+  };
+
+  const mobilePageTitle = useMemo(() => {
+    if (location.pathname === '/tasks') {
+      const current = new URLSearchParams(location.search || '');
+      const view = current.get('view') || 'all';
+      if (view === 'inbox') return t('task.inbox');
+      if (view === 'today') return t('task.today');
+      if (view === 'upcoming') return t('task.upcoming');
+      if (view === 'completed') return t('task.completedTasks');
+      if (view === 'deleted') return t('task.deletedTasks');
+      if (current.get('category_id')) return t('nav.tasks');
+      return t('task.allTasks');
+    }
+    if (location.pathname === '/categories') return t('nav.categories');
+    if (location.pathname === '/settings') return t('nav.settings');
+    return t('nav.calendar');
+  }, [location.pathname, location.search, t]);
+
   return (
     <div className="h-screen bg-slate-100 flex flex-col md:flex-row">
-      <div className="md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white">
-        <div>
-          <h1 className="text-lg font-bold text-slate-800">{t('app.name')}</h1>
-          <p className="text-xs text-slate-500">{user.username}</p>
-        </div>
+      <div className="md:hidden flex h-11 items-center justify-between px-3 border-b border-slate-200 bg-white">
+        <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
         <button
           type="button"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="px-3 py-2 text-sm rounded-md border border-slate-300"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700"
         >
           {mobileMenuOpen ? '✕' : '☰'}
         </button>
@@ -251,13 +375,34 @@ function MainLayout({ user, setUser }) {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden pb-14 md:pb-0">
         <Routes>
           <Route path="/" element={<CalendarView />} />
           <Route path="/tasks" element={<TaskList />} />
           <Route path="/categories" element={<CategoryManager />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
+        <div className={`grid h-14 ${mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
+          {mobileTabs.map((item) => {
+            const ItemIcon = item.icon;
+            const active = isMobileTabActive(item);
+            return (
+              <Link
+                key={item.key}
+                to={item.to}
+                className={`flex flex-col items-center justify-center gap-0.5 ${
+                  active ? 'text-blue-600' : 'text-slate-500'
+                }`}
+              >
+                <ItemIcon className="h-4 w-4" />
+                <span className="text-[10px] leading-none">{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -9,6 +9,22 @@ import TaskModal from './TaskModal';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 
+function normalizeCalendarDefaultView(value) {
+  if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
+    return value;
+  }
+  return 'timeGridDay';
+}
+
+function readCalendarDefaultView() {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return normalizeCalendarDefaultView(user.calendar_default_view);
+  } catch {
+    return 'timeGridDay';
+  }
+}
+
 function CalendarView() {
   const { t, i18n } = useTranslation();
   const calendarRef = useRef(null);
@@ -18,10 +34,30 @@ function CalendarView() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedRange, setSelectedRange] = useState(null);
   const [dateRange, setDateRange] = useState({ start: null, end: null });
+  const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
   const slotDuration = timeGranularity === 60 ? '01:00:00' : `00:${String(timeGranularity).padStart(2, '0')}:00`;
+  const initialDate = useMemo(() => dayjs().tz(timezone).format('YYYY-MM-DD'), [timezone]);
+  const initialScrollTime = useMemo(() => {
+    const now = dayjs().tz(timezone);
+    const centeredHour = Math.max(0, now.hour() - 2);
+    const roundedMinute = Math.floor(now.minute() / timeGranularity) * timeGranularity;
+    return `${String(centeredHour).padStart(2, '0')}:${String(roundedMinute).padStart(2, '0')}:00`;
+  }, [timeGranularity, timezone]);
+
+  useEffect(() => {
+    const syncCalendarDefaultView = () => {
+      setCalendarDefaultView(readCalendarDefaultView());
+    };
+    window.addEventListener('user:profile-updated', syncCalendarDefaultView);
+    window.addEventListener('storage', syncCalendarDefaultView);
+    return () => {
+      window.removeEventListener('user:profile-updated', syncCalendarDefaultView);
+      window.removeEventListener('storage', syncCalendarDefaultView);
+    };
+  }, []);
 
   const toServerISO = useCallback((value) => {
     if (!value) return null;
@@ -248,9 +284,11 @@ function CalendarView() {
 
       <div className="flex-1 p-4 overflow-auto">
         <FullCalendar
+          key={`${calendarDefaultView}-${timezone}-${calendarLocale}`}
           ref={calendarRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView="dayGridMonth"
+          initialView={calendarDefaultView}
+          initialDate={initialDate}
           locale={calendarLocale}
           timeZone="UTC"
           headerToolbar={{
@@ -278,6 +316,8 @@ function CalendarView() {
           eventResize={handleEventResize}
           datesSet={handleDatesSet}
           height="100%"
+          nowIndicator={true}
+          scrollTime={initialScrollTime}
           eventTimeFormat={{
             hour: '2-digit',
             minute: '2-digit',

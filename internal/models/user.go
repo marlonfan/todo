@@ -10,6 +10,7 @@ type User struct {
 	Email                  string    `json:"email" gorm:"uniqueIndex;size:100;not null"`
 	PasswordHash           string    `json:"-" gorm:"size:255;not null"`
 	Timezone               string    `json:"timezone" gorm:"size:50;default:'UTC'"`
+	CalendarDefaultView    string    `json:"calendar_default_view" gorm:"size:20;default:'timeGridDay'"`
 	DefaultReminderEnabled bool      `json:"default_reminder_enabled" gorm:"default:false"`
 	DefaultReminderMinutes int       `json:"default_reminder_minutes" gorm:"default:5"`
 	DefaultTimeGranularity int       `json:"default_time_granularity" gorm:"default:15"`
@@ -18,6 +19,8 @@ type User struct {
 	DefaultNoonTime        string    `json:"default_noon_time" gorm:"size:5;default:'12:00'"`
 	DefaultAfternoonTime   string    `json:"default_afternoon_time" gorm:"size:5;default:'15:00'"`
 	DefaultEveningTime     string    `json:"default_evening_time" gorm:"size:5;default:'20:00'"`
+	MobileDefaultTab       string    `json:"mobile_default_tab" gorm:"size:20;default:'tasks'"`
+	MobileTabPreset        string    `json:"mobile_tab_preset" gorm:"size:60;default:'tasks_calendar_settings'"`
 	CreatedAt              time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt              time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 
@@ -40,6 +43,7 @@ type UserLoginRequest struct {
 
 type UpdateProfileRequest struct {
 	Timezone               string `json:"timezone" binding:"omitempty,max=50"`
+	CalendarDefaultView    string `json:"calendar_default_view" binding:"omitempty,oneof=dayGridMonth timeGridWeek timeGridDay"`
 	DefaultReminderEnabled *bool  `json:"default_reminder_enabled"`
 	DefaultReminderMinutes *int   `json:"default_reminder_minutes" binding:"omitempty,min=1,max=10080"`
 	DefaultTimeGranularity *int   `json:"default_time_granularity" binding:"omitempty,min=5,max=60"`
@@ -48,6 +52,8 @@ type UpdateProfileRequest struct {
 	DefaultNoonTime        string `json:"default_noon_time" binding:"omitempty,len=5"`
 	DefaultAfternoonTime   string `json:"default_afternoon_time" binding:"omitempty,len=5"`
 	DefaultEveningTime     string `json:"default_evening_time" binding:"omitempty,len=5"`
+	MobileDefaultTab       string `json:"mobile_default_tab" binding:"omitempty,oneof=tasks calendar settings"`
+	MobileTabPreset        string `json:"mobile_tab_preset" binding:"omitempty,oneof=tasks_calendar_settings tasks_calendar_categories_settings tasks_inbox_calendar_settings"`
 }
 
 type UserResponse struct {
@@ -55,6 +61,7 @@ type UserResponse struct {
 	Username               string    `json:"username"`
 	Email                  string    `json:"email"`
 	Timezone               string    `json:"timezone"`
+	CalendarDefaultView    string    `json:"calendar_default_view"`
 	DefaultReminderEnabled bool      `json:"default_reminder_enabled"`
 	DefaultReminderMinutes int       `json:"default_reminder_minutes"`
 	DefaultTimeGranularity int       `json:"default_time_granularity"`
@@ -63,10 +70,18 @@ type UserResponse struct {
 	DefaultNoonTime        string    `json:"default_noon_time"`
 	DefaultAfternoonTime   string    `json:"default_afternoon_time"`
 	DefaultEveningTime     string    `json:"default_evening_time"`
+	MobileDefaultTab       string    `json:"mobile_default_tab"`
+	MobileTabPreset        string    `json:"mobile_tab_preset"`
 	CreatedAt              time.Time `json:"created_at"`
 }
 
 func (u *User) ToResponse() UserResponse {
+	calendarDefaultView := u.CalendarDefaultView
+	switch calendarDefaultView {
+	case "dayGridMonth", "timeGridWeek", "timeGridDay":
+	default:
+		calendarDefaultView = "timeGridDay"
+	}
 	minutes := u.DefaultReminderMinutes
 	if minutes <= 0 {
 		minutes = 5
@@ -95,12 +110,23 @@ func (u *User) ToResponse() UserResponse {
 	if defaultEveningTime == "" {
 		defaultEveningTime = "20:00"
 	}
+	mobileDefaultTab := u.MobileDefaultTab
+	if mobileDefaultTab != "tasks" && mobileDefaultTab != "calendar" && mobileDefaultTab != "settings" {
+		mobileDefaultTab = "tasks"
+	}
+	mobileTabPreset := u.MobileTabPreset
+	switch mobileTabPreset {
+	case "tasks_calendar_settings", "tasks_calendar_categories_settings", "tasks_inbox_calendar_settings":
+	default:
+		mobileTabPreset = "tasks_calendar_settings"
+	}
 
 	return UserResponse{
 		ID:                     u.ID,
 		Username:               u.Username,
 		Email:                  u.Email,
 		Timezone:               u.Timezone,
+		CalendarDefaultView:    calendarDefaultView,
 		DefaultReminderEnabled: u.DefaultReminderEnabled,
 		DefaultReminderMinutes: minutes,
 		DefaultTimeGranularity: granularity,
@@ -109,6 +135,8 @@ func (u *User) ToResponse() UserResponse {
 		DefaultNoonTime:        defaultNoonTime,
 		DefaultAfternoonTime:   defaultAfternoonTime,
 		DefaultEveningTime:     defaultEveningTime,
+		MobileDefaultTab:       mobileDefaultTab,
+		MobileTabPreset:        mobileTabPreset,
 		CreatedAt:              u.CreatedAt,
 	}
 }

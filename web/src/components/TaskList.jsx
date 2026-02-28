@@ -605,13 +605,13 @@ function TaskList() {
             openAdvancedModal(task);
           }
         }}
-        className={`group cursor-pointer rounded-xl border px-3 py-2 transition ${
+        className={`group cursor-pointer rounded-xl border px-2.5 py-1.5 transition ${
           selected
             ? 'border-blue-300 bg-blue-50/70'
             : 'border-transparent bg-white hover:border-slate-200 hover:bg-slate-50'
         }`}
       >
-        <div className="flex items-start gap-2.5">
+        <div className="flex items-start gap-2">
           <input
             type="checkbox"
             checked={isCompleted}
@@ -624,7 +624,7 @@ function TaskList() {
           />
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
-              <h3 className={`truncate text-[14px] font-medium ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+              <h3 className={`truncate text-[13px] font-medium ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
                 {task.title}
               </h3>
               <div className="hidden shrink-0 items-center gap-2 sm:flex">
@@ -641,17 +641,17 @@ function TaskList() {
                     ↺
                   </button>
                 )}
-                <span className="text-[11px] text-slate-400">
+                <span className="text-[10px] text-slate-400">
                   {task.start_time ? formatDateTime(task.start_time, 'MM/DD HH:mm') : ''}
                 </span>
               </div>
             </div>
 
             {task.description && (
-              <p className="mt-0.5 truncate text-[12px] text-slate-500">{task.description}</p>
+              <p className="mt-0.5 truncate text-[11px] text-slate-500">{task.description}</p>
             )}
 
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
               <span className="text-slate-400 sm:hidden">
                 {task.start_time ? formatDateTime(task.start_time, 'MM/DD HH:mm') : ''}
               </span>
@@ -680,21 +680,21 @@ function TaskList() {
   const canQuickCreate = view !== 'completed' && view !== 'deleted';
 
   return (
-    <div className="h-full bg-slate-100 p-2 md:p-3">
-      <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
+    <div className="h-full bg-slate-100 p-1.5 md:p-2">
+      <div className="grid h-full grid-cols-1 gap-2.5 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
         <section className="flex h-full min-h-0 flex-col rounded-2xl border border-slate-200 bg-white">
-          <div className="border-b border-slate-200 px-4 py-3">
+          <div className="border-b border-slate-200 px-3 py-2.5">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-semibold text-slate-800">{viewTitle}</h2>
-                <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
+                <h2 className="text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
+                <p className="hidden text-xs text-slate-500 sm:block">{t('task.taskCount', { count: filteredTasks.length })}</p>
               </div>
               <button onClick={() => openAdvancedModal(null)} className="btn-primary whitespace-nowrap text-xs">
                 + {t('task.newTask')}
               </button>
             </div>
             {canQuickCreate && (
-              <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+              <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
                 <span className="text-slate-400">＋</span>
                 <input
                   value={quickTitle}
@@ -712,7 +712,7 @@ function TaskList() {
             )}
           </div>
 
-          <div className="flex-1 overflow-auto p-2">
+          <div className="flex-1 overflow-auto p-1.5 md:p-2">
             {loading ? (
               <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
             ) : filteredTasks.length === 0 ? (
@@ -721,7 +721,7 @@ function TaskList() {
                 <p className="mt-2 text-sm">{t('task.createFirst')}</p>
               </div>
             ) : (
-              <div className="space-y-1.5">{filteredTasks.map(renderTaskRow)}</div>
+              <div className="space-y-1">{filteredTasks.map(renderTaskRow)}</div>
             )}
           </div>
         </section>
@@ -1070,12 +1070,12 @@ function TaskList() {
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
+              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <input
                     value={draft.title}
                     onChange={(e) => handleDraftFieldChange('title', e.target.value)}
-                    className="w-full border-none bg-transparent text-2xl font-semibold text-slate-900 outline-none placeholder:text-slate-300"
+                    className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 sm:text-xl"
                     placeholder={t('task.title')}
                   />
                 </div>

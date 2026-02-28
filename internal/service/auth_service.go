@@ -65,6 +65,7 @@ func (s *AuthService) Register(req *models.UserRegisterRequest) (*models.UserRes
 		Username:               req.Username,
 		Email:                  req.Email,
 		PasswordHash:           hash,
+		CalendarDefaultView:    "timeGridDay",
 		DefaultReminderEnabled: false,
 		DefaultReminderMinutes: 5,
 		DefaultTimeGranularity: 15,
@@ -73,6 +74,8 @@ func (s *AuthService) Register(req *models.UserRegisterRequest) (*models.UserRes
 		DefaultNoonTime:        "12:00",
 		DefaultAfternoonTime:   "15:00",
 		DefaultEveningTime:     "20:00",
+		MobileDefaultTab:       "tasks",
+		MobileTabPreset:        "tasks_calendar_settings",
 	}
 
 	if err := s.userRepo.Create(user); err != nil {
@@ -134,6 +137,9 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 		}
 		user.Timezone = tz
 	}
+	if req.CalendarDefaultView != "" {
+		user.CalendarDefaultView = strings.TrimSpace(req.CalendarDefaultView)
+	}
 	if req.DefaultReminderEnabled != nil {
 		user.DefaultReminderEnabled = *req.DefaultReminderEnabled
 	}
@@ -184,6 +190,12 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 		}
 		user.DefaultEveningTime = timeValue
 	}
+	if req.MobileDefaultTab != "" {
+		user.MobileDefaultTab = strings.TrimSpace(req.MobileDefaultTab)
+	}
+	if req.MobileTabPreset != "" {
+		user.MobileTabPreset = strings.TrimSpace(req.MobileTabPreset)
+	}
 	if user.DefaultReminderMinutes <= 0 {
 		user.DefaultReminderMinutes = 5
 	}
@@ -204,6 +216,19 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 	}
 	if user.DefaultEveningTime == "" {
 		user.DefaultEveningTime = "20:00"
+	}
+	switch user.CalendarDefaultView {
+	case "dayGridMonth", "timeGridWeek", "timeGridDay":
+	default:
+		user.CalendarDefaultView = "timeGridDay"
+	}
+	if user.MobileDefaultTab != "tasks" && user.MobileDefaultTab != "calendar" && user.MobileDefaultTab != "settings" {
+		user.MobileDefaultTab = "tasks"
+	}
+	switch user.MobileTabPreset {
+	case "tasks_calendar_settings", "tasks_calendar_categories_settings", "tasks_inbox_calendar_settings":
+	default:
+		user.MobileTabPreset = "tasks_calendar_settings"
 	}
 
 	if err := s.userRepo.Update(user); err != nil {

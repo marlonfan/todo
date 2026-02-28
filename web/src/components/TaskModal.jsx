@@ -69,6 +69,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [basicPanel, setBasicPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const basicPanelRef = useRef(null);
+  const swipeStartRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
   const timeInputStepSeconds = timeGranularity * 60;
 
@@ -77,7 +78,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const priorityValue = watch('priority') || '0';
   const startInputValue = watch('start_time');
   const endInputValue = watch('end_time');
-  const descriptionValue = watch('description') || '';
+  const descriptionValue = watch('description') ?? '';
   const watchedCategoryIDs = watch('category_ids');
   const selectedCategoryValues = Array.isArray(watchedCategoryIDs)
     ? watchedCategoryIDs.map((id) => String(id))
@@ -371,22 +372,63 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && !loading) {
+      const isEscape = event.key === 'Escape' || event.key === 'Esc' || event.code === 'Escape' || event.keyCode === 27;
+      if (isEscape && !loading) {
+        event.preventDefault();
+        event.stopPropagation();
         onClose();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [loading, onClose]);
+
+  const handleModalTouchStart = (event) => {
+    if (!event.touches || event.touches.length !== 1) {
+      swipeStartRef.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    swipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      at: Date.now(),
+    };
+  };
+
+  const handleModalTouchEnd = (event) => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!start || !event.changedTouches || event.changedTouches.length === 0) return;
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = Math.abs(touch.clientY - start.y);
+    const elapsed = Date.now() - start.at;
+
+    if (deltaX > 100 && deltaY < 70 && elapsed < 800 && deltaX > deltaY * 1.5) {
+      onClose();
+    }
+  };
+
+  const handleModalTouchCancel = () => {
+    swipeStartRef.current = null;
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content task-modal-shell" onClick={e => e.stopPropagation()}>
+      <div
+        className="modal-content task-modal-shell"
+        onClick={e => e.stopPropagation()}
+        onTouchStart={handleModalTouchStart}
+        onTouchEnd={handleModalTouchEnd}
+        onTouchCancel={handleModalTouchCancel}
+      >
         <div className="flex h-[86vh] flex-col">
-          <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">
+          <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-slate-900 md:text-xl">
                   {isEditing ? t('task.editTask') : t('task.newTask')}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500">
@@ -407,7 +449,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 </div>
               )}
 
-              <div className="border-b border-slate-200 px-4 py-3">
+              <div className="border-b border-slate-200 px-3 py-2.5 md:px-4 md:py-3">
                 <input type="hidden" {...register('priority')} />
                 {isEditing && <input type="hidden" {...register('status')} />}
                 <input type="checkbox" {...register('all_day')} className="hidden" />
@@ -743,14 +785,13 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 </div>
               </div>
 
-              <div className="flex min-h-0 h-full flex-1 flex-col gap-3 overflow-auto p-4">
+              <div className="flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <input
                     {...register('title', { required: true })}
                     type="text"
-                    className="w-full border-none bg-transparent text-2xl font-semibold text-slate-900 outline-none placeholder:text-slate-300"
+                    className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 md:text-xl"
                     placeholder={t('task.title')}
-                    autoFocus
                     onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
                   />
                   <p className="mt-1 text-xs text-slate-500">{t('task.titleNaturalHint')}</p>
@@ -763,6 +804,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
+                    key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
                     value={descriptionValue}
                     onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}
                     placeholder={t('task.description')}
