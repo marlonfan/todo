@@ -226,9 +226,9 @@ func (m *MyNotifier) DefaultTemplate() string { return "{{.Title}}" }
 - **数据库**: SQLite / PostgreSQL
 - **认证**: JWT
 
-## Gitea Runner 自动构建镜像
+## GitHub Actions 自动构建镜像（GHCR）
 
-仓库已包含流程文件：`.gitea/workflows/docker-image.yml`
+仓库已包含流程文件：`.github/workflows/docker-image.yml`
 
 触发条件：
 
@@ -236,17 +236,17 @@ func (m *MyNotifier) DefaultTemplate() string { return "{{.Title}}" }
 - 推送 `v*` tag
 - 手动触发（workflow_dispatch）
 
-请在 Gitea 仓库 Secrets 中配置：
+镜像推送地址：
 
-- `DOCKERHUB_USERNAME`: DockerHub 用户名
-- `DOCKERHUB_TOKEN`: DockerHub Access Token
-- `DOCKERHUB_IMAGE`: 镜像名（例如 `marlon/todo-app`）
+- `ghcr.io/<owner>/<repo>`
+- 例如本仓库为 `ghcr.io/marlonfan/todo`
 
-推送策略：
+默认 tag 策略：
 
-- 默认分支推送：`latest` + `sha-xxxxxxx`
-- 非默认分支推送：`分支名` + `sha-xxxxxxx`
-- tag 推送：`tag名` + `sha-xxxxxxx`
+- 默认分支推送：`latest`
+- 分支推送：`<branch>`
+- tag 推送：`<tag>`
+- 同时附加：`sha-<commit7>`
 
 ## 许可证
 
