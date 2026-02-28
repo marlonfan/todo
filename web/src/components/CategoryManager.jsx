@@ -1,51 +1,64 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { categoriesAPI } from '../api/client';
+import { useCategoriesQuery } from '../query/hooks';
+import { queryKeys } from '../query/keys';
 
 const EMOJI_OPTIONS = ['📁', '📌', '🧠', '💼', '📚', '🏠', '💡', '🛒', '🏃', '🎯', '💰', '❤️', '🎮', '✈️', '🍜', '🧹'];
 
 function CategoryManager() {
   const { t } = useTranslation();
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
+  const { data: categories = [], isLoading } = useCategoriesQuery();
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [editingCategory, setEditingCategory] = useState(null);
   const { register, handleSubmit, reset, setValue } = useForm();
 
-  useEffect(() => {
-    fetchCategories();
-  }, []);
-
-  const fetchCategories = async () => {
-    setLoading(true);
-    try {
-      const res = await categoriesAPI.list();
-      setCategories(res.data);
-    } catch (err) {
-      setError(t('category.noCategories'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const onSubmit = async (data) => {
-    setLoading(true);
+    setSubmitting(true);
     setError('');
+    const previousCategories = queryClient.getQueryData(queryKeys.categories.all);
 
     try {
       if (editingCategory) {
-        await categoriesAPI.update(editingCategory.id, data);
+        queryClient.setQueryData(queryKeys.categories.all, (prev) => {
+          if (!Array.isArray(prev)) return prev;
+          return prev.map((item) => (item.id === editingCategory.id ? { ...item, ...data } : item));
+        });
+
+        const res = await categoriesAPI.update(editingCategory.id, data);
+        if (res?.data?.id) {
+          queryClient.setQueryData(queryKeys.categories.all, (prev) => {
+            if (!Array.isArray(prev)) return prev;
+            return prev.map((item) => (item.id === res.data.id ? res.data : item));
+          });
+        }
         setEditingCategory(null);
       } else {
-        await categoriesAPI.create(data);
+        const tempID = -Date.now();
+        queryClient.setQueryData(queryKeys.categories.all, (prev) => {
+          const base = Array.isArray(prev) ? prev : [];
+          return [{ id: tempID, ...data }, ...base];
+        });
+
+        const res = await categoriesAPI.create(data);
+        if (res?.data?.id) {
+          queryClient.setQueryData(queryKeys.categories.all, (prev) => {
+            if (!Array.isArray(prev)) return prev;
+            return prev.map((item) => (item.id === tempID ? res.data : item));
+          });
+        }
       }
       reset();
-      fetchCategories();
     } catch (err) {
+      queryClient.setQueryData(queryKeys.categories.all, previousCategories);
       setError(err.response?.data?.error || t('common.loading'));
     } finally {
-      setLoading(false);
+      setSubmitting(false);
+      queryClient.invalidateQueries({ queryKey: queryKeys.categories.all });
     }
   };
 
@@ -59,14 +72,21 @@ function CategoryManager() {
   const handleDelete = async (id) => {
     if (!confirm(t('category.deleteConfirm'))) return;
 
-    setLoading(true);
+    setSubmitting(true);
+    const previousCategories = queryClient.getQueryData(queryKeys.categories.all);
+    queryClient.setQueryData(queryKeys.categories.all, (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.filter((item) => item.id !== id);
+    });
+
     try {
       await categoriesAPI.delete(id);
-      fetchCategories();
     } catch (err) {
+      queryClient.setQueryData(queryKeys.categories.all, previousCategories);
       setError(err.response?.data?.error || t('category.deleteFailed'));
     } finally {
-      setLoading(false);
+      setSubmitting(false);
+      queryClient.invalidateQueries({ queryKey: queryKeys.categories.all });
     }
   };
 
@@ -77,7 +97,7 @@ function CategoryManager() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 border-b border-gray-200 bg-white">
+      <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
         <h2 className="text-xl font-semibold">{t('nav.categories')}</h2>
       </div>
 
@@ -136,7 +156,7 @@ function CategoryManager() {
                 )}
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={submitting}
                   className="btn-primary"
                 >
                   {editingCategory ? t('common.save') : t('common.add')}
@@ -147,6 +167,9 @@ function CategoryManager() {
 
           {/* Categories List */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            {isLoading && (
+              <div className="p-4 text-sm text-gray-500">{t('common.loading')}</div>
+            )}
             {categories.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
                 {t('category.noCategories')}

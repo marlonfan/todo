@@ -3,11 +3,13 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { calendarAPI, tasksAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
+import { queryKeys } from '../query/keys';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -27,13 +29,12 @@ function readCalendarDefaultView() {
 
 function CalendarView() {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
   const calendarRef = useRef(null);
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedRange, setSelectedRange] = useState(null);
-  const [dateRange, setDateRange] = useState({ start: null, end: null });
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
@@ -59,6 +60,11 @@ function CalendarView() {
     };
   }, []);
 
+  const currentCalendarQueryKey = useMemo(
+    () => queryKeys.calendar.events(dateRange.start || '', dateRange.end || '', timezone),
+    [dateRange.end, dateRange.start, timezone]
+  );
+
   const toServerISO = useCallback((value) => {
     if (!value) return null;
 
@@ -82,30 +88,31 @@ function CalendarView() {
     return dayjs(isoString).tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]');
   }, [timezone]);
 
-  const fetchEvents = useCallback(async (start, end) => {
-    setLoading(true);
-    try {
+  const {
+    data: events = [],
+    isFetching: loading,
+  } = useQuery({
+    queryKey: currentCalendarQueryKey,
+    enabled: Boolean(dateRange.start && dateRange.end),
+    queryFn: async () => {
       const res = await calendarAPI.getEvents({
-        start: toServerISO(start),
-        end: toServerISO(end),
+        start: toServerISO(dateRange.start),
+        end: toServerISO(dateRange.end),
       });
-      setEvents((res.data || []).map((event) => ({
+      const list = Array.isArray(res.data) ? res.data : [];
+      return list.map((event) => ({
         ...event,
         start: toCalendarISO(event.start),
         end: event.end ? toCalendarISO(event.end) : undefined,
-      })));
-    } catch (err) {
-      console.error('Failed to fetch events:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [toCalendarISO, toServerISO]);
+      }));
+    },
+  });
 
   const handleDatesSet = (dateInfo) => {
-    const start = dayjs(dateInfo.start);
-    const end = dayjs(dateInfo.end);
-    setDateRange({ start, end });
-    fetchEvents(start, end);
+    setDateRange({
+      start: dayjs(dateInfo.start).toISOString(),
+      end: dayjs(dateInfo.end).toISOString(),
+    });
   };
 
   const handleDateClick = (info) => {
@@ -146,21 +153,37 @@ function CalendarView() {
 
   const handleEventClick = async (info) => {
     const taskId = info.event.extendedProps.taskId;
-    
+    const instanceId = info.event.id;
+    const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
+    const cachedTask = Array.isArray(cachedTasks)
+      ? cachedTasks.find((task) => task.id === taskId)
+      : null;
+
+    if (cachedTask) {
+      setSelectedTask({
+        ...cachedTask,
+        id: taskId,
+        instanceId,
+      });
+      setSelectedRange(null);
+      setModalOpen(true);
+    }
+
     try {
       const res = await tasksAPI.get(taskId);
       const taskData = res.data;
-      
       setSelectedTask({
         id: taskId,
-        instanceId: info.event.id,
+        instanceId,
         ...taskData,
       });
       setSelectedRange(null);
       setModalOpen(true);
     } catch (err) {
       console.error('Failed to fetch task:', err);
-      alert(t('calendar.loadTaskFailed'));
+      if (!cachedTask) {
+        alert(t('calendar.loadTaskFailed'));
+      }
     }
   };
 
@@ -169,17 +192,32 @@ function CalendarView() {
     const instanceId = event.extendedProps.instanceId || event.id;
     const currentStatus = event.extendedProps.status || 'pending';
     const nextStatus = currentStatus === 'completed' ? 'pending' : 'completed';
+    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
+    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.map((item) => {
+        if (item.id !== event.id) return item;
+        return {
+          ...item,
+          extendedProps: {
+            ...item.extendedProps,
+            status: nextStatus,
+          },
+        };
+      });
+    });
 
     try {
       await tasksAPI.updateStatus(taskId, {
         status: nextStatus,
         instance_id: instanceId,
       });
-      if (dateRange.start && dateRange.end) {
-        fetchEvents(dateRange.start, dateRange.end);
-      }
     } catch (err) {
+      queryClient.setQueryData(currentCalendarQueryKey, previousEvents);
       console.error('Failed to update task status:', err);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
     }
   };
 
@@ -197,6 +235,14 @@ function CalendarView() {
       }
     }
 
+    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
+    const optimisticStart = dayjs(info.event.start).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
+    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().format('YYYY-MM-DDTHH:mm:ss[Z]') : undefined;
+    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
+    });
+
     try {
       await tasksAPI.updateSchedule(taskId, {
         start_time: newStart,
@@ -204,8 +250,12 @@ function CalendarView() {
         all_day: info.event.allDay,
       });
     } catch (err) {
+      queryClient.setQueryData(currentCalendarQueryKey, previousEvents);
       console.error('Failed to update schedule:', err);
       info.revert();
+    } finally {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
     }
   };
 
@@ -223,6 +273,14 @@ function CalendarView() {
       }
     }
 
+    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
+    const optimisticStart = dayjs(info.event.start).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
+    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().format('YYYY-MM-DDTHH:mm:ss[Z]') : undefined;
+    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
+    });
+
     try {
       await tasksAPI.updateSchedule(taskId, {
         start_time: newStart,
@@ -230,8 +288,12 @@ function CalendarView() {
         all_day: info.event.allDay,
       });
     } catch (err) {
+      queryClient.setQueryData(currentCalendarQueryKey, previousEvents);
       console.error('Failed to resize event:', err);
       info.revert();
+    } finally {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
     }
   };
 
@@ -241,11 +303,20 @@ function CalendarView() {
     setSelectedRange(null);
   };
 
-  const handleTaskSaved = () => {
+  const handleTaskSaved = (savedTask) => {
     handleModalClose();
-    if (dateRange.start && dateRange.end) {
-      fetchEvents(dateRange.start, dateRange.end);
+    if (savedTask?.id) {
+      queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
+        const base = Array.isArray(prev) ? prev : [];
+        const exists = base.some((task) => task.id === savedTask.id);
+        if (exists) {
+          return base.map((task) => (task.id === savedTask.id ? savedTask : task));
+        }
+        return [savedTask, ...base];
+      });
     }
+    queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    queryClient.invalidateQueries({ queryKey: currentCalendarQueryKey });
   };
 
   const renderEventContent = (arg) => {
@@ -275,7 +346,7 @@ function CalendarView() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 border-b border-gray-200 bg-white">
+      <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
         <h2 className="text-xl font-semibold">{t('nav.calendar')}</h2>
         <p className="text-sm text-gray-500">
           {t('settings.timezone')}: {timezone === 'Asia/Shanghai' ? t('settings.timezoneCST') : timezone}
@@ -329,7 +400,7 @@ function CalendarView() {
         />
       </div>
 
-      {loading && (
+      {loading && events.length === 0 && (
         <div className="absolute inset-0 bg-white bg-opacity-50 flex items-center justify-center z-40">
           <div className="text-lg">{t('common.loading')}</div>
         </div>

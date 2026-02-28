@@ -128,3 +128,35 @@ export function IconTrash({ className }) {
     </BaseIcon>
   );
 }
+
+export function IconSearch({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20L16.65 16.65" />
+    </BaseIcon>
+  );
+}
+
+export function IconSort({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <path d="M4 7H14" />
+      <path d="M4 12H10" />
+      <path d="M4 17H8" />
+      <path d="M17 6V18" />
+      <path d="M14 15L17 18L20 15" />
+    </BaseIcon>
+  );
+}
+
+export function IconGroup({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <rect x="3" y="4" width="8" height="7" rx="1.5" />
+      <rect x="13" y="4" width="8" height="7" rx="1.5" />
+      <rect x="3" y="13" width="8" height="7" rx="1.5" />
+      <rect x="13" y="13" width="8" height="7" rx="1.5" />
+    </BaseIcon>
+  );
+}

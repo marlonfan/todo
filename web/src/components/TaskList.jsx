@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
-import { categoriesAPI, tasksAPI } from '../api/client';
+import { tasksAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
+import { queryKeys } from '../query/keys';
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -55,22 +58,50 @@ function getDefaultStartTimeParts() {
   }
 }
 
+function getTaskPrimaryTime(task) {
+  return task.start_time || task.due_date || '';
+}
+
+function sortTasksByOption(inputTasks, sortBy, timezone) {
+  const cloned = [...inputTasks];
+  cloned.sort((a, b) => {
+    if (sortBy === 'priority_desc' || sortBy === 'priority_asc') {
+      const pa = Number.parseInt(a.priority, 10) || 0;
+      const pb = Number.parseInt(b.priority, 10) || 0;
+      if (pa !== pb) return sortBy === 'priority_desc' ? pb - pa : pa - pb;
+    }
+
+    const ta = getTaskPrimaryTime(a);
+    const tb = getTaskPrimaryTime(b);
+    const va = ta ? dayjs(ta).tz(timezone).valueOf() : Number.POSITIVE_INFINITY;
+    const vb = tb ? dayjs(tb).tz(timezone).valueOf() : Number.POSITIVE_INFINITY;
+    if (va !== vb) {
+      return sortBy === 'due_desc' ? vb - va : va - vb;
+    }
+    return a.id - b.id;
+  });
+  return cloned;
+}
+
 function TaskList() {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const timeInputStepSeconds = timeGranularity * 60;
+  const { data: tasks = [], isLoading: tasksLoading } = useTasksQuery();
+  const { data: categories = [] } = useCategoriesQuery();
 
-  const [tasks, setTasks] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTask, setModalTask] = useState(null);
   const [selectedTaskID, setSelectedTaskID] = useState(0);
   const [draft, setDraft] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [quickTitle, setQuickTitle] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [sortBy, setSortBy] = useState('due_asc');
+  const [groupBy, setGroupBy] = useState('none');
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [detailPanel, setDetailPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
@@ -85,19 +116,6 @@ function TaskList() {
   const view = params.get('view') || 'all';
   const categoryID = Number.parseInt(params.get('category_id') || '', 10);
   const activeCategoryID = Number.isNaN(categoryID) ? 0 : categoryID;
-
-  useEffect(() => {
-    fetchTasks();
-    fetchCategories();
-  }, []);
-
-  useEffect(() => {
-    const handleTasksChanged = () => {
-      fetchTasks();
-    };
-    window.addEventListener('tasks:changed', handleTasksChanged);
-    return () => window.removeEventListener('tasks:changed', handleTasksChanged);
-  }, []);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
@@ -121,61 +139,48 @@ function TaskList() {
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [detailPanel]);
 
-  const fetchTasks = async () => {
-    setLoading(true);
-    try {
-      const res = await tasksAPI.list();
-      setTasks(res.data || []);
-    } catch (err) {
-      console.error('Failed to fetch tasks:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchCategories = async () => {
-    try {
-      const res = await categoriesAPI.list();
-      setCategories(res.data || []);
-    } catch (err) {
-      console.error('Failed to fetch categories:', err);
-    }
-  };
-
-  const getTaskTime = (task) => task.start_time || task.due_date || '';
-
-  const sortedTasks = useMemo(() => {
-    const cloned = [...tasks];
-    cloned.sort((a, b) => {
-      const ta = getTaskTime(a);
-      const tb = getTaskTime(b);
-      if (!ta && !tb) return a.id - b.id;
-      if (!ta) return 1;
-      if (!tb) return -1;
-      return dayjs(ta).valueOf() - dayjs(tb).valueOf();
+  const loading = tasksLoading && tasks.length === 0;
+  const setTasksCache = (updater) => {
+    queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
+      const base = Array.isArray(prev) ? prev : [];
+      const next = typeof updater === 'function' ? updater(base) : updater;
+      return Array.isArray(next) ? next : base;
     });
-    return cloned;
-  }, [tasks]);
+  };
 
-  const filteredTasks = useMemo(() => {
+  useEffect(() => {
+    if (view === 'search') {
+      setGroupBy('status');
+      return;
+    }
+    if (groupBy === 'status') {
+      setGroupBy('none');
+    }
+  }, [groupBy, view]);
+
+  const baseFilteredTasks = useMemo(() => {
     const now = dayjs().tz(timezone);
     const todayStart = now.startOf('day');
     const todayEnd = now.endOf('day');
     const sevenDayEnd = todayStart.add(6, 'day').endOf('day');
 
     if (activeCategoryID > 0) {
-      return sortedTasks.filter((task) => (task.categories || []).some((cat) => cat.id === activeCategoryID) && task.status === 'pending');
+      return tasks.filter((task) => (task.categories || []).some((cat) => cat.id === activeCategoryID) && task.status === 'pending');
     }
 
     if (view === 'completed') {
-      return sortedTasks.filter((task) => task.status === 'completed');
+      return tasks.filter((task) => task.status === 'completed');
     }
 
     if (view === 'deleted') {
-      return sortedTasks.filter((task) => task.status === 'cancelled');
+      return tasks.filter((task) => task.status === 'cancelled');
     }
 
-    const pending = sortedTasks.filter((task) => task.status === 'pending');
+    if (view === 'search') {
+      return tasks;
+    }
+
+    const pending = tasks.filter((task) => task.status === 'pending');
 
     if (view === 'inbox') {
       return pending.filter((task) => !task.categories || task.categories.length === 0);
@@ -183,7 +188,7 @@ function TaskList() {
 
     if (view === 'today') {
       return pending.filter((task) => {
-        const time = getTaskTime(task);
+        const time = getTaskPrimaryTime(task);
         if (!time) return false;
         const current = dayjs(time).tz(timezone);
         return (current.isAfter(todayStart) || current.isSame(todayStart)) && (current.isBefore(todayEnd) || current.isSame(todayEnd));
@@ -192,7 +197,7 @@ function TaskList() {
 
     if (view === 'upcoming') {
       return pending.filter((task) => {
-        const time = getTaskTime(task);
+        const time = getTaskPrimaryTime(task);
         if (!time) return false;
         const current = dayjs(time).tz(timezone);
         return (current.isAfter(todayStart) || current.isSame(todayStart)) && (current.isBefore(sevenDayEnd) || current.isSame(sevenDayEnd));
@@ -200,7 +205,116 @@ function TaskList() {
     }
 
     return pending;
-  }, [activeCategoryID, sortedTasks, timezone, view]);
+  }, [activeCategoryID, tasks, timezone, view]);
+
+  const searchedTasks = useMemo(() => {
+    const keyword = searchKeyword.trim().toLowerCase();
+    if (view !== 'search') return baseFilteredTasks;
+    if (!keyword) return baseFilteredTasks;
+    return baseFilteredTasks.filter((task) => {
+      const title = String(task.title || '').toLowerCase();
+      const description = String(task.description || '').toLowerCase();
+      const categoryText = (task.categories || [])
+        .map((cat) => String(cat.name || '').toLowerCase())
+        .join(' ');
+      return title.includes(keyword) || description.includes(keyword) || categoryText.includes(keyword);
+    });
+  }, [baseFilteredTasks, searchKeyword, view]);
+
+  const sortedTasks = useMemo(
+    () => sortTasksByOption(searchedTasks, sortBy, timezone),
+    [searchedTasks, sortBy, timezone]
+  );
+
+  const canGroupByCategory = view === 'all' || view === 'today' || view === 'upcoming';
+  const effectiveGroupBy = view === 'search' ? 'status' : groupBy;
+
+  const taskGroups = useMemo(() => {
+    if (sortedTasks.length === 0) return [];
+    if (effectiveGroupBy === 'none') {
+      return [{ key: 'all', title: '', tasks: sortedTasks }];
+    }
+
+    const groupMap = new Map();
+    const pushTaskToGroup = (key, title, task) => {
+      if (!groupMap.has(key)) {
+        groupMap.set(key, { key, title, tasks: [] });
+      }
+      groupMap.get(key).tasks.push(task);
+    };
+
+    sortedTasks.forEach((task) => {
+      if (effectiveGroupBy === 'status') {
+        const status = task.status || 'cancelled';
+        const title =
+          status === 'pending'
+            ? t('task.statusPending')
+            : status === 'completed'
+              ? t('task.statusCompleted')
+              : t('task.statusCancelled');
+        pushTaskToGroup(status, title, task);
+        return;
+      }
+
+      if (effectiveGroupBy === 'priority') {
+        const priority = Number.parseInt(task.priority, 10) || 0;
+        const key = String(priority);
+        const title = priority === 1 ? t('task.priorityHigh') : priority === -1 ? t('task.priorityLow') : t('task.priorityMedium');
+        pushTaskToGroup(key, title, task);
+        return;
+      }
+
+      if (effectiveGroupBy === 'due') {
+        const taskTime = getTaskPrimaryTime(task);
+        if (!taskTime) {
+          pushTaskToGroup('no-date', t('task.noDate'), task);
+          return;
+        }
+        const current = dayjs(taskTime).tz(timezone);
+        pushTaskToGroup(`due-${current.format('YYYY-MM-DD')}`, current.format('MM/DD ddd'), task);
+        return;
+      }
+
+      if (effectiveGroupBy === 'category') {
+        const firstCategory = (task.categories || [])[0];
+        if (!firstCategory) {
+          pushTaskToGroup('category-none', t('task.inbox'), task);
+          return;
+        }
+        const label = showCategoryEmoji && firstCategory.emoji
+          ? `${firstCategory.emoji} ${firstCategory.name}`
+          : firstCategory.name;
+        pushTaskToGroup(`category-${firstCategory.id}`, label, task);
+      }
+    });
+
+    let groups = Array.from(groupMap.values());
+    if (effectiveGroupBy === 'status') {
+      const order = { pending: 0, completed: 1, cancelled: 2 };
+      groups.sort((a, b) => (order[a.key] ?? 9) - (order[b.key] ?? 9));
+      return groups;
+    }
+
+    if (effectiveGroupBy === 'priority') {
+      const order = { 1: 0, 0: 1, '-1': 2 };
+      groups.sort((a, b) => (order[a.key] ?? 9) - (order[b.key] ?? 9));
+      return groups;
+    }
+
+    if (effectiveGroupBy === 'due') {
+      groups.sort((a, b) => {
+        if (a.key === 'no-date') return 1;
+        if (b.key === 'no-date') return -1;
+        return a.key.localeCompare(b.key);
+      });
+      return groups;
+    }
+
+    groups.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'));
+    return groups;
+  }, [effectiveGroupBy, showCategoryEmoji, sortedTasks, t, timezone]);
+
+  const filteredTasks = useMemo(() => taskGroups.flatMap((group) => group.tasks), [taskGroups]);
 
   const activeCategory = categories.find((cat) => cat.id === activeCategoryID);
   const viewTitle = activeCategory
@@ -213,6 +327,8 @@ function TaskList() {
         ? t('task.today')
         : view === 'upcoming'
           ? t('task.upcoming')
+          : view === 'search'
+            ? t('task.searchTasks')
           : view === 'completed'
             ? t('task.completedTasks')
             : view === 'deleted'
@@ -339,6 +455,9 @@ function TaskList() {
   };
 
   const handleStatusChange = async (task, newStatus) => {
+    const previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
+    setTasksCache((prev) => prev.map((item) => (item.id === task.id ? { ...item, status: newStatus } : item)));
+
     try {
       if (task.recurrence_rule) {
         await tasksAPI.updateStatus(task.id, {
@@ -348,15 +467,18 @@ function TaskList() {
       } else {
         await tasksAPI.updateStatus(task.id, newStatus);
       }
-      await fetchTasks();
     } catch (err) {
+      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to update task status:', err);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     }
   };
 
   const handleQuickCreate = async () => {
     const title = quickTitle.trim();
     if (!title) return;
+    let previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
 
     try {
       let storedUser = {};
@@ -382,13 +504,33 @@ function TaskList() {
       if (activeCategoryID > 0) {
         payload.category_ids = [activeCategoryID];
       }
+
+      const tempTaskID = -Date.now();
+      const selectedCategory = categories.find((cat) => cat.id === activeCategoryID);
+      const optimisticTask = {
+        id: tempTaskID,
+        title: normalizedTitle,
+        description: '',
+        priority: 0,
+        status: 'pending',
+        start_time: payload.start_time,
+        end_time: null,
+        due_date: null,
+        all_day: false,
+        recurrence_rule: null,
+        categories: selectedCategory ? [selectedCategory] : [],
+      };
+      setTasksCache((prev) => [optimisticTask, ...prev]);
+      setSelectedTaskID(tempTaskID);
       const res = await tasksAPI.create(payload);
       setQuickTitle('');
-      await fetchTasks();
       if (res?.data?.id) {
+        setTasksCache((prev) => prev.map((taskItem) => (taskItem.id === tempTaskID ? res.data : taskItem)));
         setSelectedTaskID(res.data.id);
       }
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     } catch (err) {
+      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to create task:', err);
     }
   };
@@ -482,6 +624,7 @@ function TaskList() {
     if (savingDraft) return;
     const title = (draft.title || '').trim();
     if (!title) return;
+    let previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
 
     setSavingDraft(true);
     try {
@@ -519,13 +662,29 @@ function TaskList() {
         payload.recurrence_rule = null;
       }
 
+      const optimisticCategories = categories.filter((cat) => (draft.category_ids || []).includes(String(cat.id)));
+      const optimisticTask = {
+        ...selectedTask,
+        title: payload.title,
+        description: payload.description,
+        priority: payload.priority,
+        status: payload.status,
+        all_day: payload.all_day,
+        start_time: payload.start_time,
+        end_time: payload.end_time,
+        recurrence_rule: payload.recurrence_rule,
+        categories: optimisticCategories,
+      };
+      setTasksCache((prev) => prev.map((taskItem) => (taskItem.id === selectedTask.id ? optimisticTask : taskItem)));
+
       const res = await tasksAPI.update(selectedTask.id, payload);
       if (res?.data?.id) {
         const savedTask = res.data;
-        setTasks((prev) => prev.map((taskItem) => (taskItem.id === savedTask.id ? savedTask : taskItem)));
+        setTasksCache((prev) => prev.map((taskItem) => (taskItem.id === savedTask.id ? savedTask : taskItem)));
       }
       setLastSavedAt(dayjs().format('HH:mm:ss'));
     } catch (err) {
+      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to save task details:', err);
     } finally {
       setSavingDraft(false);
@@ -536,11 +695,16 @@ function TaskList() {
     if (!selectedTask) return;
     if (!confirm(t('task.deleteConfirm'))) return;
 
+    const previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
+    setTasksCache((prev) =>
+      prev.map((taskItem) => (taskItem.id === selectedTask.id ? { ...taskItem, status: 'cancelled' } : taskItem))
+    );
+
     try {
       await tasksAPI.updateStatus(selectedTask.id, 'cancelled');
-      await fetchTasks();
-      window.dispatchEvent(new CustomEvent('tasks:changed'));
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     } catch (err) {
+      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to delete task:', err);
     }
   };
@@ -579,10 +743,18 @@ function TaskList() {
     setModalTask(null);
   };
 
-  const handleTaskSaved = async () => {
+  const handleTaskSaved = async (savedTask) => {
     handleModalClose();
-    await fetchTasks();
-    window.dispatchEvent(new CustomEvent('tasks:changed'));
+    if (savedTask?.id) {
+      setTasksCache((prev) => {
+        const exists = prev.some((taskItem) => taskItem.id === savedTask.id);
+        if (exists) {
+          return prev.map((taskItem) => (taskItem.id === savedTask.id ? savedTask : taskItem));
+        }
+        return [savedTask, ...prev];
+      });
+    }
+    await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
   };
 
   const renderTaskRow = (task) => {
@@ -642,7 +814,7 @@ function TaskList() {
                   </button>
                 )}
                 <span className="text-[10px] text-slate-400">
-                  {task.start_time ? formatDateTime(task.start_time, 'MM/DD HH:mm') : ''}
+                  {getTaskPrimaryTime(task) ? formatDateTime(getTaskPrimaryTime(task), 'MM/DD HH:mm') : ''}
                 </span>
               </div>
             </div>
@@ -653,7 +825,7 @@ function TaskList() {
 
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
               <span className="text-slate-400 sm:hidden">
-                {task.start_time ? formatDateTime(task.start_time, 'MM/DD HH:mm') : ''}
+                {getTaskPrimaryTime(task) ? formatDateTime(getTaskPrimaryTime(task), 'MM/DD HH:mm') : ''}
               </span>
               {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{t('task.statusCancelled')}</span>}
               <span className={`${priority.class}`}>{priority.text}</span>
@@ -677,37 +849,111 @@ function TaskList() {
     );
   };
 
-  const canQuickCreate = view !== 'completed' && view !== 'deleted';
+  const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
+  const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
+  const sortOptions = [
+    { value: 'due_asc', label: t('task.sortDueAsc') },
+    { value: 'due_desc', label: t('task.sortDueDesc') },
+    { value: 'priority_desc', label: t('task.sortPriorityDesc') },
+    { value: 'priority_asc', label: t('task.sortPriorityAsc') },
+  ];
+  const groupOptions = [
+    { value: 'none', label: t('task.groupNone') },
+    { value: 'due', label: t('task.groupDueDate') },
+    { value: 'priority', label: t('task.groupPriority') },
+    ...(canGroupByCategory ? [{ value: 'category', label: t('task.groupCategory') }] : []),
+  ];
 
   return (
     <div className="h-full bg-slate-100 p-1.5 md:p-2">
       <div className="grid h-full grid-cols-1 gap-2.5 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
         <section className="flex h-full min-h-0 flex-col rounded-2xl border border-slate-200 bg-white">
-          <div className="border-b border-slate-200 px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
-                <p className="hidden text-xs text-slate-500 sm:block">{t('task.taskCount', { count: filteredTasks.length })}</p>
+          <div className="space-y-2 border-b border-slate-200 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
+                <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
               </div>
-              <button onClick={() => openAdvancedModal(null)} className="btn-primary whitespace-nowrap text-xs">
-                + {t('task.newTask')}
-              </button>
-            </div>
-            {canQuickCreate && (
-              <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-                <span className="text-slate-400">＋</span>
-                <input
-                  value={quickTitle}
-                  onChange={(e) => setQuickTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
+              <div className="flex min-w-0 items-center gap-2">
+                {view === 'search' ? (
+                  <div className="flex w-44 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:w-56">
+                    <IconSearch className="h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      value={searchKeyword}
+                      onChange={(event) => setSearchKeyword(event.target.value)}
+                      placeholder={t('task.searchPlaceholder')}
+                      className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
+                    />
+                  </div>
+                ) : canQuickCreate ? (
+                  <div className="flex w-44 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:w-56">
+                    <IconSearch className="h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      value={quickTitle}
+                      onChange={(event) => setQuickTitle(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          handleQuickCreate();
+                        }
+                      }}
+                      placeholder={t('task.quickAddPlaceholder')}
+                      className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
+                    />
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (canQuickCreate && quickTitle.trim()) {
                       handleQuickCreate();
+                      return;
                     }
+                    openAdvancedModal(null);
                   }}
-                  placeholder={`${t('common.add')}${t('task.title')}`}
-                  className="w-full border-none bg-transparent text-sm outline-none placeholder:text-slate-400"
-                />
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-base text-white hover:bg-blue-700"
+                  title={t('task.newTask')}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {canShowSortGroup && (
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                  <IconSort className="h-3.5 w-3.5" />
+                  <select
+                    value={sortBy}
+                    onChange={(event) => setSortBy(event.target.value)}
+                    className="border-none bg-transparent text-xs text-slate-700 outline-none"
+                  >
+                    {sortOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                  <IconGroup className="h-3.5 w-3.5" />
+                  <select
+                    value={effectiveGroupBy}
+                    onChange={(event) => setGroupBy(event.target.value)}
+                    disabled={view === 'search'}
+                    className="border-none bg-transparent text-xs text-slate-700 outline-none disabled:text-slate-400"
+                  >
+                    {view === 'search' ? (
+                      <option value="status">{t('task.groupStatus')}</option>
+                    ) : (
+                      groupOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
               </div>
             )}
           </div>
@@ -717,11 +963,22 @@ function TaskList() {
               <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
             ) : filteredTasks.length === 0 ? (
               <div className="py-10 text-center text-slate-500">
-                <p>{t('task.noTasks')}</p>
-                <p className="mt-2 text-sm">{t('task.createFirst')}</p>
+                <p>{view === 'search' ? t('task.searchNoResults') : t('task.noTasks')}</p>
+                <p className="mt-2 text-sm">{view === 'search' ? t('task.searchHint') : t('task.createFirst')}</p>
               </div>
             ) : (
-              <div className="space-y-1">{filteredTasks.map(renderTaskRow)}</div>
+              <div className="space-y-3">
+                {taskGroups.map((group) => (
+                  <div key={group.key} className="space-y-1">
+                    {group.title ? (
+                      <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        {group.title} · {group.tasks.length}
+                      </div>
+                    ) : null}
+                    <div className="space-y-1">{group.tasks.map(renderTaskRow)}</div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </section>

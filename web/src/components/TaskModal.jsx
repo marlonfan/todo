@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { tasksAPI, categoriesAPI } from '../api/client';
+import { tasksAPI } from '../api/client';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import { useCategoriesQuery } from '../query/hooks';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 
@@ -58,7 +59,7 @@ function getDefaultStartParts() {
 function TaskModal({ task, initialRange, onClose, onSaved }) {
   const { t } = useTranslation();
   const { register, handleSubmit, watch, setValue, getValues } = useForm();
-  const [categories, setCategories] = useState([]);
+  const { data: categories = [] } = useCategoriesQuery();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showRecurrence, setShowRecurrence] = useState(false);
@@ -133,7 +134,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
 
   useEffect(() => {
-    fetchCategories();
     setTimeTouched(false);
     setParsePreview('');
     
@@ -221,15 +221,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setValue('end_time', `${endTime}T23:59`);
     }
   }, [isAllDay, getValues, setValue]);
-
-  const fetchCategories = async () => {
-    try {
-      const res = await categoriesAPI.list();
-      setCategories(res.data);
-    } catch (err) {
-      console.error('Failed to fetch categories:', err);
-    }
-  };
 
   const applyNaturalTimeFromTitle = (titleValue, shouldUpdateTime) => {
     const parsed = parseNaturalTimeFromTitle(titleValue, getUserTimezone(), getNaturalTimeOptionsFromUser(getStoredUser()));
@@ -328,7 +319,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         savedTask = res.data;
       }
 
-      onSaved();
+      onSaved(savedTask);
     } catch (err) {
       setError(err.response?.data?.error || t('task.saveFailed'));
     } finally {

@@ -1,13 +1,27 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { categoriesAPI, tasksAPI } from '../api/client';
+import { useQueryClient } from '@tanstack/react-query';
+import { tasksAPI } from '../api/client';
 import CalendarView from './CalendarView';
 import TaskList from './TaskList';
 import CategoryManager from './CategoryManager';
 import Settings from './Settings';
-import { IconCalendar, IconClock, IconInbox, IconList, IconLogout, IconSettings, IconStatus, IconTag, IconTrash } from './icons/TaskIcons';
+import {
+  IconCalendar,
+  IconClock,
+  IconInbox,
+  IconList,
+  IconLogout,
+  IconSearch,
+  IconSettings,
+  IconStatus,
+  IconTag,
+  IconTrash,
+} from './icons/TaskIcons';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
+import { useCategoriesQuery } from '../query/hooks';
+import { queryKeys } from '../query/keys';
 
 function normalizeMobileDefaultTab(value) {
   if (value === 'calendar' || value === 'settings') return value;
@@ -38,15 +52,16 @@ function readMobilePrefsFromStorage() {
 
 function MainLayout({ user, setUser }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('calendar');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [categories, setCategories] = useState([]);
   const [dragOverCategoryID, setDragOverCategoryID] = useState(0);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [mobilePrefs, setMobilePrefs] = useState(readMobilePrefsFromStorage);
   const didApplyMobileDefaultRef = useRef(false);
+  const { data: categories = [] } = useCategoriesQuery();
 
   useEffect(() => {
     // 根据当前路径设置活动标签
@@ -57,13 +72,6 @@ function MainLayout({ user, setUser }) {
     else if (path === '/settings') setActiveTab('settings');
     setMobileMenuOpen(false);
   }, [location]);
-
-  useEffect(() => {
-    categoriesAPI
-      .list()
-      .then((res) => setCategories(res.data || []))
-      .catch(() => setCategories([]));
-  }, [location.pathname]);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
@@ -109,10 +117,24 @@ function MainLayout({ user, setUser }) {
     const taskID = Number.parseInt(rawTaskID || '', 10);
     if (!taskID) return;
 
+    const droppedCategory = categories.find((cat) => cat.id === categoryID);
+    const previousTasks = queryClient.getQueryData(queryKeys.tasks.all);
+    queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.map((task) => {
+        if (task.id !== taskID) return task;
+        return {
+          ...task,
+          categories: droppedCategory ? [droppedCategory] : task.categories,
+        };
+      });
+    });
+
     try {
       await tasksAPI.update(taskID, { category_ids: [categoryID] });
-      window.dispatchEvent(new CustomEvent('tasks:changed'));
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     } catch (error) {
+      queryClient.setQueryData(queryKeys.tasks.all, previousTasks);
       console.error('Failed to move task to category:', error);
     }
   };
@@ -122,6 +144,7 @@ function MainLayout({ user, setUser }) {
     { key: 'inbox', to: '/tasks?view=inbox', label: t('task.inbox'), icon: IconInbox },
     { key: 'today', to: '/tasks?view=today', label: t('task.today'), icon: IconCalendar },
     { key: 'upcoming', to: '/tasks?view=upcoming', label: t('task.upcoming'), icon: IconClock },
+    { key: 'search', to: '/tasks?view=search', label: t('task.searchTasks'), icon: IconSearch },
   ];
 
   const mobileTabs = useMemo(() => {
@@ -132,6 +155,13 @@ function MainLayout({ user, setUser }) {
         label: t('nav.tasks'),
         icon: IconList,
         matchTasks: true,
+      },
+      search: {
+        key: 'search',
+        to: '/tasks?view=search',
+        label: t('task.searchTasks'),
+        icon: IconSearch,
+        matchSearch: true,
       },
       inbox: {
         key: 'inbox',
@@ -162,11 +192,11 @@ function MainLayout({ user, setUser }) {
 
     switch (mobilePrefs.tabPreset) {
       case 'tasks_calendar_categories_settings':
-        return [baseTabs.tasks, baseTabs.calendar, baseTabs.categories, baseTabs.settings];
+        return [baseTabs.tasks, baseTabs.search, baseTabs.calendar, baseTabs.categories, baseTabs.settings];
       case 'tasks_inbox_calendar_settings':
-        return [baseTabs.inbox, baseTabs.calendar, baseTabs.settings];
+        return [baseTabs.inbox, baseTabs.search, baseTabs.calendar, baseTabs.settings];
       default:
-        return [baseTabs.tasks, baseTabs.calendar, baseTabs.settings];
+        return [baseTabs.tasks, baseTabs.search, baseTabs.calendar, baseTabs.settings];
     }
   }, [mobilePrefs.tabPreset, t]);
 
@@ -181,7 +211,16 @@ function MainLayout({ user, setUser }) {
   };
 
   const isMobileTabActive = (item) => {
-    if (item.matchTasks) return location.pathname === '/tasks';
+    if (item.matchSearch) {
+      if (location.pathname !== '/tasks') return false;
+      const current = new URLSearchParams(location.search || '');
+      return (current.get('view') || 'all') === 'search';
+    }
+    if (item.matchTasks) {
+      if (location.pathname !== '/tasks') return false;
+      const current = new URLSearchParams(location.search || '');
+      return (current.get('view') || 'all') !== 'search';
+    }
     const path = item.to.split('?')[0];
     return location.pathname === path;
   };
@@ -193,6 +232,7 @@ function MainLayout({ user, setUser }) {
       if (view === 'inbox') return t('task.inbox');
       if (view === 'today') return t('task.today');
       if (view === 'upcoming') return t('task.upcoming');
+      if (view === 'search') return t('task.searchTasks');
       if (view === 'completed') return t('task.completedTasks');
       if (view === 'deleted') return t('task.deletedTasks');
       if (current.get('category_id')) return t('nav.tasks');
@@ -385,7 +425,7 @@ function MainLayout({ user, setUser }) {
       </div>
 
       <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
-        <div className={`grid h-14 ${mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
+        <div className={`grid h-14 ${mobileTabs.length === 5 ? 'grid-cols-5' : mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
             const active = isMobileTabActive(item);
@@ -393,12 +433,19 @@ function MainLayout({ user, setUser }) {
               <Link
                 key={item.key}
                 to={item.to}
-                className={`flex flex-col items-center justify-center gap-0.5 ${
+                aria-label={item.label}
+                title={item.label}
+                className={`flex items-center justify-center ${
                   active ? 'text-blue-600' : 'text-slate-500'
                 }`}
               >
-                <ItemIcon className="h-4 w-4" />
-                <span className="text-[10px] leading-none">{item.label}</span>
+                <span
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
+                    active ? 'bg-blue-50' : 'hover:bg-slate-100'
+                  }`}
+                >
+                  <ItemIcon className="h-[18px] w-[18px]" />
+                </span>
               </Link>
             );
           })}

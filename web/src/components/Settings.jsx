@@ -343,7 +343,7 @@ function Settings() {
           </div>
         </div>
       )}
-      <div className="p-4 border-b border-gray-200 bg-white">
+      <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
         <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
       </div>
 
