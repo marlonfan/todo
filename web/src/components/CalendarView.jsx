@@ -94,6 +94,9 @@ function CalendarView() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedRange, setSelectedRange] = useState(null);
+  const [moreEventsOpen, setMoreEventsOpen] = useState(false);
+  const [moreEventsDateLabel, setMoreEventsDateLabel] = useState('');
+  const [moreEvents, setMoreEvents] = useState([]);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
   const [isCompactMobile, setIsCompactMobile] = useState(
@@ -195,6 +198,17 @@ function CalendarView() {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [mobileViewMenuOpen]);
+
+  useEffect(() => {
+    if (!moreEventsOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setMoreEventsOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [moreEventsOpen]);
 
   useEffect(() => {
     const expectedStart = getWeekStripStart(mobileCurrentDate);
@@ -482,6 +496,63 @@ function CalendarView() {
     }
   };
 
+  const openTaskFromCalendarEvent = useCallback(async (eventLike) => {
+    const taskId = Number(eventLike?.extendedProps?.taskId || 0);
+    if (!taskId) return;
+    const instanceId = eventLike?.id;
+    const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
+    const cachedTask = Array.isArray(cachedTasks)
+      ? cachedTasks.find((task) => task.id === taskId)
+      : null;
+
+    if (cachedTask) {
+      setSelectedTask({
+        ...cachedTask,
+        id: taskId,
+        instanceId,
+      });
+      setSelectedRange(null);
+      setModalOpen(true);
+    }
+
+    try {
+      const res = await tasksAPI.get(taskId);
+      const taskData = res.data;
+      setSelectedTask({
+        id: taskId,
+        instanceId,
+        ...taskData,
+      });
+      setSelectedRange(null);
+      setModalOpen(true);
+    } catch (err) {
+      console.error('Failed to fetch task:', err);
+      if (!cachedTask) {
+        alert(t('calendar.loadTaskFailed'));
+      }
+    }
+  }, [queryClient, t]);
+
+  const handleMoreLinkClick = useCallback((info) => {
+    const allSegs = Array.isArray(info?.allSegs) ? info.allSegs : [];
+    const list = allSegs
+      .map((seg) => seg.event)
+      .filter(Boolean)
+      .map((event) => ({
+        id: event.id,
+        title: event.title,
+        start: event.start,
+        end: event.end,
+        extendedProps: event.extendedProps || {},
+      }));
+
+    const dateValue = info?.date ? dayjs(info.date).tz(timezone) : dayjs().tz(timezone);
+    setMoreEventsDateLabel(dateValue.format('YYYY-MM-DD'));
+    setMoreEvents(list);
+    setMoreEventsOpen(true);
+    return 'none';
+  }, [timezone]);
+
   const handleQuickComplete = async (event) => {
     const taskId = event.extendedProps.taskId;
     const instanceId = event.extendedProps.instanceId || event.id;
@@ -663,7 +734,7 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={() => navigate('/tasks?view=search')}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                 title={t('common.search')}
               >
                 <IconSearch className="h-5 w-5" />
@@ -671,7 +742,7 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={handleGoToday}
-                className="inline-flex items-center rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                className="inline-flex items-center rounded-full border border-blue-600 bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700"
                 title={t('calendar.today')}
               >
                 {t('calendar.today')}
@@ -679,7 +750,7 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={() => setMobileViewMenuOpen((prev) => !prev)}
-                className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600"
+                className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700"
                 title={t('settings.calendarDefaultView')}
               >
                 <IconList className="h-4 w-4" />
@@ -803,6 +874,7 @@ function CalendarView() {
             dateClick={handleDateClick}
             select={handleSelect}
             eventClick={handleEventClick}
+            moreLinkClick={handleMoreLinkClick}
             eventDrop={handleEventDrop}
             eventResize={handleEventResize}
             datesSet={handleDatesSet}
@@ -851,6 +923,51 @@ function CalendarView() {
           onClose={handleModalClose}
           onSaved={handleTaskSaved}
         />
+      )}
+
+      {moreEventsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setMoreEventsOpen(false)}>
+          <div className="w-full max-w-md border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+              <h3 className="text-sm font-semibold text-slate-800">
+                {moreEventsDateLabel} · {t('task.taskCount', { count: moreEvents.length })}
+              </h3>
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 items-center justify-center text-slate-500 hover:bg-slate-100"
+                onClick={() => setMoreEventsOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[65vh] overflow-y-auto p-2">
+              {moreEvents.map((event) => {
+                // Calendar events are already normalized to calendar timezone/UTC presentation.
+                // Avoid converting timezone again, otherwise labels shift by offset.
+                const startLabel = event.start ? dayjs(event.start).utc().format('HH:mm') : '--:--';
+                const endLabel = event.end ? dayjs(event.end).utc().format('HH:mm') : '';
+                return (
+                  <button
+                    key={event.id}
+                    type="button"
+                    className="mb-1 block w-full border border-slate-200 px-2 py-1.5 text-left hover:bg-slate-50"
+                    onClick={() => {
+                      setMoreEventsOpen(false);
+                      openTaskFromCalendarEvent(event);
+                    }}
+                    title={event.title}
+                  >
+                    <div className="truncate text-xs font-medium text-slate-800">{event.title}</div>
+                    <div className="text-[11px] text-slate-500">{endLabel ? `${startLabel} - ${endLabel}` : startLabel}</div>
+                  </button>
+                );
+              })}
+              {moreEvents.length === 0 && (
+                <div className="px-2 py-6 text-center text-xs text-slate-500">{t('calendar.noEvents')}</div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
