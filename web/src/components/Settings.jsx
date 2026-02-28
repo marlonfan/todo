@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ALLOWED_TIME_GRANULARITIES,
   getUserTimezone,
@@ -10,6 +11,9 @@ import { getShowCategoryEmoji, setShowCategoryEmoji } from '../utils/uiPrefs';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { authAPI } from '../api/client';
+import { forceManualSync, rebuildLocalDataAndSync } from '../data/syncEngine';
+import { getMeta, readOutbox } from '../data/localStore';
+import { queryKeys } from '../query/keys';
 
 const TIMEZONES = [
   { value: 'Asia/Shanghai', label: 'China Standard Time (UTC+8)' },
@@ -62,6 +66,7 @@ function normalizeCalendarDefaultView(value) {
 
 function Settings() {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
   let cachedUser = {};
   try {
     cachedUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -113,6 +118,8 @@ function Settings() {
   const [mobileTabPreset, setMobileTabPreset] = useState(
     normalizeMobileTabPreset(cachedUser.mobile_tab_preset)
   );
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '' });
   const [saveToast, setSaveToast] = useState(null);
   const toastTimerRef = useRef(null);
   const defaultReminderOptions = buildReminderOptions(defaultTimeGranularity, defaultReminderMinutes);
@@ -129,11 +136,55 @@ function Settings() {
     }, 2500);
   };
 
+  const formatSyncTime = (value) => {
+    if (!value) return t('settings.syncNever');
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
+  };
+
+  const refreshSyncStatus = async () => {
+    const [outbox, lastPullFromDB] = await Promise.all([
+      readOutbox(),
+      getMeta('last_pull_at', ''),
+    ]);
+
+    const lastPullFromCache = queryClient.getQueryData(queryKeys.sync.lastPull) || '';
+    setSyncStatus({
+      pendingCount: Array.isArray(outbox) ? outbox.length : 0,
+      lastPullAt: String(lastPullFromCache || lastPullFromDB || ''),
+    });
+  };
+
   useEffect(() => () => {
     if (toastTimerRef.current) {
       clearTimeout(toastTimerRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'sync') return undefined;
+    let active = true;
+
+    const load = async () => {
+      try {
+        await refreshSyncStatus();
+      } catch {
+        // ignore sync status load errors in settings
+      }
+    };
+
+    load();
+    const timer = setInterval(() => {
+      if (!active) return;
+      load();
+    }, 3000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     let active = true;
@@ -328,6 +379,34 @@ function Settings() {
     });
   };
 
+  const handleManualSync = async () => {
+    setSyncBusy(true);
+    try {
+      await forceManualSync();
+      await refreshSyncStatus();
+      showToast('success', t('settings.syncNowSuccess'));
+    } catch (err) {
+      showToast('error', err?.message || t('settings.syncNowFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleRebuildSync = async () => {
+    if (!window.confirm(t('settings.syncRebuildConfirm'))) return;
+
+    setSyncBusy(true);
+    try {
+      await rebuildLocalDataAndSync();
+      await refreshSyncStatus();
+      showToast('success', t('settings.syncRebuildSuccess'));
+    } catch (err) {
+      showToast('error', err?.message || t('settings.syncRebuildFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       {saveToast && (
@@ -370,6 +449,16 @@ function Settings() {
               }`}
             >
               {t('settings.notifications')}
+            </button>
+            <button
+              onClick={() => setActiveTab('sync')}
+              className={`px-4 py-2 font-medium ${
+                activeTab === 'sync'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              {t('settings.syncSettings')}
             </button>
           </div>
 
@@ -582,6 +671,51 @@ function Settings() {
 
           {/* Notification Settings */}
           {activeTab === 'notifications' && <NotificationSettings />}
+
+          {/* Sync Settings */}
+          {activeTab === 'sync' && (
+            <div className="bg-white border border-gray-200 p-6 space-y-6">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">{t('settings.syncSettings')}</h3>
+                <p className="mt-1 text-sm text-gray-500">{t('settings.syncSettingsHint')}</p>
+              </div>
+
+              <div className="rounded-md border border-gray-200 p-4">
+                <p className="text-sm text-gray-700">
+                  {t('settings.syncPendingCount')}: <span className="font-medium">{syncStatus.pendingCount}</span>
+                </p>
+                <p className="mt-1 text-sm text-gray-700">
+                  {t('settings.syncLastPull')}: <span className="font-medium">{formatSyncTime(syncStatus.lastPullAt)}</span>
+                </p>
+              </div>
+
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-4">
+                <h4 className="text-sm font-semibold text-blue-900">{t('settings.syncNowTitle')}</h4>
+                <p className="mt-1 text-sm text-blue-800">{t('settings.syncNowHint')}</p>
+                <button
+                  type="button"
+                  onClick={handleManualSync}
+                  disabled={syncBusy}
+                  className="mt-3 inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:bg-blue-700"
+                >
+                  {syncBusy ? t('settings.syncRunning') : t('settings.syncNow')}
+                </button>
+              </div>
+
+              <div className="rounded-md border border-rose-200 bg-rose-50 p-4">
+                <h4 className="text-sm font-semibold text-rose-900">{t('settings.syncRebuildTitle')}</h4>
+                <p className="mt-1 text-sm text-rose-800">{t('settings.syncRebuildHint')}</p>
+                <button
+                  type="button"
+                  onClick={handleRebuildSync}
+                  disabled={syncBusy}
+                  className="mt-3 inline-flex items-center rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:bg-rose-700"
+                >
+                  {syncBusy ? t('settings.syncRunning') : t('settings.syncRebuild')}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

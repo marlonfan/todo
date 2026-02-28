@@ -239,3 +239,17 @@ export async function listCalendarRanges() {
 export async function clearCalendarRanges() {
   await clear(STORE_CALENDAR_RANGES);
 }
+
+export async function clearAllLocalData() {
+  const db = await getDB();
+  const tx = db.transaction(
+    [STORE_TASKS, STORE_CATEGORIES, STORE_OUTBOX, STORE_META, STORE_CALENDAR_RANGES],
+    'readwrite'
+  );
+  tx.objectStore(STORE_TASKS).clear();
+  tx.objectStore(STORE_CATEGORIES).clear();
+  tx.objectStore(STORE_OUTBOX).clear();
+  tx.objectStore(STORE_META).clear();
+  tx.objectStore(STORE_CALENDAR_RANGES).clear();
+  await txDone(tx);
+}

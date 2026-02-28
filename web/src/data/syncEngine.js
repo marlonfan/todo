@@ -1,6 +1,7 @@
 import { categoriesAPI, tasksAPI } from '../api/client';
 import { queryKeys } from '../query/keys';
 import {
+  clearAllLocalData,
   enqueueOutbox,
   getDueOutbox,
   getMeta,
@@ -24,6 +25,12 @@ let initialized = false;
 let running = false;
 let rerunRequested = false;
 let intervalID = null;
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function hasToken() {
   if (typeof window === 'undefined') return false;
@@ -258,12 +265,35 @@ async function hydrateFromLocal() {
   }
 }
 
-async function runSyncCycle() {
-  if (!queryClientRef || running) {
+async function waitForIdle(timeoutMs = 15000) {
+  const start = Date.now();
+  while (running) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('sync engine busy timeout');
+    }
+    await wait(80);
+  }
+}
+
+async function runSyncCycle(options = {}) {
+  const { silent = true } = options;
+
+  if (!queryClientRef) {
+    if (!silent) {
+      throw new Error('sync engine is not initialized');
+    }
+    return;
+  }
+  if (running) {
     rerunRequested = true;
     return;
   }
-  if (!hasToken()) return;
+  if (!hasToken()) {
+    if (!silent) {
+      throw new Error('missing auth token');
+    }
+    return;
+  }
 
   running = true;
   try {
@@ -273,8 +303,12 @@ async function runSyncCycle() {
       queryClientRef.setQueryData(queryKeys.sync.lastPull, nowISO());
     }
   } catch (error) {
-    // Keep silent for background sync; UI uses sync_state markers.
-    console.error('Background sync failed:', error);
+    if (silent) {
+      // Keep silent for background sync; UI uses sync_state markers.
+      console.error('Background sync failed:', error);
+      return;
+    }
+    throw error;
   } finally {
     running = false;
     if (rerunRequested) {
@@ -287,7 +321,7 @@ async function runSyncCycle() {
 }
 
 export function scheduleSync() {
-  runSyncCycle();
+  runSyncCycle({ silent: true });
 }
 
 export async function enqueueTaskOperation(op) {
@@ -301,13 +335,39 @@ export async function enqueueTaskOperation(op) {
   scheduleSync();
 }
 
+export async function forceManualSync() {
+  if (running) {
+    rerunRequested = true;
+    await waitForIdle();
+  }
+  await runSyncCycle({ silent: false });
+}
+
+export async function rebuildLocalDataAndSync() {
+  if (running) {
+    rerunRequested = true;
+    await waitForIdle();
+  }
+
+  await clearAllLocalData();
+
+  if (queryClientRef) {
+    queryClientRef.setQueryData(queryKeys.tasks.all, []);
+    queryClientRef.setQueryData(queryKeys.categories.all, []);
+    queryClientRef.setQueryData(queryKeys.sync.lastPull, '');
+    queryClientRef.removeQueries({ queryKey: ['calendar'] });
+  }
+
+  await runSyncCycle({ silent: false });
+}
+
 export function initializeSyncEngine(queryClient) {
   if (initialized) return;
   initialized = true;
   queryClientRef = queryClient;
 
   hydrateFromLocal().finally(() => {
-    runSyncCycle();
+    runSyncCycle({ silent: true });
   });
 
   if (typeof window !== 'undefined') {
