@@ -16,32 +16,52 @@ const processingLockTTL = 15 * time.Minute
 
 type NotifyService struct {
 	notifyRepo *repository.NotificationRepository
+	userRepo   *repository.UserRepository
+	taskRepo   *repository.TaskRepository
 	registry   *notify.Registry
 }
 
-func NewNotifyService(notifyRepo *repository.NotificationRepository, registry *notify.Registry) *NotifyService {
+func NewNotifyService(
+	notifyRepo *repository.NotificationRepository,
+	userRepo *repository.UserRepository,
+	taskRepo *repository.TaskRepository,
+	registry *notify.Registry,
+) *NotifyService {
 	return &NotifyService{
 		notifyRepo: notifyRepo,
+		userRepo:   userRepo,
+		taskRepo:   taskRepo,
 		registry:   registry,
 	}
 }
 
 func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.CreateNotificationRequest) (*models.Notification, error) {
-	// Validate channel
-	notifier, ok := s.registry.Get(string(req.Channel))
+	channel := req.Channel
+	config := req.Config
+	if channel == "" {
+		setting, err := s.notifyRepo.GetDefaultSetting(userID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, errors.New("no default notification setting")
+			}
+			return nil, err
+		}
+		channel = setting.Channel
+		config = setting.Config
+	}
+
+	notifier, ok := s.registry.Get(string(channel))
 	if !ok {
 		return nil, errors.New("unsupported notification channel")
 	}
-
-	// Validate config
-	if err := notifier.ValidateConfig(req.Config); err != nil {
+	if err := notifier.ValidateConfig(config); err != nil {
 		return nil, err
 	}
 
 	notification := &models.Notification{
 		TaskID:   taskID,
-		Channel:  req.Channel,
-		Config:   req.Config,
+		Channel:  channel,
+		Config:   config,
 		NotifyAt: req.NotifyAt.UTC(),
 		Status:   models.NotifyStatusPending,
 	}
@@ -91,6 +111,11 @@ func (s *NotifyService) CreateUserSetting(userID int64, req *models.CreateNotify
 		}
 		setting.IsDefault = true
 	}
+	if setting.IsDefault {
+		if err := s.ReconcileUserReminders(userID); err != nil {
+			return nil, err
+		}
+	}
 
 	return setting, nil
 }
@@ -129,7 +154,13 @@ func (s *NotifyService) DeleteUserSetting(userID, settingID int64) error {
 		}
 	}
 	if !hasDefault && len(remaining) > 0 {
-		return s.notifyRepo.SetDefaultUserSetting(userID, remaining[0].ID)
+		if err := s.notifyRepo.SetDefaultUserSetting(userID, remaining[0].ID); err != nil {
+			return err
+		}
+	}
+
+	if err := s.ReconcileUserReminders(userID); err != nil {
+		return err
 	}
 
 	return nil
@@ -142,7 +173,7 @@ func (s *NotifyService) SetDefaultUserSetting(userID, settingID int64) error {
 		}
 		return err
 	}
-	return nil
+	return s.ReconcileUserReminders(userID)
 }
 
 func (s *NotifyService) TestNotification(userID int64, req *models.TestNotificationRequest) error {
@@ -236,4 +267,60 @@ func (s *NotifyService) GetTaskNotifications(taskID int64) ([]models.Notificatio
 // DeleteNotification 删除通知
 func (s *NotifyService) DeleteNotification(notificationID int64) error {
 	return s.notifyRepo.Delete(notificationID)
+}
+
+func (s *NotifyService) ReconcileUserReminders(userID int64) error {
+	if err := s.notifyRepo.DeleteActiveByUser(userID); err != nil {
+		return err
+	}
+
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return err
+	}
+	if !user.DefaultReminderEnabled {
+		return nil
+	}
+
+	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	tasks, err := s.taskRepo.GetReminderTasks(userID)
+	if err != nil {
+		return err
+	}
+
+	minutes := user.DefaultReminderMinutes
+	if minutes <= 0 {
+		minutes = 5
+	}
+
+	now := time.Now().UTC()
+	for _, task := range tasks {
+		if task.StartTime == nil {
+			continue
+		}
+		notifyAt := task.StartTime.UTC().Add(-time.Duration(minutes) * time.Minute)
+		if !notifyAt.After(now) {
+			continue
+		}
+
+		notification := &models.Notification{
+			TaskID:   task.ID,
+			Channel:  defaultSetting.Channel,
+			Config:   defaultSetting.Config,
+			NotifyAt: notifyAt,
+			Status:   models.NotifyStatusPending,
+		}
+		if err := s.notifyRepo.Create(notification); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

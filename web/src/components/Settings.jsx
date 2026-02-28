@@ -1,8 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { setUserTimezone, getUserTimezone } from '../utils/time';
+import {
+  ALLOWED_TIME_GRANULARITIES,
+  getUserTimezone,
+  normalizeTimeGranularity,
+  setUserTimezone,
+} from '../utils/time';
 import { getShowCategoryEmoji, setShowCategoryEmoji } from '../utils/uiPrefs';
 import NotificationSettings from './NotificationSettings';
+import PWAInstallCard from './PWAInstallCard';
 import { authAPI } from '../api/client';
 
 const TIMEZONES = [
@@ -27,6 +33,13 @@ function normalizeClockValue(value, fallback) {
   return /^\d{2}:\d{2}$/.test(String(value || '')) ? String(value) : fallback;
 }
 
+function buildReminderOptions(granularity, currentValue) {
+  const values = new Set([granularity, granularity * 2, granularity * 3, 15, 30, 60, 120, 1440]);
+  const current = Number.parseInt(currentValue, 10);
+  if (Number.isFinite(current) && current > 0) values.add(current);
+  return [...values].filter((value) => value > 0 && value <= 10080).sort((a, b) => a - b);
+}
+
 function Settings() {
   const { t, i18n } = useTranslation();
   let cachedUser = {};
@@ -45,6 +58,9 @@ function Settings() {
     typeof cachedUser.default_task_start_time === 'string' && cachedUser.default_task_start_time.length === 5
       ? cachedUser.default_task_start_time
       : '09:00'
+  );
+  const [defaultTimeGranularity, setDefaultTimeGranularity] = useState(
+    normalizeTimeGranularity(cachedUser.default_time_granularity, 15)
   );
   const [defaultMorningTime, setDefaultMorningTime] = useState(
     typeof cachedUser.default_morning_time === 'string' && cachedUser.default_morning_time.length === 5
@@ -70,6 +86,7 @@ function Settings() {
   const [activeTab, setActiveTab] = useState('general');
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
+  const defaultReminderOptions = buildReminderOptions(defaultTimeGranularity, defaultReminderMinutes);
 
   useEffect(() => {
     let active = true;
@@ -84,6 +101,7 @@ function Settings() {
         }
         setDefaultReminderEnabled(!!user.default_reminder_enabled);
         setDefaultReminderMinutes(String(user.default_reminder_minutes > 0 ? user.default_reminder_minutes : 5));
+        setDefaultTimeGranularity(normalizeTimeGranularity(user.default_time_granularity, 15));
         setDefaultTaskStartTime(
           typeof user.default_task_start_time === 'string' && user.default_task_start_time.length === 5
             ? user.default_task_start_time
@@ -131,6 +149,7 @@ function Settings() {
       }
       setDefaultReminderEnabled(!!user.default_reminder_enabled);
       setDefaultReminderMinutes(String(user.default_reminder_minutes > 0 ? user.default_reminder_minutes : 5));
+      setDefaultTimeGranularity(normalizeTimeGranularity(user.default_time_granularity, 15));
       setDefaultTaskStartTime(
         typeof user.default_task_start_time === 'string' && user.default_task_start_time.length === 5
           ? user.default_task_start_time
@@ -188,16 +207,15 @@ function Settings() {
     });
   };
 
-  const handleDefaultReminderMinutesBlur = async () => {
-    const prev = defaultReminderMinutes;
-    let minutes = parseInt(defaultReminderMinutes, 10);
-    if (!Number.isFinite(minutes)) {
+  const handleDefaultReminderMinutesChange = async (nextValue) => {
+    const previous = defaultReminderMinutes;
+    let minutes = Number.parseInt(nextValue, 10);
+    if (!Number.isFinite(minutes) || minutes < 1) {
       minutes = 5;
     }
-    minutes = Math.min(10080, Math.max(1, minutes));
     setDefaultReminderMinutes(String(minutes));
     await persistProfile({ default_reminder_minutes: minutes }, () => {
-      setDefaultReminderMinutes(prev);
+      setDefaultReminderMinutes(previous);
     });
   };
 
@@ -207,6 +225,15 @@ function Settings() {
     setDefaultTaskStartTime(next);
     await persistProfile({ default_task_start_time: next }, () => {
       setDefaultTaskStartTime(prev);
+    });
+  };
+
+  const handleTimeGranularityChange = async (nextValue) => {
+    const previous = defaultTimeGranularity;
+    const normalized = normalizeTimeGranularity(nextValue, 15);
+    setDefaultTimeGranularity(normalized);
+    await persistProfile({ default_time_granularity: normalized }, () => {
+      setDefaultTimeGranularity(previous);
     });
   };
 
@@ -271,6 +298,8 @@ function Settings() {
               )}
 
               <div className="space-y-6">
+                <PWAInstallCard />
+
                 {/* Language */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -322,15 +351,17 @@ function Settings() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('settings.defaultReminderMinutes')}
                   </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10080"
+                  <select
                     value={defaultReminderMinutes}
-                    onChange={(e) => setDefaultReminderMinutes(e.target.value)}
-                    onBlur={handleDefaultReminderMinutesBlur}
+                    onChange={(e) => handleDefaultReminderMinutesChange(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  >
+                    {defaultReminderOptions.map((minutes) => (
+                      <option key={minutes} value={minutes}>
+                        {minutes} {t('task.minutes')}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -344,6 +375,23 @@ function Settings() {
                     onBlur={handleDefaultTaskStartTimeBlur}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    {t('settings.defaultTimeGranularity')}
+                  </label>
+                  <select
+                    value={defaultTimeGranularity}
+                    onChange={(e) => handleTimeGranularityChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {ALLOWED_TIME_GRANULARITIES.map((minutes) => (
+                      <option key={minutes} value={minutes}>
+                        {minutes} {t('task.minutes')}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="rounded-md border border-gray-200 p-3">

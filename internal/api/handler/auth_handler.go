@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"todo-app/internal/models"
 	"todo-app/internal/service"
@@ -9,11 +10,15 @@ import (
 )
 
 type AuthHandler struct {
-	authService *service.AuthService
+	authService   *service.AuthService
+	notifyService *service.NotifyService
 }
 
-func NewAuthHandler(authService *service.AuthService) *AuthHandler {
-	return &AuthHandler{authService: authService}
+func NewAuthHandler(authService *service.AuthService, notifyService *service.NotifyService) *AuthHandler {
+	return &AuthHandler{
+		authService:   authService,
+		notifyService: notifyService,
+	}
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -76,7 +81,8 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 }
 
 func (h *AuthHandler) UpdateProfile(c *gin.Context) {
-	userID, _ := c.Get("userID")
+	rawUserID, _ := c.Get("userID")
+	userID := rawUserID.(int64)
 
 	var req models.UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,10 +90,16 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authService.UpdateProfile(userID.(int64), &req)
+	user, err := h.authService.UpdateProfile(userID, &req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.notifyService != nil && (req.DefaultReminderEnabled != nil || req.DefaultReminderMinutes != nil) {
+		if err := h.notifyService.ReconcileUserReminders(userID); err != nil {
+			log.Printf("Warning: failed to reconcile reminders after profile update for user %d: %v", userID, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, user)

@@ -16,13 +16,20 @@ import (
 type TaskService struct {
 	taskRepo   *repository.TaskRepository
 	catRepo    *repository.CategoryRepository
+	userRepo   *repository.UserRepository
 	notifyRepo *repository.NotificationRepository
 }
 
-func NewTaskService(taskRepo *repository.TaskRepository, catRepo *repository.CategoryRepository, notifyRepo *repository.NotificationRepository) *TaskService {
+func NewTaskService(
+	taskRepo *repository.TaskRepository,
+	catRepo *repository.CategoryRepository,
+	userRepo *repository.UserRepository,
+	notifyRepo *repository.NotificationRepository,
+) *TaskService {
 	return &TaskService{
 		taskRepo:   taskRepo,
 		catRepo:    catRepo,
+		userRepo:   userRepo,
 		notifyRepo: notifyRepo,
 	}
 }
@@ -67,7 +74,16 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 	}
 
 	// Reload with categories
-	return s.taskRepo.GetByID(task.ID)
+	savedTask, err := s.taskRepo.GetByID(task.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.syncTaskReminder(userID, savedTask); err != nil {
+		return nil, err
+	}
+
+	return savedTask, nil
 }
 
 func (s *TaskService) GetByID(userID, taskID int64) (*models.Task, error) {
@@ -155,7 +171,16 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 		}
 	}
 
-	return s.taskRepo.GetByID(task.ID)
+	updatedTask, err := s.taskRepo.GetByID(task.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.syncTaskReminder(userID, updatedTask); err != nil {
+		return nil, err
+	}
+
+	return updatedTask, nil
 }
 
 func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatus, instanceID, occurrenceDate string) error {
@@ -182,7 +207,10 @@ func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatu
 	}
 
 	task.Status = status
-	return s.taskRepo.Update(task)
+	if err := s.taskRepo.Update(task); err != nil {
+		return err
+	}
+	return s.syncTaskReminder(userID, task)
 }
 
 func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTaskScheduleRequest) error {
@@ -198,7 +226,10 @@ func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTas
 	task.EndTime = req.EndTime
 	task.AllDay = req.AllDay
 
-	return s.taskRepo.Update(task)
+	if err := s.taskRepo.Update(task); err != nil {
+		return err
+	}
+	return s.syncTaskReminder(userID, task)
 }
 
 func (s *TaskService) Delete(userID, taskID int64) error {
@@ -217,6 +248,55 @@ func (s *TaskService) Delete(userID, taskID int64) error {
 	}
 
 	return s.taskRepo.Delete(taskID)
+}
+
+func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
+	if task == nil {
+		return nil
+	}
+
+	if err := s.notifyRepo.DeleteActiveByTask(task.ID); err != nil {
+		return err
+	}
+
+	if task.StartTime == nil || task.Status != models.TaskStatusPending {
+		return nil
+	}
+
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return err
+	}
+	if !user.DefaultReminderEnabled {
+		return nil
+	}
+
+	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	minutes := user.DefaultReminderMinutes
+	if minutes <= 0 {
+		minutes = 5
+	}
+
+	notifyAt := task.StartTime.UTC().Add(-time.Duration(minutes) * time.Minute)
+	if !notifyAt.After(time.Now().UTC()) {
+		return nil
+	}
+
+	notification := &models.Notification{
+		TaskID:   task.ID,
+		Channel:  defaultSetting.Channel,
+		Config:   defaultSetting.Config,
+		NotifyAt: notifyAt,
+		Status:   models.NotifyStatusPending,
+	}
+	return s.notifyRepo.Create(notification)
 }
 
 // ExpandRecurringTasks expands recurring tasks within a date range

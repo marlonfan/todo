@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { calendarAPI, tasksAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import dayjs from 'dayjs';
-import { getUserTimezone } from '../utils/time';
+import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 
 function CalendarView() {
   const { t, i18n } = useTranslation();
@@ -19,7 +19,9 @@ function CalendarView() {
   const [selectedRange, setSelectedRange] = useState(null);
   const [dateRange, setDateRange] = useState({ start: null, end: null });
   const timezone = getUserTimezone();
+  const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
+  const slotDuration = timeGranularity === 60 ? '01:00:00' : `00:${String(timeGranularity).padStart(2, '0')}:00`;
 
   const toServerISO = useCallback((value) => {
     if (!value) return null;
@@ -76,7 +78,7 @@ function CalendarView() {
     if (info.allDay) {
       end = start.endOf('day');
     } else {
-      end = start.add(30, 'minute');
+      end = start.add(timeGranularity, 'minute');
     }
 
     setSelectedTask(null);
@@ -281,6 +283,8 @@ function CalendarView() {
             minute: '2-digit',
             hour12: false
           }}
+          slotDuration={slotDuration}
+          snapDuration={slotDuration}
           displayEventEnd={true}
         />
       </div>

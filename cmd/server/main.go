@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -84,12 +86,12 @@ func main() {
 
 	// Initialize services
 	authService := service.NewAuthService(userRepo, &cfg.JWT)
-	taskService := service.NewTaskService(taskRepo, catRepo, notifyRepo)
+	taskService := service.NewTaskService(taskRepo, catRepo, userRepo, notifyRepo)
 	catService := service.NewCategoryService(catRepo)
-	notifyService := service.NewNotifyService(notifyRepo, registry)
+	notifyService := service.NewNotifyService(notifyRepo, userRepo, taskRepo, registry)
 
 	// Initialize handlers
-	authHandler := handler.NewAuthHandler(authService)
+	authHandler := handler.NewAuthHandler(authService, notifyService)
 	taskHandler := handler.NewTaskHandler(taskService, notifyService)
 	catHandler := handler.NewCategoryHandler(catService)
 	calendarHandler := handler.NewCalendarHandler(taskService)
@@ -166,13 +168,26 @@ func setupStaticFiles(r *gin.Engine) {
 	// Serve static files from assets directory
 	// URL: /assets/xxx -> assetsFS/xxx
 	r.StaticFS("/assets", http.FS(assetsFS))
-	
+
 	// Serve index.html for root path and non-API routes (SPA behavior)
 	r.NoRoute(func(c *gin.Context) {
 		// Check if it's an API route
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
 			return
+		}
+
+		// Serve real static files first (manifest, service worker, icons, etc.)
+		requestPath := strings.TrimPrefix(path.Clean(c.Request.URL.Path), "/")
+		if requestPath != "" && requestPath != "." {
+			if f, err := staticFS.Open(requestPath); err == nil {
+				if info, statErr := f.Stat(); statErr == nil && !info.IsDir() {
+					f.Close()
+					c.FileFromFS(requestPath, http.FS(staticFS))
+					return
+				}
+				f.Close()
+			}
 		}
 
 		// Serve index.html for all other routes

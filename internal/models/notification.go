@@ -79,8 +79,8 @@ type UserNotifySetting struct {
 
 // API Request/Response types
 type CreateNotificationRequest struct {
-	Channel  NotifyChannel   `json:"channel" binding:"required,oneof=telegram ntfy webhook"`
-	Config   NotifyConfigMap `json:"config" binding:"required"`
+	Channel  NotifyChannel   `json:"channel" binding:"omitempty,oneof=telegram ntfy webhook"`
+	Config   NotifyConfigMap `json:"config"`
 	NotifyAt time.Time       `json:"notify_at" binding:"required"`
 }
 

@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 html {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 body {
@@ -13,7 +13,7 @@ body {
 /* FullCalendar Custom Styles */
 .fc {
   @apply font-sans;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
 }
 
 .fc .fc-toolbar-title {
@@ -56,27 +56,27 @@ body {
 
 /* Form Styles */
 .form-input {
-  @apply w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500;
+  @apply w-full px-2.5 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500;
 }
 
 .form-label {
-  @apply block text-sm font-medium text-slate-700 mb-1;
+  @apply block text-xs font-medium text-slate-700 mb-1;
 }
 
 .form-select {
-  @apply w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white;
+  @apply w-full px-2.5 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white;
 }
 
 .btn-primary {
-  @apply px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors;
+  @apply px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors;
 }
 
 .btn-secondary {
-  @apply px-4 py-2 bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300 transition-colors;
+  @apply px-3 py-1.5 text-sm bg-slate-200 text-slate-800 rounded-lg hover:bg-slate-300 transition-colors;
 }
 
 .btn-danger {
-  @apply px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors;
+  @apply px-3 py-1.5 text-sm bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors;
 }
 
 /* Sidebar */
@@ -95,4 +95,99 @@ body {
 
 .priority-low {
   @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.live-md-toast {
+  @apply h-full rounded-none border-0 bg-transparent;
+}
+
+.live-md-toast:focus-within {
+  @apply ring-0;
+}
+
+.live-md-toast .vditor {
+  border: none !important;
+  background: transparent !important;
+  height: 100%;
+}
+
+.live-md-toast .vditor-toolbar {
+  display: none !important;
+}
+
+.live-md-toast .vditor-content {
+  border: none !important;
+  height: 100%;
+  background: transparent !important;
+}
+
+.live-md-toast .vditor-ir {
+  @apply text-sm text-slate-700;
+  line-height: 1.65;
+  height: 100%;
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.live-md-toast .vditor-ir pre.vditor-reset {
+  @apply text-sm text-slate-700;
+  line-height: 1.65;
+  font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", "Arial", sans-serif;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-height: 100%;
+  height: auto !important;
+  overflow: visible !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.live-md-toast .vditor-ir pre.vditor-reset:empty::before {
+  content: attr(placeholder);
+  color: #94a3b8;
+}
+
+.live-md-toast .vditor-reset ol {
+  list-style-type: decimal;
+}
+
+.live-md-toast .vditor-reset ol ol {
+  list-style-type: lower-alpha;
+}
+
+.live-md-toast .vditor-reset ul {
+  list-style-type: disc;
+}
+
+.live-md-toast .vditor-ir .vditor-ir__preview {
+  min-height: 0;
+  line-height: 1.5;
+}
+
+.live-md-toast .vditor-ir .vditor-ir__node--expand + .vditor-ir__preview {
+  display: none !important;
+}
+
+.live-md-toast .vditor-ir .vditor-ir__preview img,
+.live-md-toast .vditor-ir img,
+.live-md-toast .vditor-reset img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.35rem 0;
+  border-radius: 0.5rem;
+}
+
+/* Hide Vditor IR heading markers like H1/H2/H3 to keep Obsidian-like clean layout */
+.live-md-toast .vditor-ir .vditor-reset > h1::before,
+.live-md-toast .vditor-ir .vditor-reset > h2::before,
+.live-md-toast .vditor-ir .vditor-reset > h3::before,
+.live-md-toast .vditor-ir .vditor-reset > h4::before,
+.live-md-toast .vditor-ir .vditor-reset > h5::before,
+.live-md-toast .vditor-ir .vditor-reset > h6::before {
+  content: none !important;
+  display: none !important;
 }

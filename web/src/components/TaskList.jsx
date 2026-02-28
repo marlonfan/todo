@@ -4,10 +4,11 @@ import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import { categoriesAPI, tasksAPI } from '../api/client';
 import TaskModal from './TaskModal';
-import { formatDateTime, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
+import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconTag } from './icons/TaskIcons';
+import LiveMarkdownEditor from './LiveMarkdownEditor';
 
 function normalizeDraftForCompare(draft) {
   if (!draft) return null;
@@ -44,6 +45,8 @@ function TaskList() {
   const { t } = useTranslation();
   const location = useLocation();
   const timezone = getUserTimezone();
+  const timeGranularity = getUserTimeGranularity();
+  const timeInputStepSeconds = timeGranularity * 60;
 
   const [tasks, setTasks] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -57,6 +60,9 @@ function TaskList() {
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [detailPanel, setDetailPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 1024 : false
+  );
   const detailPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
@@ -80,6 +86,14 @@ function TaskList() {
   }, []);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileViewport(window.innerWidth < 1024);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     if (!detailPanel) return undefined;
@@ -304,23 +318,6 @@ function TaskList() {
     return { text: t('task.priorityMedium'), className: 'text-sky-600 bg-sky-50 border-sky-200' };
   };
 
-  const getDueSummary = () => {
-    if (!draft?.start_time) return t('task.noDate');
-    const parsed = dayjs(draft.start_time);
-    if (!parsed.isValid()) return t('task.noDate');
-
-    const formatted = draft.all_day
-      ? parsed.format('MM/DD')
-      : parsed.format('MM/DD HH:mm');
-
-    const isPending = (draft.status || 'pending') === 'pending';
-    const overdueDays = dayjs().startOf('day').diff(parsed.startOf('day'), 'day');
-    if (isPending && overdueDays > 0) {
-      return `${formatted} · ${t('task.overdueDays', { days: overdueDays })}`;
-    }
-    return formatted;
-  };
-
   const handleStatusChange = async (task, newStatus) => {
     try {
       if (task.recurrence_rule) {
@@ -435,17 +432,6 @@ function TaskList() {
   };
 
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
-  const splitTimePart = (value, fallback = '09:00') => {
-    if (!value) return fallback;
-    if (!value.includes('T')) return fallback;
-    return value.split('T')[1].slice(0, 5) || fallback;
-  };
-
-  const mergeDateTime = (datePart, timePart) => {
-    if (!datePart) return '';
-    return `${datePart}T${timePart || '09:00'}`;
-  };
-
   const handleSaveDraft = async () => {
     if (!selectedTask || !draft) return;
     if (savingDraft) return;
@@ -555,7 +541,12 @@ function TaskList() {
           event.dataTransfer.setData('text/task-id', String(task.id));
           event.dataTransfer.effectAllowed = 'move';
         }}
-        onClick={() => setSelectedTaskID(task.id)}
+        onClick={() => {
+          setSelectedTaskID(task.id);
+          if (isMobileViewport) {
+            openAdvancedModal(task);
+          }
+        }}
         className={`group cursor-pointer rounded-xl border px-3 py-2 transition ${
           selected
             ? 'border-blue-300 bg-blue-50/70'
@@ -574,11 +565,11 @@ function TaskList() {
             className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-600 cursor-pointer"
           />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-2">
               <h3 className={`truncate text-[14px] font-medium ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
                 {task.title}
               </h3>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="hidden shrink-0 items-center gap-2 sm:flex">
                 {isDeleted && (
                   <button
                     type="button"
@@ -603,16 +594,19 @@ function TaskList() {
             )}
 
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="text-slate-400 sm:hidden">
+                {task.start_time ? formatDateTime(task.start_time, 'MM/DD HH:mm') : ''}
+              </span>
               {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{t('task.statusCancelled')}</span>}
               <span className={`${priority.class}`}>{priority.text}</span>
               {task.categories?.slice(0, 2).map((cat) => (
                 <span
                   key={cat.id}
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                  className="inline-flex max-w-[10rem] items-center gap-1 rounded px-1.5 py-0.5"
                   style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
-                  <span>{cat.name}</span>
+                  <span className="truncate">{cat.name}</span>
                 </span>
               ))}
               {task.categories?.length > 2 && (
@@ -628,16 +622,16 @@ function TaskList() {
   const canQuickCreate = view !== 'completed' && view !== 'deleted';
 
   return (
-    <div className="h-full bg-slate-100 p-3 md:p-4">
+    <div className="h-full bg-slate-100 p-2 md:p-3">
       <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
         <section className="flex h-full min-h-0 flex-col rounded-2xl border border-slate-200 bg-white">
           <div className="border-b border-slate-200 px-4 py-3">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-800">{viewTitle}</h2>
+                <h2 className="text-base font-semibold text-slate-800">{viewTitle}</h2>
                 <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
               </div>
-              <button onClick={() => openAdvancedModal(null)} className="btn-primary text-sm">
+              <button onClick={() => openAdvancedModal(null)} className="btn-primary whitespace-nowrap text-xs">
                 + {t('task.newTask')}
               </button>
             </div>
@@ -683,53 +677,17 @@ function TaskList() {
             <>
               <div className="border-b border-slate-200 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs text-slate-500">
-                      {selectedTask.start_time ? formatDateTime(selectedTask.start_time) : t('task.statusPending')}
-                    </p>
-                    <div className="mt-1 flex items-center gap-2 text-xs">
-                      {savingDraft ? (
-                        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">{t('task.saving')}</span>
-                      ) : isDraftDirty ? (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">{t('task.unsavedChanges')}</span>
-                      ) : (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">{t('task.saved')}</span>
-                      )}
-                      {lastSavedAt && <span className="text-slate-400">{t('task.lastSavedAt', { time: lastSavedAt })}</span>}
-                    </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    {savingDraft ? (
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">{t('task.saving')}</span>
+                    ) : isDraftDirty ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">{t('task.unsavedChanges')}</span>
+                    ) : (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">{t('task.saved')}</span>
+                    )}
+                    {lastSavedAt && <span className="text-slate-400">{t('task.lastSavedAt', { time: lastSavedAt })}</span>}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleResetDraft}
-                      disabled={!isDraftDirty || savingDraft}
-                      className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
-                    >
-                      {t('task.resetChanges')}
-                    </button>
-                    <button
-                      onClick={() => openAdvancedModal(selectedTask)}
-                      className="rounded-md px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
-                    >
-                      {t('task.advancedEdit')}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex-1 space-y-3 overflow-auto p-4">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <input
-                    value={draft.title}
-                    onChange={(e) => handleDraftFieldChange('title', e.target.value)}
-                    className="w-full border-none bg-transparent text-2xl font-semibold text-slate-900 outline-none placeholder:text-slate-300"
-                    placeholder={t('task.title')}
-                  />
-                  <p className="mt-2 text-xs text-slate-500">{getDueSummary()}</p>
-                </div>
-
-                <div ref={detailPanelRef} className="relative rounded-xl border border-slate-200 bg-white p-2">
-                  <div className="flex items-center gap-1">
+                  <div ref={detailPanelRef} className="relative flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setDetailPanel(detailPanel === 'priority' ? '' : 'priority')}
@@ -766,179 +724,180 @@ function TaskList() {
                     >
                       <IconTag className="h-4 w-4" />
                     </button>
-                  </div>
+                    <button
+                      type="button"
+                      onClick={handleResetDraft}
+                      disabled={!isDraftDirty || savingDraft}
+                      className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                    >
+                      {t('task.resetChanges')}
+                    </button>
+                    <button
+                      onClick={() => openAdvancedModal(selectedTask)}
+                      className="rounded-md px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
+                    >
+                      {t('task.advancedEdit')}
+                    </button>
 
-                  {detailPanel === 'priority' && (
-                    <div className="absolute left-2 right-2 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          { value: '1', label: t('task.priorityHigh') },
-                          { value: '0', label: t('task.priorityMedium') },
-                          { value: '-1', label: t('task.priorityLow') },
-                        ].map((priorityOption) => (
-                          <button
-                            key={priorityOption.value}
-                            type="button"
-                            onClick={() => {
-                              handleDraftFieldChange('priority', priorityOption.value);
-                              setDetailPanel('');
-                            }}
-                            className={`rounded-full border px-3 py-1 text-sm ${
-                              draft.priority === priorityOption.value
-                                ? getPriorityBadge(priorityOption.value).className
-                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                            }`}
-                          >
-                            {priorityOption.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {detailPanel === 'time' && (
-                    <div className="absolute left-2 right-2 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <div className="mb-2 flex items-center justify-between">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.startTime')}</div>
-                        <button
-                          type="button"
-                          onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
-                          className={`rounded-full border px-2.5 py-1 text-xs ${
-                            draft.all_day
-                              ? 'border-blue-300 bg-blue-50 text-blue-700'
-                              : 'border-slate-200 bg-white text-slate-500'
-                          }`}
-                        >
-                          {t('task.allDay')}
-                        </button>
-                      </div>
-                      <div className="mb-3 flex flex-wrap gap-2">
-                        <button type="button" onClick={() => applyQuickDatePreset('today')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickToday')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('tomorrow')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickTomorrow')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('tonight')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickTonight')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('next_week')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickNextWeek')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('clear')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50">
-                          {t('task.clearDate')}
-                        </button>
-                      </div>
-                      {draft.all_day ? (
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="form-label">{t('task.startTime')}</label>
-                            <input
-                              type="date"
-                              value={splitDatePart(draft.start_time)}
-                              onChange={(e) => handleDraftFieldChange('start_time', e.target.value)}
-                              className="form-input"
-                            />
-                          </div>
-                          <div>
-                            <label className="form-label">{t('task.endTime')}</label>
-                            <input
-                              type="date"
-                              value={splitDatePart(draft.end_time)}
-                              onChange={(e) => handleDraftFieldChange('end_time', e.target.value)}
-                              className="form-input"
-                            />
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          <div className="grid grid-cols-[1fr_120px] gap-2">
-                            <input
-                              type="date"
-                              value={splitDatePart(draft.start_time)}
-                              onChange={(e) => {
-                                const nextDate = e.target.value;
-                                const currentTime = splitTimePart(draft.start_time, '09:00');
-                                handleDraftFieldChange('start_time', nextDate ? mergeDateTime(nextDate, currentTime) : '');
-                              }}
-                              className="form-input"
-                            />
-                            <input
-                              type="time"
-                              step="300"
-                              value={splitTimePart(draft.start_time, '09:00')}
-                              onChange={(e) => {
-                                const baseDate = splitDatePart(draft.start_time) || dayjs().tz(timezone).format('YYYY-MM-DD');
-                                handleDraftFieldChange('start_time', mergeDateTime(baseDate, e.target.value));
-                              }}
-                              className="form-input"
-                            />
-                          </div>
-                          <div className="grid grid-cols-[1fr_120px] gap-2">
-                            <input
-                              type="date"
-                              value={splitDatePart(draft.end_time)}
-                              onChange={(e) => {
-                                const nextDate = e.target.value;
-                                const currentTime = splitTimePart(draft.end_time, splitTimePart(draft.start_time, '09:30'));
-                                handleDraftFieldChange('end_time', nextDate ? mergeDateTime(nextDate, currentTime) : '');
-                              }}
-                              className="form-input"
-                            />
-                            <input
-                              type="time"
-                              step="300"
-                              value={splitTimePart(draft.end_time, splitTimePart(draft.start_time, '09:30'))}
-                              onChange={(e) => {
-                                const baseDate = splitDatePart(draft.end_time) || splitDatePart(draft.start_time) || dayjs().tz(timezone).format('YYYY-MM-DD');
-                                handleDraftFieldChange('end_time', mergeDateTime(baseDate, e.target.value));
-                              }}
-                              className="form-input"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {detailPanel === 'category' && (
-                    <div className="absolute left-2 right-2 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <label className="form-label">{t('task.categories')}</label>
-                      <div className="flex flex-wrap gap-2">
-                        {categories.map((cat) => {
-                          const active = draft.category_ids.includes(String(cat.id));
-                          return (
+                    {detailPanel === 'priority' && (
+                      <div className="absolute right-0 top-10 z-20 w-[22rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { value: '1', label: t('task.priorityHigh') },
+                            { value: '0', label: t('task.priorityMedium') },
+                            { value: '-1', label: t('task.priorityLow') },
+                          ].map((priorityOption) => (
                             <button
-                              key={cat.id}
+                              key={priorityOption.value}
                               type="button"
-                              onClick={() => toggleDraftCategory(cat.id)}
-                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
-                                active ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                              onClick={() => {
+                                handleDraftFieldChange('priority', priorityOption.value);
+                                setDetailPanel('');
+                              }}
+                              className={`rounded-full border px-3 py-1 text-sm ${
+                                draft.priority === priorityOption.value
+                                  ? getPriorityBadge(priorityOption.value).className
+                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                               }`}
                             >
-                              {showCategoryEmoji && cat.emoji ? (
-                                <span>{cat.emoji}</span>
-                              ) : (
-                                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                              )}
-                              <span>{cat.name}</span>
+                              {priorityOption.label}
                             </button>
-                          );
-                        })}
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
+                    )}
 
-                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                    {detailPanel === 'time' && (
+                      <div className="absolute right-0 top-10 z-20 w-[30rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                        <div className="mb-2 flex items-center justify-between">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.startTime')}</div>
+                          <button
+                            type="button"
+                            onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
+                            className={`rounded-full border px-2.5 py-1 text-xs ${
+                              draft.all_day
+                                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                : 'border-slate-200 bg-white text-slate-500'
+                            }`}
+                          >
+                            {t('task.allDay')}
+                          </button>
+                        </div>
+                        <div className="mb-3 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => applyQuickDatePreset('today')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
+                            {t('task.quickToday')}
+                          </button>
+                          <button type="button" onClick={() => applyQuickDatePreset('tomorrow')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
+                            {t('task.quickTomorrow')}
+                          </button>
+                          <button type="button" onClick={() => applyQuickDatePreset('tonight')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
+                            {t('task.quickTonight')}
+                          </button>
+                          <button type="button" onClick={() => applyQuickDatePreset('next_week')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
+                            {t('task.quickNextWeek')}
+                          </button>
+                          <button type="button" onClick={() => applyQuickDatePreset('clear')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50">
+                            {t('task.clearDate')}
+                          </button>
+                        </div>
+                        {draft.all_day ? (
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="form-label">{t('task.startTime')}</label>
+                              <input
+                                type="date"
+                                value={splitDatePart(draft.start_time)}
+                                onChange={(e) => handleDraftFieldChange('start_time', e.target.value)}
+                                className="form-input"
+                              />
+                            </div>
+                            <div>
+                              <label className="form-label">{t('task.endTime')}</label>
+                              <input
+                                type="date"
+                                value={splitDatePart(draft.end_time)}
+                                onChange={(e) => handleDraftFieldChange('end_time', e.target.value)}
+                                className="form-input"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            <div>
+                              <label className="form-label">{t('task.startTime')}</label>
+                              <input
+                                type="datetime-local"
+                                step={timeInputStepSeconds}
+                                value={draft.start_time || ''}
+                                onChange={(e) => handleDraftFieldChange('start_time', e.target.value || '')}
+                                className="form-input"
+                              />
+                            </div>
+                            <div>
+                              <label className="form-label">{t('task.endTime')}</label>
+                              <input
+                                type="datetime-local"
+                                step={timeInputStepSeconds}
+                                value={draft.end_time || ''}
+                                onChange={(e) => handleDraftFieldChange('end_time', e.target.value || '')}
+                                className="form-input"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {detailPanel === 'category' && (
+                      <div className="absolute right-0 top-10 z-20 w-[26rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                        <label className="form-label">{t('task.categories')}</label>
+                        <div className="flex flex-wrap gap-2">
+                          {categories.map((cat) => {
+                            const active = draft.category_ids.includes(String(cat.id));
+                            return (
+                              <button
+                                key={cat.id}
+                                type="button"
+                                onClick={() => toggleDraftCategory(cat.id)}
+                                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
+                                  active ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {showCategoryEmoji && cat.emoji ? (
+                                  <span>{cat.emoji}</span>
+                                ) : (
+                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
+                                )}
+                                <span>{cat.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <input
+                    value={draft.title}
+                    onChange={(e) => handleDraftFieldChange('title', e.target.value)}
+                    className="w-full border-none bg-transparent text-2xl font-semibold text-slate-900 outline-none placeholder:text-slate-300"
+                    placeholder={t('task.title')}
+                  />
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
-                  <textarea
+                  <LiveMarkdownEditor
                     value={draft.description}
-                    onChange={(e) => handleDraftFieldChange('description', e.target.value)}
-                    rows={8}
-                    className="min-h-[180px] w-full resize-none border-none bg-transparent text-sm leading-6 text-slate-700 outline-none placeholder:text-slate-400"
+                    onChange={(nextValue) => handleDraftFieldChange('description', nextValue)}
                     placeholder={t('task.description')}
+                    className="min-h-0 flex-1"
+                    fill
+                    minHeight={280}
                   />
                 </div>
               </div>

@@ -120,9 +120,9 @@ function MainLayout({ user, setUser }) {
                 : 'text-slate-700 hover:bg-slate-100'
             }`}
           >
-            <span className="inline-flex items-center gap-2">
-              <IconCalendar className="h-4 w-4" />
-              <span>{t('nav.calendar')}</span>
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <IconCalendar className="h-4 w-4 shrink-0" />
+              <span className="truncate">{t('nav.calendar')}</span>
             </span>
           </Link>
 
@@ -141,9 +141,9 @@ function MainLayout({ user, setUser }) {
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <span className="inline-flex items-center gap-2">
-                  <ItemIcon className="h-4 w-4" />
-                  <span>{item.label}</span>
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <ItemIcon className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{item.label}</span>
                 </span>
               </Link>
             );
@@ -168,13 +168,13 @@ function MainLayout({ user, setUser }) {
                       : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <span className="inline-flex items-center gap-2">
+                <span className="inline-flex min-w-0 items-center gap-2">
                   {showCategoryEmoji && cat.emoji ? (
-                    <span>{cat.emoji}</span>
+                    <span className="shrink-0">{cat.emoji}</span>
                   ) : (
-                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
                   )}
-                  <span>{cat.name}</span>
+                  <span className="truncate">{cat.name}</span>
                 </span>
               </Link>
             ))}
@@ -189,9 +189,9 @@ function MainLayout({ user, setUser }) {
                   : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
-              <span className="inline-flex items-center gap-2">
-                <IconStatus className="h-4 w-4" />
-                <span>{t('task.completedTasks')}</span>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <IconStatus className="h-4 w-4 shrink-0" />
+                <span className="truncate">{t('task.completedTasks')}</span>
               </span>
             </Link>
             <Link
@@ -202,9 +202,9 @@ function MainLayout({ user, setUser }) {
                   : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
-              <span className="inline-flex items-center gap-2">
-                <IconTrash className="h-4 w-4" />
-                <span>{t('task.deletedTasks')}</span>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <IconTrash className="h-4 w-4 shrink-0" />
+                <span className="truncate">{t('task.deletedTasks')}</span>
               </span>
             </Link>
             <Link
@@ -215,9 +215,9 @@ function MainLayout({ user, setUser }) {
                   : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
-              <span className="inline-flex items-center gap-2">
-                <IconTag className="h-4 w-4" />
-                <span>{t('category.manageCategories')}</span>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <IconTag className="h-4 w-4 shrink-0" />
+                <span className="truncate">{t('category.manageCategories')}</span>
               </span>
             </Link>
           </div>
@@ -230,9 +230,9 @@ function MainLayout({ user, setUser }) {
                 : 'text-slate-700 hover:bg-slate-100'
             }`}
           >
-            <span className="inline-flex items-center gap-2">
-              <IconSettings className="h-4 w-4" />
-              <span>{t('nav.settings')}</span>
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <IconSettings className="h-4 w-4 shrink-0" />
+              <span className="truncate">{t('nav.settings')}</span>
             </span>
           </Link>
         </nav>
@@ -242,9 +242,9 @@ function MainLayout({ user, setUser }) {
             onClick={handleLogout}
             className="w-full px-4 py-2 text-left text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
           >
-            <span className="inline-flex items-center gap-2">
-              <IconLogout className="h-4 w-4" />
-              <span>{t('nav.logout')}</span>
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <IconLogout className="h-4 w-4 shrink-0" />
+              <span className="truncate">{t('nav.logout')}</span>
             </span>
           </button>
         </div>

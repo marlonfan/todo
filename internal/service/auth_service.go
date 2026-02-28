@@ -12,6 +12,15 @@ import (
 	"gorm.io/gorm"
 )
 
+func isAllowedGranularity(minutes int) bool {
+	switch minutes {
+	case 5, 10, 15, 30, 60:
+		return true
+	default:
+		return false
+	}
+}
+
 type AuthService struct {
 	userRepo  *repository.UserRepository
 	jwtSecret string
@@ -58,6 +67,7 @@ func (s *AuthService) Register(req *models.UserRegisterRequest) (*models.UserRes
 		PasswordHash:           hash,
 		DefaultReminderEnabled: false,
 		DefaultReminderMinutes: 5,
+		DefaultTimeGranularity: 15,
 		DefaultTaskStartTime:   "09:00",
 		DefaultMorningTime:     "09:00",
 		DefaultNoonTime:        "12:00",
@@ -133,6 +143,12 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 		}
 		user.DefaultReminderMinutes = *req.DefaultReminderMinutes
 	}
+	if req.DefaultTimeGranularity != nil {
+		if !isAllowedGranularity(*req.DefaultTimeGranularity) {
+			return nil, errors.New("default_time_granularity must be one of 5, 10, 15, 30, 60")
+		}
+		user.DefaultTimeGranularity = *req.DefaultTimeGranularity
+	}
 	if req.DefaultTaskStartTime != "" {
 		startTime := strings.TrimSpace(req.DefaultTaskStartTime)
 		if _, err := time.Parse("15:04", startTime); err != nil {
@@ -170,6 +186,9 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 	}
 	if user.DefaultReminderMinutes <= 0 {
 		user.DefaultReminderMinutes = 5
+	}
+	if !isAllowedGranularity(user.DefaultTimeGranularity) {
+		user.DefaultTimeGranularity = 15
 	}
 	if user.DefaultTaskStartTime == "" {
 		user.DefaultTaskStartTime = "09:00"

@@ -12,6 +12,7 @@ type User struct {
 	Timezone               string    `json:"timezone" gorm:"size:50;default:'UTC'"`
 	DefaultReminderEnabled bool      `json:"default_reminder_enabled" gorm:"default:false"`
 	DefaultReminderMinutes int       `json:"default_reminder_minutes" gorm:"default:5"`
+	DefaultTimeGranularity int       `json:"default_time_granularity" gorm:"default:15"`
 	DefaultTaskStartTime   string    `json:"default_task_start_time" gorm:"size:5;default:'09:00'"`
 	DefaultMorningTime     string    `json:"default_morning_time" gorm:"size:5;default:'09:00'"`
 	DefaultNoonTime        string    `json:"default_noon_time" gorm:"size:5;default:'12:00'"`
@@ -41,6 +42,7 @@ type UpdateProfileRequest struct {
 	Timezone               string `json:"timezone" binding:"omitempty,max=50"`
 	DefaultReminderEnabled *bool  `json:"default_reminder_enabled"`
 	DefaultReminderMinutes *int   `json:"default_reminder_minutes" binding:"omitempty,min=1,max=10080"`
+	DefaultTimeGranularity *int   `json:"default_time_granularity" binding:"omitempty,min=5,max=60"`
 	DefaultTaskStartTime   string `json:"default_task_start_time" binding:"omitempty,len=5"`
 	DefaultMorningTime     string `json:"default_morning_time" binding:"omitempty,len=5"`
 	DefaultNoonTime        string `json:"default_noon_time" binding:"omitempty,len=5"`
@@ -55,6 +57,7 @@ type UserResponse struct {
 	Timezone               string    `json:"timezone"`
 	DefaultReminderEnabled bool      `json:"default_reminder_enabled"`
 	DefaultReminderMinutes int       `json:"default_reminder_minutes"`
+	DefaultTimeGranularity int       `json:"default_time_granularity"`
 	DefaultTaskStartTime   string    `json:"default_task_start_time"`
 	DefaultMorningTime     string    `json:"default_morning_time"`
 	DefaultNoonTime        string    `json:"default_noon_time"`
@@ -67,6 +70,10 @@ func (u *User) ToResponse() UserResponse {
 	minutes := u.DefaultReminderMinutes
 	if minutes <= 0 {
 		minutes = 5
+	}
+	granularity := u.DefaultTimeGranularity
+	if granularity != 5 && granularity != 10 && granularity != 15 && granularity != 30 && granularity != 60 {
+		granularity = 15
 	}
 	defaultTaskStartTime := u.DefaultTaskStartTime
 	if defaultTaskStartTime == "" {
@@ -96,6 +103,7 @@ func (u *User) ToResponse() UserResponse {
 		Timezone:               u.Timezone,
 		DefaultReminderEnabled: u.DefaultReminderEnabled,
 		DefaultReminderMinutes: minutes,
+		DefaultTimeGranularity: granularity,
 		DefaultTaskStartTime:   defaultTaskStartTime,
 		DefaultMorningTime:     defaultMorningTime,
 		DefaultNoonTime:        defaultNoonTime,

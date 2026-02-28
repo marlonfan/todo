@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
-import { tasksAPI, categoriesAPI, notifyAPI } from '../api/client';
+import { tasksAPI, categoriesAPI } from '../api/client';
 import dayjs from 'dayjs';
-import { toInputFormat, toISOString, getUserTimezone } from '../utils/time';
+import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
+import LiveMarkdownEditor from './LiveMarkdownEditor';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 
@@ -48,13 +49,6 @@ function parseRecurrenceRule(rawRule) {
   }
 }
 
-function isSameNotifyConfig(left, right) {
-  const leftKeys = Object.keys(left || {}).sort();
-  const rightKeys = Object.keys(right || {}).sort();
-  if (leftKeys.length !== rightKeys.length) return false;
-  return leftKeys.every((key) => String(left[key] || '') === String(right[key] || ''));
-}
-
 function getDefaultStartParts() {
   const start = normalizeTaskStartTime(getStoredUser().default_task_start_time);
   const [hour, minute] = start.split(':').map((v) => Number.parseInt(v, 10));
@@ -65,34 +59,31 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const { t } = useTranslation();
   const { register, handleSubmit, watch, setValue, getValues } = useForm();
   const [categories, setCategories] = useState([]);
-  const [notifySettings, setNotifySettings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showRecurrence, setShowRecurrence] = useState(false);
   const [recurrenceType, setRecurrenceType] = useState('daily');
   const [selectedDays, setSelectedDays] = useState([]);
-  const [enableNotification, setEnableNotification] = useState(false);
-  const [notifyBefore, setNotifyBefore] = useState(15);
-  const [selectedNotifySetting, setSelectedNotifySetting] = useState('');
-  const [taskNotifications, setTaskNotifications] = useState([]);
   const [timeTouched, setTimeTouched] = useState(false);
   const [parsePreview, setParsePreview] = useState('');
   const [basicPanel, setBasicPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const basicPanelRef = useRef(null);
+  const timeGranularity = getUserTimeGranularity();
+  const timeInputStepSeconds = timeGranularity * 60;
 
   const isEditing = !!task;
   const isAllDay = watch('all_day');
   const priorityValue = watch('priority') || '0';
   const startInputValue = watch('start_time');
   const endInputValue = watch('end_time');
+  const descriptionValue = watch('description') || '';
   const watchedCategoryIDs = watch('category_ids');
   const selectedCategoryValues = Array.isArray(watchedCategoryIDs)
     ? watchedCategoryIDs.map((id) => String(id))
-    : watchedCategoryIDs
+      : watchedCategoryIDs
       ? [String(watchedCategoryIDs)]
       : [];
-
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
   useEffect(() => {
@@ -139,24 +130,9 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   };
 
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
-  const splitTimePart = (value, fallback = '09:00') => {
-    if (!value) return fallback;
-    if (!value.includes('T')) return fallback;
-    return value.split('T')[1].slice(0, 5) || fallback;
-  };
-  const mergeDateTime = (datePart, timePart) => {
-    if (!datePart) return '';
-    return `${datePart}T${timePart || '09:00'}`;
-  };
 
   useEffect(() => {
     fetchCategories();
-    fetchNotifySettings();
-    if (task?.id) {
-      fetchTaskNotifications(task.id);
-    } else {
-      setTaskNotifications([]);
-    }
     setTimeTouched(false);
     setParsePreview('');
     
@@ -219,10 +195,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       }
       setValue('priority', '0');
       setValue('category_ids', []);
-
-      const user = getStoredUser();
-      setEnableNotification(!!user.default_reminder_enabled);
-      setNotifyBefore(user.default_reminder_minutes > 0 ? user.default_reminder_minutes : 5);
     }
     setBasicPanel('');
   }, [task, initialRange, setValue]);
@@ -257,63 +229,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       console.error('Failed to fetch categories:', err);
     }
   };
-
-  const fetchNotifySettings = async () => {
-    try {
-      const res = await notifyAPI.getSettings();
-      setNotifySettings(res.data);
-      if (res.data.length > 0) {
-        const preferred = res.data.find((setting) => setting.is_default) || res.data[0];
-        setSelectedNotifySetting(preferred.id.toString());
-      }
-    } catch (err) {
-      console.error('Failed to fetch notify settings:', err);
-    }
-  };
-
-  const fetchTaskNotifications = async (taskID) => {
-    try {
-      const res = await tasksAPI.listNotifications(taskID);
-      setTaskNotifications(res.data || []);
-    } catch (err) {
-      console.error('Failed to fetch task notifications:', err);
-      setTaskNotifications([]);
-    }
-  };
-
-  useEffect(() => {
-    if (!isEditing) return;
-    const startTime = task?.start_time || task?.startTime;
-    if (!startTime) {
-      setEnableNotification(false);
-      return;
-    }
-
-    const now = dayjs();
-    const effectiveNotification =
-      taskNotifications.find((n) => dayjs(n.notify_at).isAfter(now) && n.status !== 'sent') ||
-      taskNotifications.find((n) => n.status === 'pending' || n.status === 'processing') ||
-      taskNotifications[0] ||
-      null;
-
-    if (!effectiveNotification) {
-      setEnableNotification(false);
-      return;
-    }
-
-    setEnableNotification(true);
-    const minutes = dayjs(startTime).diff(dayjs(effectiveNotification.notify_at), 'minute');
-    setNotifyBefore(minutes > 0 ? minutes : 5);
-
-    const matchedSetting = notifySettings.find(
-      (setting) =>
-        setting.channel === effectiveNotification.channel &&
-        isSameNotifyConfig(setting.config, effectiveNotification.config)
-    );
-    if (matchedSetting) {
-      setSelectedNotifySetting(String(matchedSetting.id));
-    }
-  }, [isEditing, notifySettings, task, taskNotifications]);
 
   const applyNaturalTimeFromTitle = (titleValue, shouldUpdateTime) => {
     const parsed = parseNaturalTimeFromTitle(titleValue, getUserTimezone(), getNaturalTimeOptionsFromUser(getStoredUser()));
@@ -412,27 +327,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         savedTask = res.data;
       }
 
-      // 处理通知（按用户时区计算）
-      if (enableNotification && savedTask && savedTask.start_time) {
-        const timezone = getUserTimezone();
-        const startTime = dayjs(savedTask.start_time).tz(timezone);
-        const notifyTime = startTime.subtract(notifyBefore, 'minutes');
-        
-        if (notifyTime.isAfter(dayjs().tz(timezone))) {
-          const setting =
-            notifySettings.find(s => s.id.toString() === selectedNotifySetting) ||
-            notifySettings.find(s => s.is_default) ||
-            notifySettings[0];
-          if (setting) {
-            await tasksAPI.createNotification(savedTask.id, {
-              channel: setting.channel,
-              config: setting.config,
-              notify_at: notifyTime.toISOString(),
-            });
-          }
-        }
-      }
-
       onSaved();
     } catch (err) {
       setError(err.response?.data?.error || t('task.saveFailed'));
@@ -525,12 +419,13 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 {parsePreview && <p className="mt-1 text-xs text-emerald-600">{parsePreview}</p>}
 
                 <div className="mt-4 border-t border-slate-200 pt-3">
+                  <input type="hidden" {...register('description')} />
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
-                  <textarea
-                    {...register('description')}
-                    rows="4"
-                    className="min-h-[96px] w-full resize-none rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-slate-300 focus:bg-white"
+                  <LiveMarkdownEditor
+                    value={descriptionValue}
+                    onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}
                     placeholder={t('task.description')}
+                    minHeight={380}
                   />
                 </div>
               </section>
@@ -578,6 +473,18 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       title={t('task.categories')}
                     >
                       <IconTag className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBasicPanel(basicPanel === 'recurrence' ? '' : 'recurrence')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                        basicPanel === 'recurrence' || showRecurrence
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                      title={t('task.repeat')}
+                    >
+                      <IconRepeat className="h-4 w-4" />
                     </button>
                   </div>
                   <button
@@ -664,49 +571,27 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          <div className="grid grid-cols-[1fr_120px] gap-2">
+                          <div>
+                            <label className="form-label">{t('task.startTime')}</label>
                             <input
-                              type="date"
-                              value={splitDatePart(startInputValue)}
+                              type="datetime-local"
+                              step={timeInputStepSeconds}
+                              value={startInputValue || ''}
                               onChange={(e) => {
-                                const nextDate = e.target.value;
-                                const currentTime = splitTimePart(startInputValue, '09:00');
-                                setValue('start_time', nextDate ? mergeDateTime(nextDate, currentTime) : '');
-                                setTimeTouched(true);
-                              }}
-                              className="form-input"
-                            />
-                            <input
-                              type="time"
-                              step="300"
-                              value={splitTimePart(startInputValue, '09:00')}
-                              onChange={(e) => {
-                                const baseDate = splitDatePart(startInputValue) || dayjs().tz(getUserTimezone()).format('YYYY-MM-DD');
-                                setValue('start_time', mergeDateTime(baseDate, e.target.value));
+                                setValue('start_time', e.target.value || '');
                                 setTimeTouched(true);
                               }}
                               className="form-input"
                             />
                           </div>
-                          <div className="grid grid-cols-[1fr_120px] gap-2">
+                          <div>
+                            <label className="form-label">{t('task.endTime')}</label>
                             <input
-                              type="date"
-                              value={splitDatePart(endInputValue)}
+                              type="datetime-local"
+                              step={timeInputStepSeconds}
+                              value={endInputValue || ''}
                               onChange={(e) => {
-                                const nextDate = e.target.value;
-                                const currentTime = splitTimePart(endInputValue, splitTimePart(startInputValue, '09:30'));
-                                setValue('end_time', nextDate ? mergeDateTime(nextDate, currentTime) : '');
-                                setTimeTouched(true);
-                              }}
-                              className="form-input"
-                            />
-                            <input
-                              type="time"
-                              step="300"
-                              value={splitTimePart(endInputValue, splitTimePart(startInputValue, '09:30'))}
-                              onChange={(e) => {
-                                const baseDate = splitDatePart(endInputValue) || splitDatePart(startInputValue) || dayjs().tz(getUserTimezone()).format('YYYY-MM-DD');
-                                setValue('end_time', mergeDateTime(baseDate, e.target.value));
+                                setValue('end_time', e.target.value || '');
                                 setTimeTouched(true);
                               }}
                               className="form-input"
@@ -759,110 +644,72 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       )}
                     </div>
                   )}
+
+                  {basicPanel === 'recurrence' && (
+                    <div className="absolute left-0 right-0 top-12 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <div className="mb-2 flex items-center justify-between">
+                        <label htmlFor="recurrence-inline" className="text-sm font-medium text-slate-700">
+                          {t('task.repeat')}
+                        </label>
+                        <input
+                          type="checkbox"
+                          id="recurrence-inline"
+                          checked={showRecurrence}
+                          onChange={(e) => {
+                            const enabled = e.target.checked;
+                            setShowRecurrence(enabled);
+                            if (!enabled) {
+                              setSelectedDays([]);
+                              setRecurrenceType('daily');
+                            }
+                          }}
+                        />
+                      </div>
+
+                      {showRecurrence && (
+                        <div className="space-y-3">
+                          <select
+                            value={recurrenceType}
+                            onChange={(e) => setRecurrenceType(e.target.value)}
+                            className="form-select"
+                          >
+                            <option value="daily">{t('task.daily')}</option>
+                            <option value="weekly">{t('task.weekly')}</option>
+                            <option value="monthly">{t('task.monthly')}</option>
+                            <option value="yearly">{t('task.yearly')}</option>
+                          </select>
+
+                          {recurrenceType === 'weekly' && (
+                            <div>
+                              <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
+                              <div className="flex flex-wrap gap-2">
+                                {weekDays.map(day => (
+                                  <button
+                                    key={day.key}
+                                    type="button"
+                                    onClick={() => toggleDay(day.key)}
+                                    className={`rounded-full px-3 py-1 text-sm ${
+                                      selectedDays.includes(day.key)
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    {day.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
                   {startInputValue ? `${t('task.startTime')}: ${startInputValue}` : t('task.noDate')}
                 </div>
               </section>
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <label htmlFor="recurrence" className="text-sm font-medium text-slate-700">
-                    {t('task.repeat')}
-                  </label>
-                  <input
-                    type="checkbox"
-                    id="recurrence"
-                    checked={showRecurrence}
-                    onChange={(e) => setShowRecurrence(e.target.checked)}
-                  />
-                </div>
-
-                {showRecurrence && (
-                  <div className="mt-3 space-y-3">
-                    <select
-                      value={recurrenceType}
-                      onChange={(e) => setRecurrenceType(e.target.value)}
-                      className="form-select"
-                    >
-                      <option value="daily">{t('task.daily')}</option>
-                      <option value="weekly">{t('task.weekly')}</option>
-                      <option value="monthly">{t('task.monthly')}</option>
-                      <option value="yearly">{t('task.yearly')}</option>
-                    </select>
-
-                    {recurrenceType === 'weekly' && (
-                      <div>
-                        <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
-                        <div className="flex flex-wrap gap-2">
-                          {weekDays.map(day => (
-                            <button
-                              key={day.key}
-                              type="button"
-                              onClick={() => toggleDay(day.key)}
-                              className={`rounded-full px-3 py-1 text-sm ${
-                                selectedDays.includes(day.key)
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                              }`}
-                            >
-                              {day.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <label htmlFor="notification" className="text-sm font-medium text-slate-700">
-                    {t('task.enableNotification')}
-                  </label>
-                  <input
-                    type="checkbox"
-                    id="notification"
-                    checked={enableNotification}
-                    onChange={(e) => setEnableNotification(e.target.checked)}
-                  />
-                </div>
-
-                {enableNotification && (
-                  <div className="mt-3 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-slate-600">{t('task.notifyBefore')}</label>
-                      <input
-                        type="number"
-                        value={notifyBefore}
-                        onChange={(e) => setNotifyBefore(parseInt(e.target.value, 10) || 0)}
-                        className="form-input w-24"
-                        min="1"
-                      />
-                      <span className="text-sm text-slate-600">{t('task.minutes')}</span>
-                    </div>
-
-                    {notifySettings.length > 0 ? (
-                      <select
-                        value={selectedNotifySetting}
-                        onChange={(e) => setSelectedNotifySetting(e.target.value)}
-                        className="form-select"
-                      >
-                        {notifySettings.map((setting) => (
-                          <option key={setting.id} value={setting.id}>
-                            {setting.channel} - {setting.config.topic || setting.config.chat_id || setting.config.url}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <p className="text-sm text-amber-600">
-                        {t('notification.noSettingsHint')}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </section>
             </div>
 
             <div className="sticky bottom-0 z-20 flex items-center justify-between border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">

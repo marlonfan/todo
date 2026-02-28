@@ -1,13 +1,13 @@
 package ntfy
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"todo-app/internal/notify"
 )
@@ -56,7 +56,7 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 	if priority == "" {
 		priority = "3"
 	}
-	
+
 	// Support for authentication token
 	authToken := config["token"]
 
@@ -69,25 +69,19 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 		message += fmt.Sprintf("\n\nDue: %s", msg.DueDate.Format("2006-01-02 15:04"))
 	}
 
-	payload := map[string]interface{}{
-		"topic":    topic,
-		"title":    msg.Title,
-		"message":  message,
-		"priority": priority,
-		"tags":     []string{"todo", "task"},
+	if strings.TrimSpace(message) == "" {
+		message = msg.Title
 	}
 
-	jsonPayload, err := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(message))
 	if err != nil {
 		return err
 	}
+	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	req.Header.Set("Title", msg.Title)
+	req.Header.Set("Priority", priority)
+	req.Header.Set("Tags", "todo,task")
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	
 	// Add authorization token if provided
 	if authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+authToken)
@@ -99,10 +93,9 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body := make([]byte, 1024)
-		n, _ := resp.Body.Read(body)
-		return fmt.Errorf("ntfy server returned status %d: %s", resp.StatusCode, string(body[:n]))
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("ntfy server returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return nil

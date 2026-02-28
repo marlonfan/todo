@@ -1,0 +1,10 @@
+.git
+.gitignore
+
+bin/
+todo.db
+*.log
+
+web/node_modules/
+web/dist/
+cmd/server/web/dist/

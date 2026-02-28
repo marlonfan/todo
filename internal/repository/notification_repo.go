@@ -96,6 +96,23 @@ func (r *NotificationRepository) DeleteByTask(taskID int64) error {
 	return r.db.Where("task_id = ?", taskID).Delete(&models.Notification{}).Error
 }
 
+func (r *NotificationRepository) DeleteActiveByTask(taskID int64) error {
+	return r.db.Where("task_id = ? AND status IN ?", taskID, []models.NotifyStatus{
+		models.NotifyStatusPending,
+		models.NotifyStatusFailed,
+		models.NotifyStatusProcessing,
+	}).Delete(&models.Notification{}).Error
+}
+
+func (r *NotificationRepository) DeleteActiveByUser(userID int64) error {
+	return r.db.Where("status IN ? AND task_id IN (?)", []models.NotifyStatus{
+		models.NotifyStatusPending,
+		models.NotifyStatusFailed,
+		models.NotifyStatusProcessing,
+	}, r.db.Model(&models.Task{}).Select("id").Where("user_id = ?", userID)).
+		Delete(&models.Notification{}).Error
+}
+
 // User Notify Settings
 func (r *NotificationRepository) GetUserSettings(userID int64) ([]models.UserNotifySetting, error) {
 	var settings []models.UserNotifySetting

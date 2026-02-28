@@ -7,6 +7,8 @@ export const DEFAULT_TIMEZONE =
   (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
 export const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss';
 export const DATE_FORMAT = 'YYYY-MM-DD';
+export const ALLOWED_TIME_GRANULARITIES = [5, 10, 15, 30, 60];
+export const DEFAULT_TIME_GRANULARITY = 15;
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -47,6 +49,23 @@ export function getUserTimezone() {
   }
 
   return DEFAULT_TIMEZONE;
+}
+
+export function normalizeTimeGranularity(value, fallback = DEFAULT_TIME_GRANULARITY) {
+  const parsed = Number.parseInt(value, 10);
+  if (ALLOWED_TIME_GRANULARITIES.includes(parsed)) {
+    return parsed;
+  }
+  return fallback;
+}
+
+export function getUserTimeGranularity() {
+  const user = parseStoredUser();
+  return normalizeTimeGranularity(user.default_time_granularity, DEFAULT_TIME_GRANULARITY);
+}
+
+export function getTimeInputStepSeconds() {
+  return getUserTimeGranularity() * 60;
 }
 
 export function setUserTimezone(tz, persist = true, source = 'session') {

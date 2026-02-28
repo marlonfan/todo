@@ -128,6 +128,14 @@ func (r *TaskRepository) GetRecurringTasks(userID int64, start, end time.Time) (
 	return tasks, err
 }
 
+func (r *TaskRepository) GetReminderTasks(userID int64) ([]models.Task, error) {
+	var tasks []models.Task
+	err := r.db.
+		Where("user_id = ? AND status = ? AND start_time IS NOT NULL", userID, models.TaskStatusPending).
+		Find(&tasks).Error
+	return tasks, err
+}
+
 func (r *TaskRepository) GetOccurrenceStatus(userID, taskID int64, occurrenceDate time.Time) (*models.TaskOccurrenceStatus, error) {
 	var status models.TaskOccurrenceStatus
 	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)

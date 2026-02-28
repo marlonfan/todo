@@ -84,6 +84,13 @@ go build -o todo-app cmd/server/main.go
 
 访问 http://localhost:8080
 
+### 方法三：Docker 运行
+
+```bash
+docker build -t yourname/todo-app:latest .
+docker run --rm -p 8080:8080 yourname/todo-app:latest
+```
+
 ## 配置
 
 配置文件 `config.yaml`：
@@ -218,6 +225,28 @@ func (m *MyNotifier) DefaultTemplate() string { return "{{.Title}}" }
 - **前端**: React 18, FullCalendar, TailwindCSS
 - **数据库**: SQLite / PostgreSQL
 - **认证**: JWT
+
+## Gitea Runner 自动构建镜像
+
+仓库已包含流程文件：`.gitea/workflows/docker-image.yml`
+
+触发条件：
+
+- 推送到 `main` / `master`
+- 推送 `v*` tag
+- 手动触发（workflow_dispatch）
+
+请在 Gitea 仓库 Secrets 中配置：
+
+- `DOCKERHUB_USERNAME`: DockerHub 用户名
+- `DOCKERHUB_TOKEN`: DockerHub Access Token
+- `DOCKERHUB_IMAGE`: 镜像名（例如 `marlon/todo-app`）
+
+推送策略：
+
+- 默认分支推送：`latest` + `sha-xxxxxxx`
+- 非默认分支推送：`分支名` + `sha-xxxxxxx`
+- tag 推送：`tag名` + `sha-xxxxxxx`
 
 ## 许可证
 
