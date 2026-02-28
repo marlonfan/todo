@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1.7
+ARG GO_VERSION=1.25.5
 
 FROM node:20-bookworm AS web-builder
 WORKDIR /src/web
@@ -9,7 +10,6 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-ARG GO_VERSION=1.25.5
 FROM golang:${GO_VERSION}-bookworm AS go-builder
 
 WORKDIR /src
