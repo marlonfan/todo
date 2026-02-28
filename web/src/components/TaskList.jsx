@@ -102,13 +102,18 @@ function TaskList() {
   const [searchKeyword, setSearchKeyword] = useState('');
   const [sortBy, setSortBy] = useState('due_asc');
   const [groupBy, setGroupBy] = useState('none');
+  const [listToolbarPanel, setListToolbarPanel] = useState('');
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [detailPanel, setDetailPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false
   );
+  const [isCompactMobile, setIsCompactMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
   const detailPanelRef = useRef(null);
+  const listToolbarPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
 
@@ -122,6 +127,7 @@ function TaskList() {
   useEffect(() => {
     const handleResize = () => {
       setIsMobileViewport(window.innerWidth < 1024);
+      setIsCompactMobile(window.innerWidth < 768);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -138,6 +144,18 @@ function TaskList() {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [detailPanel]);
+
+  useEffect(() => {
+    if (!listToolbarPanel) return undefined;
+    const handlePointerDown = (event) => {
+      if (!listToolbarPanelRef.current) return;
+      if (!listToolbarPanelRef.current.contains(event.target)) {
+        setListToolbarPanel('');
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [listToolbarPanel]);
 
   const loading = tasksLoading && tasks.length === 0;
   const setTasksCache = (updater) => {
@@ -863,100 +881,150 @@ function TaskList() {
     { value: 'priority', label: t('task.groupPriority') },
     ...(canGroupByCategory ? [{ value: 'category', label: t('task.groupCategory') }] : []),
   ];
+  const listGroupOptions = view === 'search' ? [{ value: 'status', label: t('task.groupStatus') }] : groupOptions;
+  const showMobileSearchBar = isCompactMobile && view === 'search';
+  const showListHeader = !isCompactMobile || showMobileSearchBar;
 
   return (
     <div className="h-full bg-slate-100 p-1.5 md:p-2">
       <div className="grid h-full grid-cols-1 gap-2.5 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
         <section className="flex h-full min-h-0 flex-col rounded-2xl border border-slate-200 bg-white">
-          <div className="space-y-2 border-b border-slate-200 px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
-                <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
-              </div>
-              <div className="flex min-w-0 items-center gap-2">
-                {view === 'search' ? (
-                  <div className="flex w-44 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:w-56">
-                    <IconSearch className="h-3.5 w-3.5 text-slate-400" />
-                    <input
-                      value={searchKeyword}
-                      onChange={(event) => setSearchKeyword(event.target.value)}
-                      placeholder={t('task.searchPlaceholder')}
-                      className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
-                    />
-                  </div>
-                ) : canQuickCreate ? (
-                  <div className="flex w-44 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:w-56">
-                    <IconSearch className="h-3.5 w-3.5 text-slate-400" />
-                    <input
-                      value={quickTitle}
-                      onChange={(event) => setQuickTitle(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          handleQuickCreate();
-                        }
-                      }}
-                      placeholder={t('task.quickAddPlaceholder')}
-                      className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
-                    />
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (canQuickCreate && quickTitle.trim()) {
-                      handleQuickCreate();
-                      return;
-                    }
-                    openAdvancedModal(null);
-                  }}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-base text-white hover:bg-blue-700"
-                  title={t('task.newTask')}
-                >
-                  +
-                </button>
+          {showListHeader && (
+            <div className="border-b border-slate-200 px-3 py-2.5">
+              <div className="flex items-center justify-end gap-2 md:justify-between">
+                <div className="hidden min-w-0 md:block">
+                  <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
+                  <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
+                </div>
+                <div className="flex min-w-0 items-center gap-2">
+                  {view === 'search' && (
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 md:w-56 md:flex-none">
+                      <IconSearch className="h-3.5 w-3.5 text-slate-400" />
+                      <input
+                        value={searchKeyword}
+                        onChange={(event) => setSearchKeyword(event.target.value)}
+                        placeholder={t('task.searchPlaceholder')}
+                        className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
+                      />
+                    </div>
+                  )}
+                  {canQuickCreate && (
+                    <div className="hidden w-44 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:w-56 md:flex">
+                      <IconSearch className="h-3.5 w-3.5 text-slate-400" />
+                      <input
+                        value={quickTitle}
+                        onChange={(event) => setQuickTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            handleQuickCreate();
+                          }
+                        }}
+                        placeholder={t('task.quickAddPlaceholder')}
+                        className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
+                      />
+                    </div>
+                  )}
+                  {canShowSortGroup && !isCompactMobile && (
+                    <div ref={listToolbarPanelRef} className="relative flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                          listToolbarPanel === 'sort'
+                            ? 'bg-sky-50 text-sky-700'
+                            : 'text-slate-500 hover:bg-slate-100'
+                        }`}
+                        title={t('common.filter')}
+                      >
+                        <IconSort className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                          listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'text-slate-500 hover:bg-slate-100'
+                        }`}
+                        title={t('task.groupNone')}
+                      >
+                        <IconGroup className="h-4 w-4" />
+                      </button>
+
+                      {listToolbarPanel === 'sort' && (
+                        <div className="absolute right-0 top-10 z-20 w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                          <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                            {t('common.filter')}
+                          </div>
+                          <div className="space-y-1">
+                            {sortOptions.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setSortBy(option.value);
+                                  setListToolbarPanel('');
+                                }}
+                                className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
+                                  sortBy === option.value
+                                    ? 'bg-sky-50 text-sky-700'
+                                    : 'text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {listToolbarPanel === 'group' && (
+                        <div className="absolute right-0 top-10 z-20 w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                          <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                            {t('task.groupNone')}
+                          </div>
+                          <div className="space-y-1">
+                            {listGroupOptions.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setGroupBy(option.value);
+                                  setListToolbarPanel('');
+                                }}
+                                className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
+                                  effectiveGroupBy === option.value
+                                    ? 'bg-indigo-50 text-indigo-700'
+                                    : 'text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (canQuickCreate && quickTitle.trim()) {
+                        handleQuickCreate();
+                        return;
+                      }
+                      openAdvancedModal(null);
+                    }}
+                    className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-base text-white hover:bg-blue-700 md:inline-flex"
+                    title={t('task.newTask')}
+                  >
+                    +
+                  </button>
+                </div>
               </div>
             </div>
-
-            {canShowSortGroup && (
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
-                  <IconSort className="h-3.5 w-3.5" />
-                  <select
-                    value={sortBy}
-                    onChange={(event) => setSortBy(event.target.value)}
-                    className="border-none bg-transparent text-xs text-slate-700 outline-none"
-                  >
-                    {sortOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
-                  <IconGroup className="h-3.5 w-3.5" />
-                  <select
-                    value={effectiveGroupBy}
-                    onChange={(event) => setGroupBy(event.target.value)}
-                    disabled={view === 'search'}
-                    className="border-none bg-transparent text-xs text-slate-700 outline-none disabled:text-slate-400"
-                  >
-                    {view === 'search' ? (
-                      <option value="status">{t('task.groupStatus')}</option>
-                    ) : (
-                      groupOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </label>
-              </div>
-            )}
-          </div>
+          )}
 
           <div className="flex-1 overflow-auto p-1.5 md:p-2">
             {loading ? (
@@ -981,6 +1049,101 @@ function TaskList() {
               </div>
             )}
           </div>
+
+          {isCompactMobile && (
+            <div ref={listToolbarPanelRef} className="fixed bottom-20 right-3 z-30 flex flex-col items-end gap-2 md:hidden">
+              {listToolbarPanel === 'sort' && (
+                <div className="w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    {t('common.filter')}
+                  </div>
+                  <div className="space-y-1">
+                    {sortOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setSortBy(option.value);
+                          setListToolbarPanel('');
+                        }}
+                        className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
+                          sortBy === option.value
+                            ? 'bg-sky-50 text-sky-700'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {listToolbarPanel === 'group' && (
+                <div className="w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    {t('task.groupNone')}
+                  </div>
+                  <div className="space-y-1">
+                    {listGroupOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setGroupBy(option.value);
+                          setListToolbarPanel('');
+                        }}
+                        className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
+                          effectiveGroupBy === option.value
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {canShowSortGroup && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
+                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white shadow-md ${
+                      listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
+                        ? 'text-indigo-700 ring-2 ring-indigo-100'
+                        : 'text-slate-600'
+                    }`}
+                    title={t('task.groupNone')}
+                  >
+                    <IconGroup className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
+                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white shadow-md ${
+                      listToolbarPanel === 'sort'
+                        ? 'text-sky-700 ring-2 ring-sky-100'
+                        : 'text-slate-600'
+                    }`}
+                    title={t('common.filter')}
+                  >
+                    <IconSort className="h-4 w-4" />
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => openAdvancedModal(null)}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-blue-600 text-lg text-white shadow-md"
+                title={t('task.newTask')}
+              >
+                +
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="hidden h-full min-h-0 flex-col rounded-2xl border border-slate-200 bg-white lg:flex">

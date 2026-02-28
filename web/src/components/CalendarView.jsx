@@ -5,11 +5,13 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { calendarAPI, tasksAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { queryKeys } from '../query/keys';
+import { IconList, IconSearch } from './icons/TaskIcons';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -27,26 +29,146 @@ function readCalendarDefaultView() {
   }
 }
 
+const EN_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const ZH_WEEKDAY_SHORT = ['日', '一', '二', '三', '四', '五', '六'];
+
+function roundLocalTimeToGranularity(current, granularity) {
+  const safeGranularity = Math.max(1, Number.parseInt(granularity, 10) || 15);
+  const minutes = current.minute();
+  const roundedMinutes = Math.ceil(minutes / safeGranularity) * safeGranularity;
+  return current.second(0).millisecond(0).minute(0).add(roundedMinutes, 'minute');
+}
+
+function normalizeMobileView(value) {
+  if (value === 'timeGridDay' || value === 'timeGridThreeDay' || value === 'dayGridMonth') {
+    return value;
+  }
+  return 'timeGridDay';
+}
+
+function getWeekStripStart(dateValue) {
+  const current = dayjs(dateValue);
+  return current.subtract(current.day(), 'day').format('YYYY-MM-DD');
+}
+
+function annotateOverlapCount(events, defaultDurationMinutes = 30) {
+  if (!Array.isArray(events) || events.length <= 1) return events || [];
+  const counts = new Array(events.length).fill(1);
+  const ranges = events.map((event) => {
+    const start = dayjs(event.start);
+    const endBase = event.end ? dayjs(event.end) : start.add(defaultDurationMinutes, 'minute');
+    const end = endBase.isAfter(start) ? endBase : start.add(defaultDurationMinutes, 'minute');
+    return { start, end };
+  });
+
+  for (let i = 0; i < ranges.length; i += 1) {
+    for (let j = i + 1; j < ranges.length; j += 1) {
+      const overlap = ranges[i].start.isBefore(ranges[j].end) && ranges[j].start.isBefore(ranges[i].end);
+      if (!overlap) continue;
+      counts[i] += 1;
+      counts[j] += 1;
+    }
+  }
+
+  return events.map((event, index) => ({
+    ...event,
+    extendedProps: {
+      ...(event.extendedProps || {}),
+      overlapCount: counts[index],
+    },
+  }));
+}
+
+function parsePercent(value) {
+  const raw = String(value || '').trim();
+  if (!raw.endsWith('%')) return null;
+  const parsed = Number.parseFloat(raw.slice(0, -1));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function CalendarView() {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const calendarRef = useRef(null);
+  const stripViewportRef = useRef(null);
+  const mobileViewMenuRef = useRef(null);
+  const stripDragRef = useRef({ active: false, startX: 0, deltaX: 0 });
+  const stripAnimationRef = useRef({ phase: 'idle', direction: 0, width: 0 });
+  const suppressStripClickRef = useRef(false);
+  const pendingFocusDateRef = useRef('');
+
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedRange, setSelectedRange] = useState(null);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
+  const [isCompactMobile, setIsCompactMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
+  const [mobileView, setMobileView] = useState('timeGridDay');
+  const [mobileViewMenuOpen, setMobileViewMenuOpen] = useState(false);
+  const [mobileCurrentDate, setMobileCurrentDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
+  const [mobileStripStartDate, setMobileStripStartDate] = useState(() => getWeekStripStart(dayjs().tz(getUserTimezone())));
+  const [stripTranslateX, setStripTranslateX] = useState(0);
+  const [stripTransitionMs, setStripTransitionMs] = useState(0);
+  const [calendarNow, setCalendarNow] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DDTHH:mm:ss[Z]'));
+
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
   const slotDuration = timeGranularity === 60 ? '01:00:00' : `00:${String(timeGranularity).padStart(2, '0')}:00`;
-  const initialDate = useMemo(() => dayjs().tz(timezone).format('YYYY-MM-DD'), [timezone]);
+
+  const initialDate = useMemo(
+    () => (isCompactMobile ? mobileCurrentDate : dayjs().tz(timezone).format('YYYY-MM-DD')),
+    [isCompactMobile, mobileCurrentDate, timezone]
+  );
+
   const initialScrollTime = useMemo(() => {
     const now = dayjs().tz(timezone);
     const centeredHour = Math.max(0, now.hour() - 2);
     const roundedMinute = Math.floor(now.minute() / timeGranularity) * timeGranularity;
     return `${String(centeredHour).padStart(2, '0')}:${String(roundedMinute).padStart(2, '0')}:00`;
   }, [timeGranularity, timezone]);
+
+  useEffect(() => {
+    const syncNow = () => {
+      setCalendarNow(dayjs().tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]'));
+    };
+    syncNow();
+    const timer = window.setInterval(syncNow, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [timezone]);
+
+  const activeCalendarView = isCompactMobile ? normalizeMobileView(mobileView) : calendarDefaultView;
+  const mobileWeekdayShort = i18n.language === 'zh-CN' ? ZH_WEEKDAY_SHORT : EN_WEEKDAY_SHORT;
+
+  const mobileViewOptions = useMemo(
+    () => [
+      { value: 'timeGridDay', label: t('calendar.day') },
+      { value: 'timeGridThreeDay', label: i18n.language === 'zh-CN' ? '三日' : '3-day' },
+      { value: 'dayGridMonth', label: t('calendar.month') },
+    ],
+    [i18n.language, t]
+  );
+
+  const currentMobileViewLabel = useMemo(
+    () => mobileViewOptions.find((item) => item.value === mobileView)?.label || t('calendar.day'),
+    [mobileView, mobileViewOptions, t]
+  );
+
+  const mobileMonthTitle = useMemo(() => {
+    const value = dayjs(mobileCurrentDate);
+    if (i18n.language === 'zh-CN') return value.format('YYYY年M月');
+    return value.format('MMMM YYYY');
+  }, [i18n.language, mobileCurrentDate]);
+
+  const mobileDateStrip = useMemo(() => {
+    const start = dayjs(mobileStripStartDate);
+    return Array.from({ length: 7 }, (_, index) => start.add(index, 'day'));
+  }, [mobileStripStartDate]);
+
+  const todayDateString = useMemo(() => dayjs().tz(timezone).format('YYYY-MM-DD'), [timezone]);
 
   useEffect(() => {
     const syncCalendarDefaultView = () => {
@@ -60,6 +182,34 @@ function CalendarView() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleResize = () => {
+      setIsCompactMobile(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileViewMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (!mobileViewMenuRef.current) return;
+      if (!mobileViewMenuRef.current.contains(event.target)) {
+        setMobileViewMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [mobileViewMenuOpen]);
+
+  useEffect(() => {
+    const expectedStart = getWeekStripStart(mobileCurrentDate);
+    if (expectedStart !== mobileStripStartDate && stripAnimationRef.current.phase === 'idle') {
+      setMobileStripStartDate(expectedStart);
+    }
+  }, [mobileCurrentDate, mobileStripStartDate]);
+
   const currentCalendarQueryKey = useMemo(
     () => queryKeys.calendar.events(dateRange.start || '', dateRange.end || '', timezone),
     [dateRange.end, dateRange.start, timezone]
@@ -72,8 +222,6 @@ function CalendarView() {
       return dayjs(value).utc().toISOString();
     }
 
-    // The calendar runs in UTC with "pinned" wall-clock values.
-    // Parse as UTC first, then reinterpret that wall-clock in user's timezone.
     return dayjs.utc(value).tz(timezone, true).utc().toISOString();
   }, [timezone]);
 
@@ -84,7 +232,6 @@ function CalendarView() {
       return dayjs(isoString).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
     }
 
-    // Convert server UTC -> user's wall clock time, then pin to UTC calendar for consistent rendering.
     return dayjs(isoString).tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]');
   }, [timezone]);
 
@@ -100,11 +247,12 @@ function CalendarView() {
         end: toServerISO(dateRange.end),
       });
       const list = Array.isArray(res.data) ? res.data : [];
-      return list.map((event) => ({
+      const mapped = list.map((event) => ({
         ...event,
         start: toCalendarISO(event.start),
         end: event.end ? toCalendarISO(event.end) : undefined,
       }));
+      return annotateOverlapCount(mapped, Math.max(15, timeGranularity));
     },
   });
 
@@ -113,16 +261,23 @@ function CalendarView() {
       start: dayjs(dateInfo.start).toISOString(),
       end: dayjs(dateInfo.end).toISOString(),
     });
+
+    if (isCompactMobile) {
+      const focusedDate = pendingFocusDateRef.current
+        ? dayjs(pendingFocusDateRef.current).format('YYYY-MM-DD')
+        : dayjs(calendarRef.current?.getApi()?.getDate() || dateInfo.start).format('YYYY-MM-DD');
+      setMobileCurrentDate(focusedDate);
+      pendingFocusDateRef.current = '';
+      const normalizedView = normalizeMobileView(dateInfo.view.type);
+      if (normalizedView !== mobileView) {
+        setMobileView(normalizedView);
+      }
+    }
   };
 
   const handleDateClick = (info) => {
     const start = dayjs(info.date).utc();
-    let end = null;
-    if (info.allDay) {
-      end = start.endOf('day');
-    } else {
-      end = start.add(timeGranularity, 'minute');
-    }
+    const end = info.allDay ? start.endOf('day') : start.add(timeGranularity, 'minute');
 
     setSelectedTask(null);
     setSelectedRange({
@@ -138,7 +293,6 @@ function CalendarView() {
     let end = dayjs(info.end).utc();
 
     if (info.allDay) {
-      // FullCalendar all-day selection is [start, end), so convert to inclusive end date for form.
       end = end.subtract(1, 'day');
     }
 
@@ -147,6 +301,154 @@ function CalendarView() {
       allDay: !!info.allDay,
       start: start.format(info.allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
       end: end.format(info.allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
+    });
+    setModalOpen(true);
+  };
+
+  const jumpToMobileDate = (dateValue) => {
+    const targetDate = dayjs(dateValue).format('YYYY-MM-DD');
+    pendingFocusDateRef.current = targetDate;
+    setMobileCurrentDate(targetDate);
+    const api = calendarRef.current?.getApi();
+    if (!api) return;
+    api.changeView(mobileView);
+    api.gotoDate(targetDate);
+  };
+
+  const handleMobileViewChange = (nextView) => {
+    const normalized = normalizeMobileView(nextView);
+    setMobileViewMenuOpen(false);
+    setMobileView(normalized);
+    const api = calendarRef.current?.getApi();
+    if (!api) return;
+    api.changeView(normalized);
+    api.gotoDate(mobileCurrentDate);
+  };
+
+  const handleGoToday = () => {
+    const today = dayjs().tz(timezone).format('YYYY-MM-DD');
+    pendingFocusDateRef.current = today;
+    setMobileCurrentDate(today);
+    setMobileStripStartDate(getWeekStripStart(today));
+    setMobileViewMenuOpen(false);
+    stripAnimationRef.current = { phase: 'idle', direction: 0, width: 0 };
+    setStripTransitionMs(0);
+    setStripTranslateX(0);
+
+    const api = calendarRef.current?.getApi();
+    if (!api) return;
+    api.changeView(mobileView);
+    api.gotoDate(today);
+  };
+
+  const startStripSlide = (direction) => {
+    const width = stripViewportRef.current?.offsetWidth || 0;
+    if (width <= 0) return false;
+    stripAnimationRef.current = { phase: 'out', direction, width };
+    setStripTransitionMs(340);
+    setStripTranslateX(direction > 0 ? -width : width);
+    return true;
+  };
+
+  const handleStripPointerDown = (event) => {
+    if (!isCompactMobile || stripAnimationRef.current.phase !== 'idle') return;
+    stripDragRef.current = { active: true, startX: event.clientX, deltaX: 0 };
+    suppressStripClickRef.current = false;
+    setStripTransitionMs(0);
+    setStripTranslateX(0);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleStripPointerMove = (event) => {
+    if (!stripDragRef.current.active) return;
+    const deltaX = event.clientX - stripDragRef.current.startX;
+    stripDragRef.current.deltaX = deltaX;
+    if (Math.abs(deltaX) > 6) {
+      suppressStripClickRef.current = true;
+    }
+    setStripTranslateX(deltaX);
+  };
+
+  const handleStripPointerEnd = (event) => {
+    if (!stripDragRef.current.active) return;
+    const deltaX = stripDragRef.current.deltaX;
+    stripDragRef.current.active = false;
+    stripDragRef.current.deltaX = 0;
+
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    const threshold = 30;
+    if (Math.abs(deltaX) < threshold) {
+      stripAnimationRef.current = { phase: 'rebound', direction: 0, width: 0 };
+      setStripTransitionMs(220);
+      setStripTranslateX(0);
+      setTimeout(() => {
+        suppressStripClickRef.current = false;
+      }, 0);
+      return;
+    }
+
+    const direction = deltaX < 0 ? 1 : -1;
+    if (!startStripSlide(direction)) {
+      stripAnimationRef.current = { phase: 'rebound', direction: 0, width: 0 };
+      setStripTransitionMs(220);
+      setStripTranslateX(0);
+    }
+
+    setTimeout(() => {
+      suppressStripClickRef.current = false;
+    }, 0);
+  };
+
+  const handleStripTransitionEnd = () => {
+    const animation = stripAnimationRef.current;
+    if (animation.phase === 'out') {
+      const nextStart = dayjs(mobileStripStartDate).add(animation.direction * 7, 'day').format('YYYY-MM-DD');
+      const nextCurrent = dayjs(mobileCurrentDate).add(animation.direction * 7, 'day').format('YYYY-MM-DD');
+
+      pendingFocusDateRef.current = nextCurrent;
+      setMobileStripStartDate(nextStart);
+      setMobileCurrentDate(nextCurrent);
+
+      const api = calendarRef.current?.getApi();
+      if (api) {
+        api.gotoDate(nextCurrent);
+      }
+
+      stripAnimationRef.current = { ...animation, phase: 'in' };
+      setStripTransitionMs(0);
+      setStripTranslateX(animation.direction > 0 ? animation.width : -animation.width);
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setStripTransitionMs(320);
+          setStripTranslateX(0);
+        });
+      });
+      return;
+    }
+
+    stripAnimationRef.current = { phase: 'idle', direction: 0, width: 0 };
+    setStripTransitionMs(0);
+    setStripTranslateX(0);
+  };
+
+  const handleMobileQuickCreate = () => {
+    const baseDate = dayjs(mobileCurrentDate);
+    const nowLocal = dayjs().tz(timezone);
+    const isToday = mobileCurrentDate === nowLocal.format('YYYY-MM-DD');
+    const start = isToday
+      ? roundLocalTimeToGranularity(nowLocal, timeGranularity)
+      : baseDate.hour(9).minute(0).second(0).millisecond(0);
+    const end = start.add(timeGranularity, 'minute');
+
+    setSelectedTask(null);
+    setSelectedRange({
+      allDay: false,
+      start: start.format('YYYY-MM-DDTHH:mm'),
+      end: end.format('YYYY-MM-DDTHH:mm'),
     });
     setModalOpen(true);
   };
@@ -227,7 +529,6 @@ function CalendarView() {
     const newStart = toServerISO(info.event.start);
     const newEnd = info.event.end ? toServerISO(info.event.end) : null;
 
-    // Fix 5: 重复任务拖拽提示
     if (isRecurring) {
       if (!confirm(t('calendar.recurringMoveConfirm'))) {
         info.revert();
@@ -265,7 +566,6 @@ function CalendarView() {
     const newStart = toServerISO(info.event.start);
     const newEnd = info.event.end ? toServerISO(info.event.end) : null;
 
-    // Fix 5: 重复任务缩放提示
     if (isRecurring) {
       if (!confirm(t('calendar.recurringResizeConfirm'))) {
         info.revert();
@@ -321,12 +621,18 @@ function CalendarView() {
 
   const renderEventContent = (arg) => {
     const completed = arg.event.extendedProps.status === 'completed';
-    const timeText = arg.timeText ? `${arg.timeText} ` : '';
+    const overlapCount = Number(arg.event.extendedProps?.overlapCount || 1);
+    const compactOverlap = overlapCount > 1;
     return (
-      <div className="flex min-w-0 items-center gap-1 px-1">
+      <div
+        className={`flex min-w-0 gap-1 ${compactOverlap ? 'items-start py-0.5' : 'items-center'} ${isCompactMobile ? 'px-0.5 text-[11px]' : 'px-1'}`}
+        title={arg.event.title}
+      >
         <button
           type="button"
-          className={`shrink-0 text-xs leading-none ${completed ? 'text-green-700' : 'text-gray-700'}`}
+          className={`shrink-0 leading-none ${isCompactMobile ? 'text-[11px]' : 'text-xs'} ${
+            completed ? 'text-green-700' : 'text-gray-700'
+          }`}
           title={completed ? t('task.markPending') : t('task.markComplete')}
           onClick={(e) => {
             e.preventDefault();
@@ -336,72 +642,245 @@ function CalendarView() {
         >
           {completed ? '✓' : '○'}
         </button>
-        <span className={`min-w-0 flex-1 truncate ${completed ? 'line-through opacity-80' : ''}`}>
-          {timeText}
-          {arg.event.title}
-        </span>
+        <div className="min-w-0 flex-1">
+          <span
+            className={`block min-w-0 leading-tight ${completed ? 'line-through opacity-80' : ''} ${
+              compactOverlap ? 'break-words whitespace-normal' : 'truncate'
+            }`}
+            style={
+              compactOverlap
+                ? {
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }
+                : undefined
+            }
+          >
+            {arg.event.title}
+          </span>
+        </div>
       </div>
     );
   };
 
+  const handleEventDidMount = (arg) => {
+    const overlapCount = Number(arg.event.extendedProps?.overlapCount || 1);
+    if (overlapCount <= 1) return;
+
+    const harness = arg.el?.parentElement;
+    if (!harness || !harness.classList?.contains('fc-timegrid-event-harness-inset')) return;
+
+    const leftPct = parsePercent(harness.style.left);
+    const rightPct = parsePercent(harness.style.right);
+    if (leftPct === null || rightPct === null) return;
+
+    const nextLeft = Math.max(0, leftPct - 12);
+    const nextRight = Math.max(0, rightPct - 2);
+    harness.style.left = `${nextLeft}%`;
+    harness.style.right = `${nextRight}%`;
+    harness.style.zIndex = '4';
+  };
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
-        <h2 className="text-xl font-semibold">{t('nav.calendar')}</h2>
-        <p className="text-sm text-gray-500">
-          {t('settings.timezone')}: {timezone === 'Asia/Shanghai' ? t('settings.timezoneCST') : timezone}
-        </p>
+    <div className="relative h-full flex flex-col bg-slate-100">
+      {!isCompactMobile && (
+        <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
+          <h2 className="text-xl font-semibold">{t('nav.calendar')}</h2>
+          <p className="text-sm text-gray-500">
+            {t('settings.timezone')}: {timezone === 'Asia/Shanghai' ? t('settings.timezoneCST') : timezone}
+          </p>
+        </div>
+      )}
+
+      {isCompactMobile && (
+        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+          <div className="flex items-center justify-between px-3 py-2">
+            <h2 className="text-xl font-semibold text-slate-800">{mobileMonthTitle}</h2>
+            <div className="relative flex items-center gap-1" ref={mobileViewMenuRef}>
+              <button
+                type="button"
+                onClick={() => navigate('/tasks?view=search')}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100"
+                title={t('common.search')}
+              >
+                <IconSearch className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleGoToday}
+                className="inline-flex items-center rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                title={t('calendar.today')}
+              >
+                {t('calendar.today')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileViewMenuOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600"
+                title={t('settings.calendarDefaultView')}
+              >
+                <IconList className="h-4 w-4" />
+                <span>{currentMobileViewLabel}</span>
+              </button>
+              {mobileViewMenuOpen && (
+                <div className="absolute right-0 top-10 z-30 w-28 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                  {mobileViewOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => handleMobileViewChange(option.value)}
+                      className={`block w-full rounded-md px-2 py-1.5 text-left text-xs ${
+                        mobileView === option.value
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="px-2 pb-2">
+            <div
+              ref={stripViewportRef}
+              className="overflow-hidden rounded-xl"
+              onPointerDown={handleStripPointerDown}
+              onPointerMove={handleStripPointerMove}
+              onPointerUp={handleStripPointerEnd}
+              onPointerCancel={handleStripPointerEnd}
+            >
+              <div
+                className="grid w-full grid-cols-7 gap-1"
+                style={{
+                  transform: `translate3d(${stripTranslateX}px, 0, 0)`,
+                  transition: stripTransitionMs > 0
+                    ? `transform ${stripTransitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`
+                    : 'none',
+                  touchAction: 'pan-y',
+                }}
+                onTransitionEnd={handleStripTransitionEnd}
+              >
+                {mobileDateStrip.map((dateValue) => {
+                  const dateKey = dateValue.format('YYYY-MM-DD');
+                  const active = dateKey === mobileCurrentDate;
+                  const isToday = dateKey === todayDateString;
+                  return (
+                    <button
+                      key={dateKey}
+                      type="button"
+                      onClick={(event) => {
+                        if (suppressStripClickRef.current) {
+                          event.preventDefault();
+                          return;
+                        }
+                        jumpToMobileDate(dateKey);
+                      }}
+                      className={`flex w-full flex-col items-center rounded-xl px-1 py-1.5 text-xs transition ${
+                        active
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : isToday
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span className="text-[10px] leading-4">{mobileWeekdayShort[dateValue.day()]}</span>
+                      <span className="text-sm font-semibold leading-4">{dateValue.format('D')}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'px-1 pt-1 pb-16' : 'overflow-auto p-4'}`}>
+        <div className={`h-full ${isCompactMobile ? 'rounded-xl border border-slate-200 bg-white shadow-sm' : ''}`}>
+          <FullCalendar
+            key={`${activeCalendarView}-${timezone}-${calendarLocale}-${isCompactMobile ? 'mobile' : 'desktop'}`}
+            ref={calendarRef}
+            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+            initialView={activeCalendarView}
+            initialDate={initialDate}
+            locale={calendarLocale}
+            timeZone="UTC"
+            headerToolbar={
+              isCompactMobile
+                ? false
+                : {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay',
+                  }
+            }
+            views={{
+              timeGridThreeDay: {
+                type: 'timeGrid',
+                duration: { days: 3 },
+              },
+            }}
+            buttonText={{
+              today: t('calendar.today'),
+              month: t('calendar.month'),
+              week: t('calendar.week'),
+              day: t('calendar.day'),
+            }}
+            editable={!isCompactMobile}
+            selectable={true}
+            selectMirror={true}
+            dayMaxEvents={true}
+            weekends={true}
+            events={events}
+            eventContent={renderEventContent}
+            eventDidMount={handleEventDidMount}
+            dateClick={handleDateClick}
+            select={handleSelect}
+            eventClick={handleEventClick}
+            eventDrop={handleEventDrop}
+            eventResize={handleEventResize}
+            datesSet={handleDatesSet}
+            height="100%"
+            nowIndicator={true}
+            now={calendarNow}
+            scrollTime={initialScrollTime}
+            eventTimeFormat={{
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            }}
+            slotDuration={slotDuration}
+            snapDuration={slotDuration}
+            displayEventEnd={true}
+            slotEventOverlap={true}
+            eventMaxStack={isCompactMobile ? 2 : 3}
+            eventMinHeight={isCompactMobile ? 28 : 34}
+            eventShortHeight={isCompactMobile ? 22 : 26}
+            className={isCompactMobile ? 'mobile-calendar' : ''}
+          />
+        </div>
       </div>
 
-      <div className="flex-1 p-4 overflow-auto">
-        <FullCalendar
-          key={`${calendarDefaultView}-${timezone}-${calendarLocale}`}
-          ref={calendarRef}
-          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView={calendarDefaultView}
-          initialDate={initialDate}
-          locale={calendarLocale}
-          timeZone="UTC"
-          headerToolbar={{
-            left: 'prev,next today',
-            center: 'title',
-            right: 'dayGridMonth,timeGridWeek,timeGridDay',
-          }}
-          buttonText={{
-            today: t('calendar.today'),
-            month: t('calendar.month'),
-            week: t('calendar.week'),
-            day: t('calendar.day'),
-          }}
-          editable={true}
-          selectable={true}
-          selectMirror={true}
-          dayMaxEvents={true}
-          weekends={true}
-          events={events}
-          eventContent={renderEventContent}
-          dateClick={handleDateClick}
-          select={handleSelect}
-          eventClick={handleEventClick}
-          eventDrop={handleEventDrop}
-          eventResize={handleEventResize}
-          datesSet={handleDatesSet}
-          height="100%"
-          nowIndicator={true}
-          scrollTime={initialScrollTime}
-          eventTimeFormat={{
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false
-          }}
-          slotDuration={slotDuration}
-          snapDuration={slotDuration}
-          displayEventEnd={true}
-        />
-      </div>
+      {isCompactMobile && (
+        <button
+          type="button"
+          onClick={handleMobileQuickCreate}
+          className="fixed bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg"
+          title={t('task.newTask')}
+        >
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+            <path d="M12 5V19" />
+            <path d="M5 12H19" />
+          </svg>
+        </button>
+      )}
 
       {loading && events.length === 0 && (
-        <div className="absolute inset-0 bg-white bg-opacity-50 flex items-center justify-center z-40">
+        <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-40">
           <div className="text-lg">{t('common.loading')}</div>
         </div>
       )}

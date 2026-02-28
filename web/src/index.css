@@ -191,3 +191,65 @@ body {
   content: none !important;
   display: none !important;
 }
+
+/* Mobile calendar layout modeled after compact Feishu-style day timeline */
+.mobile-calendar.fc {
+  font-size: 0.82rem;
+}
+
+.mobile-calendar .fc-toolbar {
+  display: none !important;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-col-header {
+  display: none;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-axis,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-axis {
+  width: 42px !important;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-axis-cushion,
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot-label-cushion,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-axis-cushion,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-slot-label-cushion {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-slot {
+  height: 2.45rem;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-divider,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-divider {
+  display: none;
+}
+
+.mobile-calendar .fc-timegrid-event {
+  border-radius: 6px;
+  padding: 0 2px;
+  overflow: hidden;
+}
+
+.mobile-calendar .fc-event-main-frame {
+  min-height: 20px;
+  overflow: hidden;
+}
+
+.mobile-calendar .fc-event-main {
+  overflow: hidden;
+}
+
+.mobile-calendar .fc-timegrid-event .fc-event-main,
+.mobile-calendar .fc-timegrid-event .fc-event-main-frame {
+  min-width: 0;
+}
+
+.mobile-calendar .fc-event-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}

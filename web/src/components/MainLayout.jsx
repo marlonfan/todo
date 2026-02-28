@@ -61,6 +61,10 @@ function MainLayout({ user, setUser }) {
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [mobilePrefs, setMobilePrefs] = useState(readMobilePrefsFromStorage);
   const didApplyMobileDefaultRef = useRef(false);
+  const initialLocationRef = useRef({
+    pathname: location.pathname,
+    search: location.search,
+  });
   const { data: categories = [] } = useCategoriesQuery();
 
   useEffect(() => {
@@ -91,9 +95,11 @@ function MainLayout({ user, setUser }) {
     if (typeof window === 'undefined') return;
     if (window.innerWidth >= 768) return;
     if (didApplyMobileDefaultRef.current) return;
-    if (location.pathname !== '/' || location.search) return;
-
     didApplyMobileDefaultRef.current = true;
+
+    const initialLocation = initialLocationRef.current;
+    if (initialLocation.pathname !== '/' || initialLocation.search) return;
+
     if (mobilePrefs.defaultTab === 'tasks') {
       navigate('/tasks?view=all', { replace: true });
       return;
@@ -101,7 +107,7 @@ function MainLayout({ user, setUser }) {
     if (mobilePrefs.defaultTab === 'settings') {
       navigate('/settings', { replace: true });
     }
-  }, [location.pathname, location.search, mobilePrefs.defaultTab, navigate]);
+  }, [mobilePrefs.defaultTab, navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
