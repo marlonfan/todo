@@ -559,3 +559,20 @@ body {
 .mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot {
   height: 1.95rem;
 }
+
+@media (hover: none) and (pointer: coarse) {
+  .todo-calendar.fc .fc-event {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .todo-calendar.fc.is-touch-dragging .fc-event:active {
+    opacity: 1 !important;
+    filter: none !important;
+    transform: none !important;
+  }
+
+  .todo-calendar.fc .fc-event:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+}

@@ -6,7 +6,14 @@ import { useTranslation } from 'react-i18next';
 import TaskModal from './TaskModal';
 import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
-import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
+import {
+  getShowCategoryEmoji,
+  onUIPrefsChanged,
+  getTaskListSortPref,
+  setTaskListSortPref,
+  getTaskListGroupPref,
+  setTaskListGroupPref,
+} from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
@@ -88,6 +95,22 @@ function sortTasksByOption(inputTasks, sortBy, timezone) {
   return cloned;
 }
 
+const SORT_OPTIONS = new Set(['due_asc', 'due_desc', 'priority_desc', 'priority_asc']);
+const GROUP_OPTIONS = new Set(['none', 'due', 'priority', 'category', 'status']);
+
+function resolveTaskListViewKey(view, categoryID) {
+  if (Number.isInteger(categoryID) && categoryID > 0) return `category:${categoryID}`;
+  return view || 'all';
+}
+
+function sanitizeSortValue(value) {
+  return SORT_OPTIONS.has(value) ? value : 'due_asc';
+}
+
+function sanitizeGroupValue(value) {
+  return GROUP_OPTIONS.has(value) ? value : 'none';
+}
+
 function TaskList({ forcedView = '' }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -129,6 +152,7 @@ function TaskList({ forcedView = '' }) {
   const legacySearchQuery = String(params.get('q') || '').trim();
   const categoryID = Number.parseInt(params.get('category_id') || '', 10);
   const activeCategoryID = Number.isNaN(categoryID) ? 0 : categoryID;
+  const viewPrefKey = useMemo(() => resolveTaskListViewKey(view, activeCategoryID), [activeCategoryID, view]);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
@@ -146,6 +170,34 @@ function TaskList({ forcedView = '' }) {
     if (view !== 'search') return;
     setSearchKeyword(legacySearchQuery);
   }, [legacySearchQuery, view]);
+
+  useEffect(() => {
+    const persistedSort = sanitizeSortValue(getTaskListSortPref(viewPrefKey) || 'due_asc');
+    const persistedGroupRaw = getTaskListGroupPref(viewPrefKey) || 'none';
+    const persistedGroup = view === 'search' ? 'status' : sanitizeGroupValue(persistedGroupRaw);
+    setSortBy(persistedSort);
+    setGroupBy(persistedGroup);
+  }, [view, viewPrefKey]);
+
+  useEffect(() => {
+    if (!viewPrefKey) return;
+    const nextSort = sanitizeSortValue(sortBy);
+    if (nextSort !== sortBy) {
+      setSortBy(nextSort);
+      return;
+    }
+    setTaskListSortPref(viewPrefKey, nextSort);
+  }, [sortBy, viewPrefKey]);
+
+  useEffect(() => {
+    if (!viewPrefKey || view === 'search') return;
+    const nextGroup = sanitizeGroupValue(groupBy);
+    if (nextGroup !== groupBy) {
+      setGroupBy(nextGroup);
+      return;
+    }
+    setTaskListGroupPref(viewPrefKey, nextGroup);
+  }, [groupBy, view, viewPrefKey]);
 
   useEffect(() => {
     const handleResize = () => {

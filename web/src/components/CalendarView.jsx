@@ -107,6 +107,7 @@ function CalendarView() {
   const stripAnimationRef = useRef({ phase: 'idle', direction: 0, width: 0 });
   const suppressStripClickRef = useRef(false);
   const pendingFocusDateRef = useRef('');
+  const touchDraggingEventRef = useRef(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -619,6 +620,19 @@ function CalendarView() {
     setModalOpen(true);
   };
 
+  const clearTouchDragUIState = useCallback(() => {
+    touchDraggingEventRef.current = false;
+    const root = calendarRef.current?.elRef?.current;
+    if (root) {
+      root.classList.remove('is-touch-dragging');
+      root.querySelectorAll('.fc-event-selected').forEach((node) => node.classList.remove('fc-event-selected'));
+    }
+    const activeElement = document.activeElement;
+    if (activeElement && typeof activeElement.blur === 'function') {
+      activeElement.blur();
+    }
+  }, []);
+
   const handleNavigatePeriod = (direction) => {
     const api = calendarRef.current?.getApi();
     if (!api) return;
@@ -772,6 +786,8 @@ function CalendarView() {
       updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to update schedule:', err);
       info.revert();
+    } finally {
+      clearTouchDragUIState();
     }
   };
 
@@ -806,6 +822,8 @@ function CalendarView() {
       updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to resize event:', err);
       info.revert();
+    } finally {
+      clearTouchDragUIState();
     }
   };
 
@@ -969,7 +987,7 @@ function CalendarView() {
       </div>
 
       {isCompactMobile && activeCalendarView !== 'dayGridMonth' && (
-        <div className="border-b border-slate-200 bg-white/90 px-2 pb-2 backdrop-blur">
+        <div className="border-b border-slate-200 bg-white/90 px-2 pt-1.5 pb-2 backdrop-blur">
             <div
               ref={stripViewportRef}
               className="overflow-hidden rounded-xl"
@@ -1048,6 +1066,9 @@ function CalendarView() {
             editable={true}
             selectable={true}
             selectMirror={true}
+            longPressDelay={500}
+            eventLongPressDelay={500}
+            selectLongPressDelay={500}
             dayMaxEvents={true}
             dayMaxEventRows={true}
             fixedWeekCount={false}
@@ -1058,6 +1079,23 @@ function CalendarView() {
             select={handleSelect}
             eventClick={handleEventClick}
             moreLinkClick={handleMoreLinkClick}
+            eventDragStart={(info) => {
+              const nativeEvent = info?.jsEvent;
+              const pointerType = nativeEvent?.pointerType || '';
+              const coarsePointer = typeof window !== 'undefined' &&
+                window.matchMedia &&
+                window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+              const isTouch = pointerType === 'touch' || coarsePointer;
+              if (!isTouch) return;
+              touchDraggingEventRef.current = true;
+              const root = calendarRef.current?.elRef?.current;
+              if (root) {
+                root.classList.add('is-touch-dragging');
+              }
+            }}
+            eventDragStop={() => {
+              clearTouchDragUIState();
+            }}
             eventDrop={handleEventDrop}
             eventResize={handleEventResize}
             datesSet={handleDatesSet}

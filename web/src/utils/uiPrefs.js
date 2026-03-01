@@ -1,4 +1,6 @@
 const KEY_SHOW_CATEGORY_EMOJI = 'ui_show_category_emoji';
+const KEY_TASKLIST_SORT = 'ui_tasklist_sort_by_v1';
+const KEY_TASKLIST_GROUP = 'ui_tasklist_group_by_v1';
 const EVENT_UI_PREFS_CHANGED = 'ui:prefs-changed';
 
 export function getShowCategoryEmoji() {
@@ -16,4 +18,53 @@ export function onUIPrefsChanged(handler) {
   if (typeof window === 'undefined') return () => {};
   window.addEventListener(EVENT_UI_PREFS_CHANGED, handler);
   return () => window.removeEventListener(EVENT_UI_PREFS_CHANGED, handler);
+}
+
+function readMap(key) {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function writeMap(key, value) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value || {}));
+    window.dispatchEvent(new CustomEvent(EVENT_UI_PREFS_CHANGED, { detail: { key } }));
+  } catch {
+    // ignore persistence failures in private mode/quota exceeded
+  }
+}
+
+export function getTaskListSortPref(viewKey) {
+  if (!viewKey) return '';
+  const map = readMap(KEY_TASKLIST_SORT);
+  return typeof map[viewKey] === 'string' ? map[viewKey] : '';
+}
+
+export function setTaskListSortPref(viewKey, value) {
+  if (!viewKey || !value) return;
+  const map = readMap(KEY_TASKLIST_SORT);
+  map[viewKey] = value;
+  writeMap(KEY_TASKLIST_SORT, map);
+}
+
+export function getTaskListGroupPref(viewKey) {
+  if (!viewKey) return '';
+  const map = readMap(KEY_TASKLIST_GROUP);
+  return typeof map[viewKey] === 'string' ? map[viewKey] : '';
+}
+
+export function setTaskListGroupPref(viewKey, value) {
+  if (!viewKey || !value) return;
+  const map = readMap(KEY_TASKLIST_GROUP);
+  map[viewKey] = value;
+  writeMap(KEY_TASKLIST_GROUP, map);
 }
