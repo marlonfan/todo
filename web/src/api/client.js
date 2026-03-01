@@ -41,21 +41,31 @@ export const authAPI = {
   updateProfile: (data) => apiClient.patch('/auth/profile', data),
 };
 
+function withIfMatch(options = {}) {
+  const revision = Number(options?.ifMatchRevision || 0);
+  if (!revision) return {};
+  return {
+    headers: {
+      'If-Match': String(revision),
+    },
+  };
+}
+
 // Tasks API
 export const tasksAPI = {
   list: (params) => apiClient.get('/tasks', { params }),
   get: (id) => apiClient.get(`/tasks/${id}`),
   create: (data) => apiClient.post('/tasks', data),
-  update: (id, data) => apiClient.put(`/tasks/${id}`, data),
-  delete: (id) => apiClient.delete(`/tasks/${id}`),
-  updateStatus: (id, dataOrStatus) => {
+  update: (id, data, options = {}) => apiClient.put(`/tasks/${id}`, data, withIfMatch(options)),
+  delete: (id, options = {}) => apiClient.delete(`/tasks/${id}`, withIfMatch(options)),
+  updateStatus: (id, dataOrStatus, options = {}) => {
     const payload =
       typeof dataOrStatus === 'string'
         ? { status: dataOrStatus }
         : dataOrStatus;
-    return apiClient.patch(`/tasks/${id}/status`, payload);
+    return apiClient.patch(`/tasks/${id}/status`, payload, withIfMatch(options));
   },
-  updateSchedule: (id, data) => apiClient.patch(`/tasks/${id}/schedule`, data),
+  updateSchedule: (id, data, options = {}) => apiClient.patch(`/tasks/${id}/schedule`, data, withIfMatch(options)),
   getInstances: (id, params) => apiClient.get(`/tasks/${id}/instances`, { params }),
   // Task notification
   listNotifications: (taskId) => apiClient.get(`/tasks/${taskId}/notifications`),

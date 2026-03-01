@@ -81,6 +81,10 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 	req.Header.Set("Title", msg.Title)
 	req.Header.Set("Priority", priority)
 	req.Header.Set("Tags", "todo,task")
+	if key := strings.TrimSpace(config["idempotency_key"]); key != "" {
+		req.Header.Set("X-Notification-Key", key)
+		req.Header.Set("Idempotency-Key", key)
+	}
 
 	// Add authorization token if provided
 	if authToken != "" {

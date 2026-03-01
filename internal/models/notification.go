@@ -26,6 +26,20 @@ const (
 	NotifyChannelWebhook  NotifyChannel = "webhook"
 )
 
+type NotificationSource string
+
+const (
+	NotificationSourceDefaultAuto NotificationSource = "default_auto"
+	NotificationSourceManual      NotificationSource = "manual"
+)
+
+type NotificationDeliveryMode string
+
+const (
+	NotificationDeliveryCurrentDefault NotificationDeliveryMode = "current_default"
+	NotificationDeliveryLockedSnapshot NotificationDeliveryMode = "locked_snapshot"
+)
+
 // NotifyConfig represents generic notification config
 type NotifyConfigMap map[string]string
 
@@ -51,16 +65,22 @@ func (c *NotifyConfigMap) Scan(value interface{}) error {
 }
 
 type Notification struct {
-	ID        int64           `json:"id" gorm:"primaryKey;autoIncrement"`
-	TaskID    int64           `json:"task_id" gorm:"index;not null"`
-	Channel   NotifyChannel   `json:"channel" gorm:"size:50;not null"`
-	Config    NotifyConfigMap `json:"config" gorm:"type:text;not null"`
-	NotifyAt  time.Time       `json:"notify_at" gorm:"index;not null"`
-	SentAt    *time.Time      `json:"sent_at"`
-	Status    NotifyStatus    `json:"status" gorm:"size:20;default:'pending'"`
-	ErrorMsg  string          `json:"error_msg,omitempty" gorm:"type:text"`
-	CreatedAt time.Time       `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
+	ID            int64                    `json:"id" gorm:"primaryKey;autoIncrement"`
+	TaskID        int64                    `json:"task_id" gorm:"index:idx_notifications_task_source,priority:1;not null"`
+	Source        NotificationSource       `json:"source" gorm:"size:30;default:'manual';index:idx_notifications_task_source,priority:2"`
+	DeliveryMode  NotificationDeliveryMode `json:"delivery_mode" gorm:"size:30;default:'locked_snapshot'"`
+	Channel       NotifyChannel            `json:"channel" gorm:"size:50;not null"`
+	Config        NotifyConfigMap          `json:"config" gorm:"type:text;not null"`
+	DedupeKey     string                   `json:"dedupe_key,omitempty" gorm:"size:120;index:idx_notifications_dedupe"`
+	NotifyAt      time.Time                `json:"notify_at" gorm:"index;not null"`
+	NextRetryAt   *time.Time               `json:"next_retry_at,omitempty" gorm:"index:idx_notifications_dispatch,priority:2"`
+	RetryCount    int                      `json:"retry_count" gorm:"not null;default:0"`
+	LastAttemptAt *time.Time               `json:"last_attempt_at,omitempty"`
+	SentAt        *time.Time               `json:"sent_at"`
+	Status        NotifyStatus             `json:"status" gorm:"size:20;default:'pending';index:idx_notifications_dispatch,priority:1"`
+	ErrorMsg      string                   `json:"error_msg,omitempty" gorm:"type:text"`
+	CreatedAt     time.Time                `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt     time.Time                `json:"updated_at" gorm:"autoUpdateTime"`
 
 	// Relations
 	Task *Task `json:"task,omitempty" gorm:"foreignKey:TaskID"`

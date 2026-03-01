@@ -154,6 +154,11 @@ export async function clearTasksAndSet(tasks) {
   await txDone(tx);
 }
 
+export async function removeTask(taskID) {
+  if (typeof taskID === 'undefined' || taskID === null) return;
+  await del(STORE_TASKS, taskID);
+}
+
 export async function readCategories() {
   return getAll(STORE_CATEGORIES);
 }
@@ -186,6 +191,22 @@ export async function getDueOutbox(now = Date.now(), limit = 50) {
 
 export async function removeOutbox(opID) {
   await del(STORE_OUTBOX, opID);
+}
+
+export async function removeOutboxByEntity(entityType, entityID) {
+  const all = await getAll(STORE_OUTBOX);
+  const targets = all.filter((op) => op?.entity_type === entityType && op?.entity_id === entityID);
+  if (!targets.length) return;
+
+  const db = await getDB();
+  const tx = db.transaction([STORE_OUTBOX], 'readwrite');
+  const store = tx.objectStore(STORE_OUTBOX);
+  targets.forEach((op) => {
+    if (op?.op_id) {
+      store.delete(op.op_id);
+    }
+  });
+  await txDone(tx);
 }
 
 export async function updateOutbox(opID, patch) {
@@ -234,6 +255,35 @@ export async function putCalendarRange(entry) {
 
 export async function listCalendarRanges() {
   return getAll(STORE_CALENDAR_RANGES);
+}
+
+export async function removeCalendarRange(key) {
+  if (!key) return;
+  await del(STORE_CALENDAR_RANGES, key);
+}
+
+export async function removeCalendarRanges(keys) {
+  const list = Array.isArray(keys) ? keys.filter(Boolean) : [];
+  if (!list.length) return;
+  const db = await getDB();
+  const tx = db.transaction([STORE_CALENDAR_RANGES], 'readwrite');
+  const store = tx.objectStore(STORE_CALENDAR_RANGES);
+  list.forEach((key) => store.delete(key));
+  await txDone(tx);
+}
+
+export async function invalidateCalendarRangesByTask(taskID) {
+  if (!taskID) return;
+  const ranges = await getAll(STORE_CALENDAR_RANGES);
+  const keys = ranges
+    .filter((entry) => {
+      const events = Array.isArray(entry?.events) ? entry.events : [];
+      return events.some((event) => Number(event?.extendedProps?.taskId) === Number(taskID));
+    })
+    .map((entry) => entry.key)
+    .filter(Boolean);
+
+  await removeCalendarRanges(keys);
 }
 
 export async function clearCalendarRanges() {

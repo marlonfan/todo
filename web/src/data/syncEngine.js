@@ -6,9 +6,11 @@ import {
   getDueOutbox,
   getMeta,
   readCategories,
+  readOutbox,
   readTasks,
   remapOutboxEntityID,
   removeOutbox,
+  removeTask,
   replaceCategories,
   replaceTaskID,
   setMeta,
@@ -16,6 +18,7 @@ import {
   upsertTasks,
   updateOutbox,
 } from './localStore';
+import { getCoalescePlan } from './outboxCoalesce';
 
 const SYNC_INTERVAL_MS = 15 * 1000;
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
@@ -25,6 +28,29 @@ let initialized = false;
 let running = false;
 let rerunRequested = false;
 let intervalID = null;
+const syncFinishedListeners = new Set();
+
+function emitSyncTrace(type, detail = {}) {
+  if (typeof window === 'undefined') return;
+  if (!window.__TODO_SYNC_DEBUG__) return;
+  window.dispatchEvent(new CustomEvent('sync:trace', {
+    detail: {
+      type,
+      at: new Date().toISOString(),
+      ...detail,
+    },
+  }));
+}
+
+function emitSyncCycleFinished(summary = {}) {
+  syncFinishedListeners.forEach((listener) => {
+    try {
+      listener(summary);
+    } catch (error) {
+      console.error('sync cycle listener failed:', error);
+    }
+  });
+}
 
 function wait(ms) {
   return new Promise((resolve) => {
@@ -48,8 +74,10 @@ function getTaskTimestamp(task) {
 }
 
 function normalizeServerTask(task) {
+  const revision = Number(task?.revision || 1);
   return {
     ...task,
+    revision,
     sync_state: 'synced',
     client_updated_at: task?.updated_at || nowISO(),
     last_error: '',
@@ -60,21 +88,29 @@ function mergeServerAndLocalTasks(serverTasks, localTasks) {
   const serverList = Array.isArray(serverTasks) ? serverTasks : [];
   const localList = Array.isArray(localTasks) ? localTasks : [];
 
-  const unsyncedByID = new Map();
+  const localByID = new Map();
   localList.forEach((task) => {
     if (!task) return;
-    if (Number(task.id) < 0 || task.sync_state === 'pending' || task.sync_state === 'syncing' || task.sync_state === 'error') {
-      unsyncedByID.set(task.id, task);
-    }
+    localByID.set(task.id, task);
   });
 
   const merged = serverList.map((task) => {
-    const localUnsynced = unsyncedByID.get(task.id);
-    if (localUnsynced) {
+    const localTask = localByID.get(task.id);
+    if (localTask && (localTask.sync_state === 'pending' || localTask.sync_state === 'syncing')) {
       return {
-        ...localUnsynced,
+        ...localTask,
         updated_at: task.updated_at,
       };
+    }
+    if (localTask && localTask.sync_state === 'error') {
+      const localTs = getTaskTimestamp(localTask);
+      const serverTs = getTaskTimestamp(task);
+      if (localTs > serverTs) {
+        return {
+          ...localTask,
+          updated_at: task.updated_at,
+        };
+      }
     }
     return normalizeServerTask(task);
   });
@@ -142,6 +178,11 @@ function getErrorMessage(error) {
 }
 
 async function executeOutboxOperation(op) {
+  emitSyncTrace('outbox_executing', {
+    op_id: op.op_id,
+    op_type: op.op_type,
+    entity_id: op.entity_id,
+  });
   switch (op.op_type) {
     case 'create': {
       const res = await tasksAPI.create(op.payload);
@@ -151,7 +192,9 @@ async function executeOutboxOperation(op) {
       return;
     }
     case 'update': {
-      const res = await tasksAPI.update(op.entity_id, op.payload);
+      const res = await tasksAPI.update(op.entity_id, op.payload, {
+        ifMatchRevision: op.if_match_revision,
+      });
       if (res?.data?.id) {
         await applyServerTask(res.data);
       } else {
@@ -160,13 +203,36 @@ async function executeOutboxOperation(op) {
       return;
     }
     case 'status': {
-      await tasksAPI.updateStatus(op.entity_id, op.payload);
-      await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+      const res = await tasksAPI.updateStatus(op.entity_id, op.payload, {
+        ifMatchRevision: op.if_match_revision,
+      });
+      if (res?.data?.id) {
+        await applyServerTask(res.data);
+      } else {
+        await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+      }
       return;
     }
     case 'schedule': {
-      await tasksAPI.updateSchedule(op.entity_id, op.payload);
-      await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+      const res = await tasksAPI.updateSchedule(op.entity_id, op.payload, {
+        ifMatchRevision: op.if_match_revision,
+      });
+      if (res?.data?.id) {
+        await applyServerTask(res.data);
+      } else {
+        await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+      }
+      return;
+    }
+    case 'delete': {
+      await tasksAPI.delete(op.entity_id, {
+        ifMatchRevision: op.if_match_revision,
+      });
+      queryClientRef?.setQueryData(queryKeys.tasks.all, (prev) => {
+        if (!Array.isArray(prev)) return prev;
+        return prev.filter((task) => task.id !== op.entity_id);
+      });
+      await removeTask(op.entity_id);
       return;
     }
     default:
@@ -178,9 +244,33 @@ async function handleOutboxFailure(op, error) {
   const status = error?.response?.status;
   const message = getErrorMessage(error);
 
+  if (status === 409) {
+    await removeOutbox(op.op_id);
+    const latest = error?.response?.data?.latest;
+    if (latest?.id) {
+      await applyServerTask(latest);
+    } else if (op.op_type !== 'delete') {
+      await patchTaskSyncState(op.entity_id, { sync_state: 'error', last_error: message });
+    }
+    emitSyncTrace('outbox_conflict', {
+      op_id: op.op_id,
+      op_type: op.op_type,
+      entity_id: op.entity_id,
+      message,
+    });
+    return;
+  }
+
   if (status && status >= 400 && status < 500 && status !== 429) {
     await removeOutbox(op.op_id);
     await patchTaskSyncState(op.entity_id, { sync_state: 'error', last_error: message });
+    emitSyncTrace('outbox_failed_non_retryable', {
+      op_id: op.op_id,
+      op_type: op.op_type,
+      entity_id: op.entity_id,
+      status,
+      message,
+    });
     return;
   }
 
@@ -192,6 +282,14 @@ async function handleOutboxFailure(op, error) {
     last_error: message,
   });
   await patchTaskSyncState(op.entity_id, { sync_state: 'error', last_error: message });
+  emitSyncTrace('outbox_failed_retryable', {
+    op_id: op.op_id,
+    op_type: op.op_type,
+    entity_id: op.entity_id,
+    status,
+    message,
+    retry_count: retryCount,
+  });
 }
 
 async function processOutbox() {
@@ -212,6 +310,11 @@ async function processOutbox() {
       try {
         await executeOutboxOperation(op);
         await removeOutbox(op.op_id);
+        emitSyncTrace('outbox_applied', {
+          op_id: op.op_id,
+          op_type: op.op_type,
+          entity_id: op.entity_id,
+        });
       } catch (error) {
         const status = error?.response?.status;
         await handleOutboxFailure(op, error);
@@ -244,6 +347,11 @@ async function pullServerData() {
     replaceCategories(categories),
     setMeta('last_pull_at', nowISO()),
   ]);
+  emitSyncTrace('pull_merged', {
+    server_tasks: serverTasks.length,
+    merged_tasks: mergedTasks.length,
+    categories: categories.length,
+  });
 }
 
 async function hydrateFromLocal() {
@@ -296,6 +404,7 @@ async function runSyncCycle(options = {}) {
   }
 
   running = true;
+  let syncError = null;
   try {
     await processOutbox();
     await pullServerData();
@@ -303,6 +412,7 @@ async function runSyncCycle(options = {}) {
       queryClientRef.setQueryData(queryKeys.sync.lastPull, nowISO());
     }
   } catch (error) {
+    syncError = error;
     if (silent) {
       // Keep silent for background sync; UI uses sync_state markers.
       console.error('Background sync failed:', error);
@@ -311,6 +421,11 @@ async function runSyncCycle(options = {}) {
     throw error;
   } finally {
     running = false;
+    emitSyncCycleFinished({
+      ok: !syncError,
+      error: syncError ? getErrorMessage(syncError) : '',
+      at: nowISO(),
+    });
     if (rerunRequested) {
       rerunRequested = false;
       setTimeout(() => {
@@ -326,11 +441,48 @@ export function scheduleSync() {
 
 export async function enqueueTaskOperation(op) {
   const now = Date.now();
-  await enqueueOutbox({
+  const normalized = {
     ...op,
     retry_count: Number(op.retry_count || 0),
     next_retry_at: Number(op.next_retry_at || now),
     created_at: Number(op.created_at || now),
+    if_match_revision: Number(op.if_match_revision || 0) || undefined,
+  };
+  const all = await readOutbox();
+  const plan = getCoalescePlan(all, normalized);
+
+  if (plan.mode === 'merge_into_create' && plan.updateCreate) {
+    await updateOutbox(plan.updateCreate.op_id, {
+      payload: plan.updateCreate.payload,
+      next_retry_at: now,
+    });
+    emitSyncTrace('mutation_coalesced_into_create', {
+      entity_id: normalized.entity_id,
+      op_type: normalized.op_type,
+    });
+    scheduleSync();
+    return;
+  }
+
+  if (plan.mode === 'replace_coalescible' || plan.mode === 'replace_with_delete' || plan.mode === 'drop_entity_ops') {
+    await Promise.all(plan.removeOpIDs.map((opID) => removeOutbox(opID)));
+    emitSyncTrace('mutation_coalesced', {
+      entity_id: normalized.entity_id,
+      removed_ops: plan.removeOpIDs.length,
+      mode: plan.mode,
+    });
+  }
+  if (plan.mode === 'drop_entity_ops' && !plan.normalized) {
+    scheduleSync();
+    return;
+  }
+
+  const finalOp = plan.normalized || normalized;
+  await enqueueOutbox(finalOp);
+  emitSyncTrace('mutation_enqueued', {
+    op_id: finalOp.op_id,
+    op_type: finalOp.op_type,
+    entity_id: finalOp.entity_id,
   });
   scheduleSync();
 }
@@ -393,4 +545,14 @@ export function stopSyncEngine() {
   running = false;
   rerunRequested = false;
   queryClientRef = null;
+}
+
+export function onSyncCycleFinished(callback) {
+  if (typeof callback !== 'function') {
+    return () => {};
+  }
+  syncFinishedListeners.add(callback);
+  return () => {
+    syncFinishedListeners.delete(callback);
+  };
 }

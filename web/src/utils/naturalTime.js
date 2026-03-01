@@ -1,23 +1,31 @@
 import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import timezone from 'dayjs/plugin/timezone';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const WEEKDAY_MAP = {
-  '日': 0,
-  '天': 0,
-  '一': 1,
-  '二': 2,
-  '三': 3,
-  '四': 4,
-  '五': 5,
-  '六': 6,
+const WEEKDAY_MAP_MONDAY = {
+  '一': 0,
+  '二': 1,
+  '三': 2,
+  '四': 3,
+  '五': 4,
+  '六': 5,
+  '日': 6,
+  '天': 6,
+  '末': 5,
 };
 
-const MARKER_REGEX =
-  /(今天|明天|后天|大后天|今晚|明晚|今早|明早|早上|上午|中午|下午|晚上|傍晚|凌晨|下周|这周|本周|周[一二三四五六日天]|星期[一二三四五六日天]|\d{1,4}[年/-]\d{1,2}[月/-]\d{1,2}[日号]?|\d{1,2}月\d{1,2}[日号]?|[一二三四五六七八九十两零〇廿卅]{1,3}月(?:\d{1,2}|[一二三四五六七八九十两零〇廿卅]{1,3})[日号]?|\d{1,2}\s*[:：]\s*\d{1,2}|\d{1,2}\s*点)/;
+const EN_WEEKDAY_MAP = {
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sunday: 0,
+};
 
 const CN_NUM_MAP = {
   '零': 0,
@@ -33,6 +41,72 @@ const CN_NUM_MAP = {
   '八': 8,
   '九': 9,
 };
+
+function mergeSpans(spans) {
+  if (!Array.isArray(spans) || spans.length === 0) return [];
+  const sorted = [...spans]
+    .filter((span) => Number.isInteger(span.start) && Number.isInteger(span.end) && span.end > span.start)
+    .sort((a, b) => a.start - b.start);
+  if (sorted.length === 0) return [];
+
+  const merged = [sorted[0]];
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    const last = merged[merged.length - 1];
+    if (current.start <= last.end) {
+      last.end = Math.max(last.end, current.end);
+      if (!last.type && current.type) last.type = current.type;
+      continue;
+    }
+    merged.push({ ...current });
+  }
+  return merged;
+}
+
+function cleanupTitleBySpans(input, spans) {
+  const source = String(input || '');
+  if (!source) return '';
+  if (!Array.isArray(spans) || spans.length === 0) {
+    return source.replace(/\s+/g, ' ').trim();
+  }
+
+  const chars = source.split('');
+  mergeSpans(spans).forEach((span) => {
+    for (let index = span.start; index < span.end && index < chars.length; index += 1) {
+      chars[index] = ' ';
+    }
+  });
+
+  return chars.join('')
+    .replace(/[，,。！？!?.、；;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractMatches(text, regex, builder) {
+  const result = [];
+  const source = String(text || '');
+  const localRegex = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : `${regex.flags}g`);
+  let match = localRegex.exec(source);
+  while (match) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const value = typeof builder === 'function' ? builder(match) : {};
+    result.push({
+      text: match[0],
+      start,
+      end,
+      ...value,
+    });
+    match = localRegex.exec(source);
+  }
+  return result;
+}
+
+function pickEarliest(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) return null;
+  return [...matches].sort((a, b) => a.start - b.start)[0];
+}
 
 function parseChineseNumber(raw) {
   const text = String(raw || '').trim();
@@ -62,47 +136,82 @@ function parseChineseNumber(raw) {
   return NaN;
 }
 
-function detectPartOfDay(text) {
-  if (/(凌晨)/.test(text)) return 'late-night';
-  if (/(早上|上午|早晨|今早|明早)/.test(text)) return 'morning';
-  if (/(中午)/.test(text)) return 'noon';
-  if (/(下午)/.test(text)) return 'afternoon';
-  if (/(晚上|今晚|明晚|傍晚)/.test(text)) return 'evening';
-  return '';
+function detectPartOfDayTokens(text) {
+  const cn = extractMatches(
+    text,
+    /(凌晨|早上|上午|早晨|今早|明早|中午|下午|晚上|傍晚|今晚|明晚)/g,
+    (match) => {
+      const word = match[1];
+      if (/凌晨/.test(word)) return { type: 'part_of_day', part: 'late-night' };
+      if (/(早上|上午|早晨|今早|明早)/.test(word)) return { type: 'part_of_day', part: 'morning' };
+      if (/中午/.test(word)) return { type: 'part_of_day', part: 'noon' };
+      if (/下午/.test(word)) return { type: 'part_of_day', part: 'afternoon' };
+      return { type: 'part_of_day', part: 'evening' };
+    }
+  );
+  const en = extractMatches(
+    text,
+    /\b(this morning|morning|noon|afternoon|evening|tonight|late night)\b/gi,
+    (match) => {
+      const word = String(match[1] || '').toLowerCase();
+      if (word === 'morning' || word === 'this morning') return { type: 'part_of_day', part: 'morning' };
+      if (word === 'noon') return { type: 'part_of_day', part: 'noon' };
+      if (word === 'afternoon') return { type: 'part_of_day', part: 'afternoon' };
+      if (word === 'late night') return { type: 'part_of_day', part: 'late-night' };
+      return { type: 'part_of_day', part: 'evening' };
+    }
+  );
+  return [...cn, ...en];
 }
 
-function parseHourMinute(text) {
-  const colonMatch = text.match(/(\d{1,2})\s*[:：]\s*(\d{1,2})/);
-  if (colonMatch) {
-    return {
-      hour: parseInt(colonMatch[1], 10),
-      minute: parseInt(colonMatch[2], 10),
-      matched: true,
-    };
-  }
+function parseHourMinuteTokens(text) {
+  const tokens = [];
 
-  const halfMatch = text.match(/(\d{1,2})\s*点\s*半/);
-  if (halfMatch) {
-    return {
-      hour: parseInt(halfMatch[1], 10),
+  tokens.push(
+    ...extractMatches(text, /(\d{1,2})\s*[:：]\s*(\d{1,2})/g, (match) => ({
+      type: 'time',
+      hour: parseInt(match[1], 10),
+      minute: parseInt(match[2], 10),
+      explicit: true,
+    }))
+  );
+  tokens.push(
+    ...extractMatches(text, /(\d{1,2})\s*点\s*半/g, (match) => ({
+      type: 'time',
+      hour: parseInt(match[1], 10),
       minute: 30,
-      matched: true,
-    };
-  }
+      explicit: true,
+    }))
+  );
+  tokens.push(
+    ...extractMatches(text, /(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分?)?/g, (match) => ({
+      type: 'time',
+      hour: parseInt(match[1], 10),
+      minute: match[2] ? parseInt(match[2], 10) : 0,
+      explicit: true,
+    }))
+  );
+  tokens.push(
+    ...extractMatches(text, /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi, (match) => ({
+      type: 'time',
+      hour: parseInt(match[1], 10),
+      minute: match[2] ? parseInt(match[2], 10) : 0,
+      ampm: String(match[3] || '').toLowerCase(),
+      explicit: true,
+    }))
+  );
 
-  const fullMatch = text.match(/(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分?)?/);
-  if (fullMatch) {
-    return {
-      hour: parseInt(fullMatch[1], 10),
-      minute: fullMatch[2] ? parseInt(fullMatch[2], 10) : 0,
-      matched: true,
-    };
-  }
-
-  return { hour: 9, minute: 0, matched: false };
+  return tokens;
 }
 
-function normalizeHour(partOfDay, hour) {
+function normalizeHour(partOfDay, hour, ampm = '') {
+  if (ampm === 'am') {
+    return hour === 12 ? 0 : hour;
+  }
+  if (ampm === 'pm') {
+    if (hour === 12) return 12;
+    return hour + 12;
+  }
   if (partOfDay === 'late-night') {
     if (hour === 12) return 0;
     return hour;
@@ -160,136 +269,279 @@ export function getNaturalTimeOptionsFromUser(user = {}) {
   };
 }
 
-function resolveWeekday(now, prefix, weekday) {
-  const today = now.startOf('day');
-  const todayWeekday = today.day();
-  let diff = (weekday - todayWeekday + 7) % 7;
-
-  if (prefix === '下周') diff += 7;
-  if (prefix === '下下周') diff += 14;
-  return today.add(diff, 'day');
+function mapMarkerCountToPriority(count) {
+  if (count >= 3) return 1;
+  if (count === 2) return 0;
+  return -1;
 }
 
-function resolveDate(text, now) {
-  const withYear = text.match(/(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})[日号]?/);
-  if (withYear) {
-    const year = parseInt(withYear[1], 10);
-    const month = parseInt(withYear[2], 10);
-    const day = parseInt(withYear[3], 10);
-    return now.year(year).month(month - 1).date(day).startOf('day');
-  }
-
-  const monthDay = text.match(/(\d{1,2})月(\d{1,2})[日号]?/);
-  if (monthDay) {
-    const month = parseInt(monthDay[1], 10);
-    const day = parseInt(monthDay[2], 10);
-    let resolved = now.month(month - 1).date(day).startOf('day');
-    if (resolved.isBefore(now.startOf('day'))) {
-      resolved = resolved.add(1, 'year');
-    }
-    return resolved;
-  }
-
-  const chineseMonthDay = text.match(/([一二三四五六七八九十两零〇廿卅]{1,3})月(\d{1,2}|[一二三四五六七八九十两零〇廿卅]{1,3})[日号]?/);
-  if (chineseMonthDay) {
-    const month = parseChineseNumber(chineseMonthDay[1]);
-    const day = parseChineseNumber(chineseMonthDay[2]);
-    if (Number.isFinite(month) && Number.isFinite(day) && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      let resolved = now.month(month - 1).date(day).startOf('day');
-      if (resolved.isBefore(now.startOf('day'))) {
-        resolved = resolved.add(1, 'year');
-      }
-      return resolved;
-    }
-  }
-
-  if (/大后天/.test(text)) return now.startOf('day').add(3, 'day');
-  if (/后天/.test(text)) return now.startOf('day').add(2, 'day');
-  if (/(明天|明早|明晚)/.test(text)) return now.startOf('day').add(1, 'day');
-  if (/(今天|今早|今晚)/.test(text)) return now.startOf('day');
-
-  const weekdayMatch = text.match(/(下下周|下周|这周|本周)?(?:周|星期)([一二三四五六日天])/);
-  if (weekdayMatch) {
-    const prefix = weekdayMatch[1] || '';
-    const weekday = WEEKDAY_MAP[weekdayMatch[2]];
-    return resolveWeekday(now, prefix, weekday);
-  }
-
-  return now.startOf('day');
+function isWhitespace(char) {
+  return typeof char === 'string' && /\s/.test(char);
 }
 
-function cleanupTitle(input) {
-  const patterns = [
-    /(今天|明天|后天|大后天|今晚|明晚|今早|明早|早上|上午|中午|下午|晚上|傍晚|凌晨)/g,
-    /(下下周|下周|这周|本周)?(?:周|星期)[一二三四五六日天]/g,
-    /\d{1,4}[年/-]\d{1,2}[月/-]\d{1,2}[日号]?/g,
-    /\d{1,2}月\d{1,2}[日号]?/g,
-    /[一二三四五六七八九十两零〇廿卅]{1,3}月(?:\d{1,2}|[一二三四五六七八九十两零〇廿卅]{1,3})[日号]?/g,
-    /\d{1,2}\s*[:：]\s*\d{1,2}/g,
-    /\d{1,2}\s*点\s*半/g,
-    /\d{1,2}\s*点(?:\s*\d{1,2}\s*分?)?/g,
-  ];
+export function parsePriorityFromTitle(title) {
+  const raw = String(title || '');
+  if (!raw.trim()) return null;
 
-  let cleaned = input;
-  patterns.forEach((pattern) => {
-    cleaned = cleaned.replace(pattern, ' ');
-  });
+  const matches = [];
+  const regex = /[!！]{1,}/g;
+  let match = regex.exec(raw);
+  while (match) {
+    const marker = match[0];
+    const count = marker.length;
+    const start = match.index;
+    const end = start + marker.length;
+    const prev = start > 0 ? raw[start - 1] : '';
+    const next = end < raw.length ? raw[end] : '';
+    const atStart = start === 0;
+    const atEnd = end === raw.length;
+    const standalone = (atStart || isWhitespace(prev)) && (atEnd || isWhitespace(next));
+    const suffixNoSpace = atEnd && count >= 2;
+    if (standalone || atStart || suffixNoSpace) {
+      matches.push({ start, end, count });
+    }
+    match = regex.exec(raw);
+  }
 
-  cleaned = cleaned
-    .replace(/[，,。！？!?.]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  if (matches.length === 0) return null;
 
-  return cleaned;
+  const strongest = matches.reduce((best, current) => (current.count > best.count ? current : best), matches[0]);
+  const cleanedTitle = cleanupTitleBySpans(raw, matches).trim() || raw.trim();
+  return {
+    priority: mapMarkerCountToPriority(strongest.count),
+    cleanedTitle,
+    marker: '!'.repeat(Math.min(strongest.count, 3)),
+  };
+}
+
+function resolveWeekday(now, prefix, weekdayChar) {
+  const weekday = WEEKDAY_MAP_MONDAY[weekdayChar];
+  if (!Number.isInteger(weekday)) return now.startOf('day');
+
+  const mondayOffset = (now.day() + 6) % 7;
+  const weekStart = now.startOf('day').subtract(mondayOffset, 'day');
+  let weekShift = 0;
+  if (prefix === '下') weekShift = 1;
+  if (prefix === '下下') weekShift = 2;
+
+  return weekStart.add((weekShift * 7) + weekday, 'day');
+}
+
+function resolveEnglishWeekday(now, weekdayValue, hasNextPrefix = false) {
+  const targetWeekday = EN_WEEKDAY_MAP[String(weekdayValue || '').toLowerCase()];
+  if (!Number.isInteger(targetWeekday)) return now.startOf('day');
+  let diff = (targetWeekday - now.day() + 7) % 7;
+  if (hasNextPrefix) {
+    diff += 7;
+  } else if (diff === 0) {
+    diff = 7;
+  }
+  return now.startOf('day').add(diff, 'day');
+}
+
+function parseNow(timezoneName, options = {}) {
+  const tz = timezoneName || 'UTC';
+  if (options.now) {
+    if (dayjs.isDayjs(options.now)) {
+      return options.now.tz(tz);
+    }
+    return dayjs(options.now).tz(tz);
+  }
+  return dayjs().tz(tz);
 }
 
 export function parseNaturalTimeFromTitle(title, timezoneName, options = {}) {
   const raw = String(title || '').trim();
   if (!raw) return null;
-  if (!MARKER_REGEX.test(raw)) return null;
-
-  const now = dayjs().tz(timezoneName || 'UTC');
+  const now = parseNow(timezoneName, options);
   const { hour: defaultHour, minute: defaultMinute } = parseDefaultTime(options.defaultStartTime);
   const morningTime = parseDefaultTime(options.morningTime, { hour: 9, minute: 0 });
   const noonTime = parseDefaultTime(options.noonTime, { hour: 12, minute: 0 });
   const afternoonTime = parseDefaultTime(options.afternoonTime, { hour: 15, minute: 0 });
   const eveningTime = parseDefaultTime(options.eveningTime, { hour: 20, minute: 0 });
-  const partOfDay = detectPartOfDay(raw);
-  const date = resolveDate(raw, now);
-  const parsedTime = parseHourMinute(raw);
 
-  let hour = parsedTime.hour;
-  let minute = parsedTime.minute;
-  if (!parsedTime.matched) {
-    if (partOfDay === 'morning') {
-      hour = morningTime.hour;
-      minute = morningTime.minute;
-    } else if (partOfDay === 'noon') {
-      hour = noonTime.hour;
-      minute = noonTime.minute;
-    } else if (partOfDay === 'afternoon') {
-      hour = afternoonTime.hour;
-      minute = afternoonTime.minute;
-    } else if (partOfDay === 'evening') {
-      hour = eveningTime.hour;
-      minute = eveningTime.minute;
-    } else {
-      hour = defaultHourByPart(partOfDay, defaultHour);
-      minute = partOfDay ? 0 : defaultMinute;
+  const absoluteYearTokens = extractMatches(
+    raw,
+    /(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})[日号]?/g,
+    (match) => ({
+      type: 'absolute_date',
+      year: parseInt(match[1], 10),
+      month: parseInt(match[2], 10),
+      day: parseInt(match[3], 10),
+      rule: 'absolute_year_date',
+    })
+  );
+  const absoluteMonthDayTokens = extractMatches(
+    raw,
+    /(\d{1,2})月(\d{1,2})[日号]?/g,
+    (match) => ({
+      type: 'absolute_month_day',
+      month: parseInt(match[1], 10),
+      day: parseInt(match[2], 10),
+      rule: 'absolute_month_day',
+    })
+  );
+  const absoluteMonthDayChineseTokens = extractMatches(
+    raw,
+    /([一二三四五六七八九十两零〇廿卅]{1,3})月(\d{1,2}|[一二三四五六七八九十两零〇廿卅]{1,3})[日号]?/g,
+    (match) => ({
+      type: 'absolute_month_day',
+      month: parseChineseNumber(match[1]),
+      day: parseChineseNumber(match[2]),
+      rule: 'absolute_cn_month_day',
+    })
+  ).filter((token) => Number.isFinite(token.month) && Number.isFinite(token.day));
+  const relativeDateTokens = extractMatches(
+    raw,
+    /(大后天|后天|明天|今天|明早|今早|明晚|今晚|day after tomorrow|tomorrow|today|tonight|this morning)/gi,
+    (match) => {
+      const value = String(match[1] || '').toLowerCase();
+      if (value === '大后天') return { type: 'relative_date', offset: 3, rule: 'relative_day_3' };
+      if (value === '后天' || value === 'day after tomorrow') return { type: 'relative_date', offset: 2, rule: 'relative_day_2' };
+      if (value === '明天' || value === '明早' || value === '明晚' || value === 'tomorrow') return { type: 'relative_date', offset: 1, rule: 'relative_day_1' };
+      return { type: 'relative_date', offset: 0, rule: 'relative_day_0' };
     }
+  );
+  const weekTokens = extractMatches(
+    raw,
+    /((?:下下|下|本|这)?)(?:周|星期|礼拜)(末|[一二三四五六日天])/g,
+    (match) => ({
+      type: 'weekday',
+      prefix: match[1] || '',
+      weekday: match[2],
+      rule: 'cn_weekday',
+    })
+  );
+  const enNextWeekTokens = extractMatches(
+    raw,
+    /\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi,
+    (match) => ({
+      type: 'weekday',
+      prefix: 'next',
+      weekdayEn: String(match[1] || '').toLowerCase(),
+      rule: 'en_next_weekday',
+    })
+  );
+  const enWeekdayTokens = extractMatches(
+    raw,
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi,
+    (match) => ({
+      type: 'weekday',
+      prefix: '',
+      weekdayEn: String(match[1] || '').toLowerCase(),
+      rule: 'en_weekday',
+    })
+  ).filter((token) => !enNextWeekTokens.some((nextToken) => token.start >= nextToken.start && token.end <= nextToken.end));
+  const partTokens = detectPartOfDayTokens(raw);
+  const timeTokens = parseHourMinuteTokens(raw);
+
+  const allTemporalTokens = [
+    ...absoluteYearTokens,
+    ...absoluteMonthDayTokens,
+    ...absoluteMonthDayChineseTokens,
+    ...relativeDateTokens,
+    ...weekTokens,
+    ...enNextWeekTokens,
+    ...enWeekdayTokens,
+    ...partTokens,
+    ...timeTokens,
+  ];
+  if (allTemporalTokens.length === 0) return null;
+
+  let date = now.startOf('day');
+  let hasDateInfo = false;
+  const appliedRules = [];
+
+  const absoluteYearToken = pickEarliest(absoluteYearTokens);
+  const absoluteMonthDayToken = pickEarliest([...absoluteMonthDayTokens, ...absoluteMonthDayChineseTokens]);
+  const relativeToken = pickEarliest(relativeDateTokens);
+  const weekToken = pickEarliest(weekTokens);
+  const enWeekToken = pickEarliest([...enNextWeekTokens, ...enWeekdayTokens]);
+
+  if (absoluteYearToken) {
+    date = date.year(absoluteYearToken.year).month(absoluteYearToken.month - 1).date(absoluteYearToken.day);
+    hasDateInfo = true;
+    appliedRules.push(absoluteYearToken.rule);
+  } else if (absoluteMonthDayToken) {
+    let resolved = date.month(absoluteMonthDayToken.month - 1).date(absoluteMonthDayToken.day);
+    if (resolved.isBefore(now.startOf('day'))) {
+      resolved = resolved.add(1, 'year');
+    }
+    date = resolved;
+    hasDateInfo = true;
+    appliedRules.push(absoluteMonthDayToken.rule);
+  } else if (relativeToken) {
+    date = date.add(relativeToken.offset, 'day');
+    hasDateInfo = true;
+    appliedRules.push(relativeToken.rule);
+  } else if (weekToken) {
+    date = resolveWeekday(now, weekToken.prefix, weekToken.weekday);
+    hasDateInfo = true;
+    appliedRules.push(weekToken.rule);
+  } else if (enWeekToken) {
+    date = resolveEnglishWeekday(now, enWeekToken.weekdayEn, enWeekToken.prefix === 'next');
+    hasDateInfo = true;
+    appliedRules.push(enWeekToken.rule);
   }
-  hour = normalizeHour(partOfDay, hour);
+
+  const partToken = pickEarliest(partTokens);
+  const timeToken = pickEarliest(timeTokens);
+  if (partToken) {
+    appliedRules.push('part_of_day');
+  }
+  if (timeToken) {
+    appliedRules.push('explicit_time');
+  }
+
+  const partOfDay = partToken?.part || '';
+  let hour = defaultHour;
+  let minute = defaultMinute;
+
+  if (timeToken) {
+    hour = timeToken.hour;
+    minute = timeToken.minute;
+    hour = normalizeHour(partOfDay, hour, timeToken.ampm || '');
+  } else if (partOfDay === 'morning') {
+    hour = morningTime.hour;
+    minute = morningTime.minute;
+  } else if (partOfDay === 'noon') {
+    hour = noonTime.hour;
+    minute = noonTime.minute;
+  } else if (partOfDay === 'afternoon') {
+    hour = afternoonTime.hour;
+    minute = afternoonTime.minute;
+  } else if (partOfDay === 'evening') {
+    hour = eveningTime.hour;
+    minute = eveningTime.minute;
+  } else {
+    hour = defaultHourByPart(partOfDay, defaultHour);
+    minute = partOfDay ? 0 : defaultMinute;
+  }
+
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
     return null;
   }
 
   const parsed = date.hour(hour).minute(minute).second(0);
+  const confidence = hasDateInfo ? 'high' : (timeToken || partToken ? 'medium' : 'low');
+  const matchedSpans = mergeSpans(
+    allTemporalTokens.map((token) => ({
+      start: token.start,
+      end: token.end,
+      type: token.type || '',
+      text: token.text || '',
+    }))
+  );
+  const cleanedTitle = cleanupTitleBySpans(raw, matchedSpans);
 
-  const cleanedTitle = cleanupTitle(raw);
   return {
     parsedAtISO: parsed.toISOString(),
     parsedAtInput: parsed.format('YYYY-MM-DDTHH:mm'),
     parsedAtDisplay: parsed.format('YYYY-MM-DD HH:mm:ss'),
     cleanedTitle: cleanedTitle || raw,
+    confidence,
+    matchedSpans,
+    appliedRules: Array.from(new Set(appliedRules)),
+    ambiguous: !hasDateInfo,
   };
 }

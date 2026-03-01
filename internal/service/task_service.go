@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +19,27 @@ type TaskService struct {
 	catRepo    *repository.CategoryRepository
 	userRepo   *repository.UserRepository
 	notifyRepo *repository.NotificationRepository
+}
+
+type RevisionConflictError struct {
+	Latest *models.Task
+}
+
+func (e *RevisionConflictError) Error() string {
+	return "revision conflict"
+}
+
+func checkRevision(expected *int64, task *models.Task) error {
+	if expected == nil || task == nil {
+		return nil
+	}
+	if task.Revision <= 0 {
+		task.Revision = 1
+	}
+	if *expected == task.Revision {
+		return nil
+	}
+	return &RevisionConflictError{Latest: task}
 }
 
 func NewTaskService(
@@ -58,6 +80,7 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 		EndTime:           req.EndTime,
 		DueDate:           req.DueDate,
 		AllDay:            req.AllDay,
+		Revision:          1,
 		RecurrenceRule:    req.RecurrenceRule,
 		RecurrenceEndDate: req.RecurrenceEndDate,
 	}
@@ -80,7 +103,7 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 	}
 
 	if err := s.syncTaskReminder(userID, savedTask); err != nil {
-		return nil, err
+		log.Printf("Warning: failed to sync reminder after task create for user %d task %d: %v", userID, savedTask.ID, err)
 	}
 
 	return savedTask, nil
@@ -101,7 +124,7 @@ func (s *TaskService) List(userID int64, filters map[string]interface{}) ([]mode
 	return s.taskRepo.List(userID, filters)
 }
 
-func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest, fieldMask map[string]bool) (*models.Task, error) {
+func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest, fieldMask map[string]bool, expectedRevision *int64) (*models.Task, error) {
 	if err := normalizeTaskTimes(req.ClientTimezone, req.StartTimeLocal, req.EndTimeLocal, &req.StartTime, &req.EndTime); err != nil {
 		return nil, err
 	}
@@ -111,6 +134,9 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("task not found")
 		}
+		return nil, err
+	}
+	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
 
@@ -153,6 +179,11 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 		task.RecurrenceEndDate = req.RecurrenceEndDate
 	}
 
+	if task.Revision <= 0 {
+		task.Revision = 1
+	}
+	task.Revision += 1
+
 	if err := s.taskRepo.Update(task); err != nil {
 		return nil, err
 	}
@@ -177,43 +208,97 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	}
 
 	if err := s.syncTaskReminder(userID, updatedTask); err != nil {
-		return nil, err
+		log.Printf("Warning: failed to sync reminder after task update for user %d task %d: %v", userID, updatedTask.ID, err)
 	}
 
 	return updatedTask, nil
 }
 
-func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatus, instanceID, occurrenceDate string) error {
+func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatus, instanceID, occurrenceDate string, expectedRevision *int64) (*models.Task, error) {
 	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("task not found")
+			return nil, errors.New("task not found")
 		}
-		return err
+		return nil, err
+	}
+	if err := checkRevision(expectedRevision, task); err != nil {
+		return nil, err
 	}
 
 	if task.RecurrenceRule != nil {
 		date, found, err := parseOccurrenceDate(instanceID, occurrenceDate)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if found {
 			// Store only overrides that differ from the base task status.
 			if status == task.Status {
-				return s.taskRepo.DeleteOccurrenceStatus(userID, taskID, date)
+				if err := s.taskRepo.DeleteOccurrenceStatus(userID, taskID, date); err != nil {
+					return nil, err
+				}
+				return task, nil
 			}
-			return s.taskRepo.UpsertOccurrenceStatus(userID, taskID, date, status)
+			if err := s.taskRepo.UpsertOccurrenceStatus(userID, taskID, date, status); err != nil {
+				return nil, err
+			}
+			return task, nil
 		}
 	}
 
 	task.Status = status
-	if err := s.taskRepo.Update(task); err != nil {
-		return err
+	if task.Revision <= 0 {
+		task.Revision = 1
 	}
-	return s.syncTaskReminder(userID, task)
+	task.Revision += 1
+	if err := s.taskRepo.Update(task); err != nil {
+		return nil, err
+	}
+	if err := s.syncTaskReminder(userID, task); err != nil {
+		log.Printf("Warning: failed to sync reminder after task status update for user %d task %d: %v", userID, task.ID, err)
+	}
+	updatedTask, err := s.taskRepo.GetByID(task.ID)
+	if err != nil {
+		return nil, err
+	}
+	return updatedTask, nil
 }
 
-func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTaskScheduleRequest) error {
+func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTaskScheduleRequest, expectedRevision *int64) (*models.Task, error) {
+	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("task not found")
+		}
+		return nil, err
+	}
+	if err := checkRevision(expectedRevision, task); err != nil {
+		return nil, err
+	}
+
+	task.StartTime = req.StartTime
+	task.EndTime = req.EndTime
+	task.AllDay = req.AllDay
+	if task.Revision <= 0 {
+		task.Revision = 1
+	}
+	task.Revision += 1
+
+	if err := s.taskRepo.Update(task); err != nil {
+		return nil, err
+	}
+	if err := s.syncTaskReminder(userID, task); err != nil {
+		log.Printf("Warning: failed to sync reminder after task schedule update for user %d task %d: %v", userID, task.ID, err)
+	}
+	updatedTask, err := s.taskRepo.GetByID(task.ID)
+	if err != nil {
+		return nil, err
+	}
+	return updatedTask, nil
+}
+
+func (s *TaskService) Delete(userID, taskID int64, expectedRevision *int64) error {
+	// Verify ownership
 	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -221,24 +306,7 @@ func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTas
 		}
 		return err
 	}
-
-	task.StartTime = req.StartTime
-	task.EndTime = req.EndTime
-	task.AllDay = req.AllDay
-
-	if err := s.taskRepo.Update(task); err != nil {
-		return err
-	}
-	return s.syncTaskReminder(userID, task)
-}
-
-func (s *TaskService) Delete(userID, taskID int64) error {
-	// Verify ownership
-	_, err := s.taskRepo.GetByIDAndUser(taskID, userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("task not found")
-		}
+	if err := checkRevision(expectedRevision, task); err != nil {
 		return err
 	}
 
@@ -290,13 +358,18 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	}
 
 	notification := &models.Notification{
-		TaskID:   task.ID,
-		Channel:  defaultSetting.Channel,
-		Config:   defaultSetting.Config,
-		NotifyAt: notifyAt,
-		Status:   models.NotifyStatusPending,
+		TaskID:       task.ID,
+		Source:       models.NotificationSourceDefaultAuto,
+		DeliveryMode: models.NotificationDeliveryCurrentDefault,
+		Channel:      defaultSetting.Channel,
+		Config:       defaultSetting.Config,
+		NotifyAt:     notifyAt,
+		NextRetryAt:  &notifyAt,
+		DedupeKey:    fmt.Sprintf("%d|%s|%s", task.ID, models.NotificationSourceDefaultAuto, notifyAt.UTC().Format(time.RFC3339)),
+		RetryCount:   0,
+		Status:       models.NotifyStatusPending,
 	}
-	return s.notifyRepo.Create(notification)
+	return s.notifyRepo.ReplaceActiveByTaskSource(notification)
 }
 
 // ExpandRecurringTasks expands recurring tasks within a date range

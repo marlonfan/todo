@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"todo-app/internal/models"
+)
 
 func TestParseOccurrenceDateFromInstanceID(t *testing.T) {
 	got, found, err := parseOccurrenceDate("12_20260227", "")
@@ -34,5 +38,38 @@ func TestParseOccurrenceDateInvalid(t *testing.T) {
 	}
 	if _, _, err := parseOccurrenceDate("", "2026/03/01"); err == nil {
 		t.Fatalf("expected invalid occurrence_date error")
+	}
+}
+
+func TestCheckRevisionNilExpectedAllowsWrite(t *testing.T) {
+	task := &models.Task{Revision: 3}
+	if err := checkRevision(nil, task); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestCheckRevisionMatch(t *testing.T) {
+	expected := int64(2)
+	task := &models.Task{Revision: 2}
+	if err := checkRevision(&expected, task); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestCheckRevisionConflictReturnsLatestTask(t *testing.T) {
+	expected := int64(1)
+	task := &models.Task{ID: 99, Revision: 2, Title: "latest"}
+
+	err := checkRevision(&expected, task)
+	if err == nil {
+		t.Fatalf("expected revision conflict")
+	}
+
+	var conflict *RevisionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected RevisionConflictError, got %T", err)
+	}
+	if conflict.Latest == nil || conflict.Latest.ID != 99 {
+		t.Fatalf("expected latest task snapshot to be returned")
 	}
 }

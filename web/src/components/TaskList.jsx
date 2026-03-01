@@ -1,19 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import TaskModal from './TaskModal';
 import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
-import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
+import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import {
-  cancelTaskLocal,
   createTaskLocal,
+  deleteTaskLocal,
   updateTaskLocal,
   updateTaskStatusLocal,
 } from '../data/taskMutations';
@@ -88,9 +88,10 @@ function sortTasksByOption(inputTasks, sortBy, timezone) {
   return cloned;
 }
 
-function TaskList() {
+function TaskList({ forcedView = '' }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const location = useLocation();
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
@@ -123,11 +124,28 @@ function TaskList() {
   const draftTouchedRef = useRef(false);
 
   const params = new URLSearchParams(location.search);
-  const view = params.get('view') || 'all';
+  const isSearchPath = location.pathname === '/search';
+  const view = forcedView || (isSearchPath ? 'search' : (params.get('view') || 'all'));
+  const legacySearchQuery = String(params.get('q') || '').trim();
   const categoryID = Number.parseInt(params.get('category_id') || '', 10);
   const activeCategoryID = Number.isNaN(categoryID) ? 0 : categoryID;
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
+
+  useEffect(() => {
+    if (view !== 'search' || isSearchPath) return;
+    const keyword = searchKeyword.trim() || legacySearchQuery;
+    if (keyword) {
+      navigate(`/search?q=${encodeURIComponent(keyword)}`, { replace: true });
+      return;
+    }
+    navigate('/search', { replace: true });
+  }, [isSearchPath, legacySearchQuery, navigate, searchKeyword, view]);
+
+  useEffect(() => {
+    if (view !== 'search') return;
+    setSearchKeyword(legacySearchQuery);
+  }, [legacySearchQuery, view]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -503,15 +521,17 @@ function TaskList() {
       } catch {
         storedUser = {};
       }
-      const parsedNaturalTime = parseNaturalTimeFromTitle(title, timezone, getNaturalTimeOptionsFromUser(storedUser));
-      const normalizedTitle = (parsedNaturalTime?.cleanedTitle || title).trim() || title;
+      const parsedPriority = parsePriorityFromTitle(title);
+      const priorityNormalizedTitle = (parsedPriority?.cleanedTitle || title).trim() || title;
+      const parsedNaturalTime = parseNaturalTimeFromTitle(priorityNormalizedTitle, timezone, getNaturalTimeOptionsFromUser(storedUser));
+      const normalizedTitle = (parsedNaturalTime?.cleanedTitle || priorityNormalizedTitle).trim() || priorityNormalizedTitle;
       const now = dayjs().tz(timezone);
       const { hour, minute } = getDefaultStartTimeParts();
       const startLocal = parsedNaturalTime?.parsedAtInput || now.hour(hour).minute(minute).second(0).format('YYYY-MM-DDTHH:mm');
       const payload = {
         title: normalizedTitle,
         description: '',
-        priority: 0,
+        priority: Number.isInteger(parsedPriority?.priority) ? parsedPriority.priority : 0,
         all_day: false,
         client_timezone: timezone,
         start_time: toISOString(startLocal),
@@ -671,7 +691,8 @@ function TaskList() {
     if (!confirm(t('task.deleteConfirm'))) return;
 
     try {
-      await cancelTaskLocal(queryClient, selectedTask.id);
+      await deleteTaskLocal(queryClient, selectedTask.id);
+      setSelectedTaskID(0);
     } catch (err) {
       console.error('Failed to delete task:', err);
     }
@@ -841,26 +862,26 @@ function TaskList() {
         <section className="flex h-full min-h-0 flex-col border border-slate-200 bg-white">
           {showListHeader && (
             <div className="border-b border-slate-200 px-3 py-2.5">
-              <div className="flex items-center justify-end gap-2 md:justify-between">
-                <div className="hidden min-w-0 md:block">
+              <div className="flex items-center justify-end gap-2 md:gap-3">
+                <div className="hidden min-w-0 md:block md:flex-none">
                   <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
                   <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
                 </div>
-                <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 items-center gap-2 md:flex-1">
                   {view === 'search' && (
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 md:w-56 md:flex-none">
-                      <IconSearch className="h-3.5 w-3.5 text-slate-400" />
+                    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm ring-1 ring-transparent focus-within:border-slate-400 focus-within:ring-slate-200">
+                      <IconSearch className="h-4 w-4 text-slate-400" />
                       <input
                         value={searchKeyword}
                         onChange={(event) => setSearchKeyword(event.target.value)}
                         placeholder={t('task.searchPlaceholder')}
-                        className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
+                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
                       />
                     </div>
                   )}
                   {canQuickCreate && (
-                    <div className="hidden w-44 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:w-56 md:flex">
-                      <IconSearch className="h-3.5 w-3.5 text-slate-400" />
+                    <div className="hidden min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm ring-1 ring-transparent focus-within:border-slate-400 focus-within:ring-slate-200 md:flex">
+                      <IconSearch className="h-4 w-4 text-slate-400" />
                       <input
                         value={quickTitle}
                         onChange={(event) => setQuickTitle(event.target.value)}
@@ -871,7 +892,7 @@ function TaskList() {
                           }
                         }}
                         placeholder={t('task.quickAddPlaceholder')}
-                        className="w-full border-none bg-transparent text-xs outline-none placeholder:text-slate-400 sm:text-sm"
+                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
                       />
                     </div>
                   )}

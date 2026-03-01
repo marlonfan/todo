@@ -90,6 +90,7 @@
     "weekdaysClear": "清空",
     "titleNaturalHint": "支持口语时间：如“明天早上、后天下午8点、下周二”",
     "timeParsedHint": "已识别时间",
+    "naturalTimeUndo": "撤销识别",
     "noDate": "未设置时间",
     "overdueDays": "延期{{days}}天",
     "selectTaskHint": "选择一个任务查看详情",

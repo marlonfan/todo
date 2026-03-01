@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { categoriesAPI } from '../api/client';
 import { useCategoriesQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
+import { replaceCategories } from '../data/localStore';
 
 const EMOJI_OPTIONS = ['📁', '📌', '🧠', '💼', '📚', '🏠', '💡', '🛒', '🏃', '🎯', '💰', '❤️', '🎮', '✈️', '🍜', '🧹'];
 
@@ -17,6 +18,13 @@ function CategoryManager() {
   const [editingCategory, setEditingCategory] = useState(null);
   const { register, handleSubmit, reset, setValue } = useForm();
 
+  const persistCategoriesSnapshot = async () => {
+    const snapshot = queryClient.getQueryData(queryKeys.categories.all);
+    if (Array.isArray(snapshot)) {
+      await replaceCategories(snapshot);
+    }
+  };
+
   const onSubmit = async (data) => {
     setSubmitting(true);
     setError('');
@@ -28,6 +36,7 @@ function CategoryManager() {
           if (!Array.isArray(prev)) return prev;
           return prev.map((item) => (item.id === editingCategory.id ? { ...item, ...data } : item));
         });
+        await persistCategoriesSnapshot();
 
         const res = await categoriesAPI.update(editingCategory.id, data);
         if (res?.data?.id) {
@@ -35,6 +44,7 @@ function CategoryManager() {
             if (!Array.isArray(prev)) return prev;
             return prev.map((item) => (item.id === res.data.id ? res.data : item));
           });
+          await persistCategoriesSnapshot();
         }
         setEditingCategory(null);
       } else {
@@ -43,6 +53,7 @@ function CategoryManager() {
           const base = Array.isArray(prev) ? prev : [];
           return [{ id: tempID, ...data }, ...base];
         });
+        await persistCategoriesSnapshot();
 
         const res = await categoriesAPI.create(data);
         if (res?.data?.id) {
@@ -50,11 +61,13 @@ function CategoryManager() {
             if (!Array.isArray(prev)) return prev;
             return prev.map((item) => (item.id === tempID ? res.data : item));
           });
+          await persistCategoriesSnapshot();
         }
       }
       reset();
     } catch (err) {
       queryClient.setQueryData(queryKeys.categories.all, previousCategories);
+      await persistCategoriesSnapshot();
       setError(err.response?.data?.error || t('common.loading'));
     } finally {
       setSubmitting(false);
@@ -78,11 +91,13 @@ function CategoryManager() {
       if (!Array.isArray(prev)) return prev;
       return prev.filter((item) => item.id !== id);
     });
+    await persistCategoriesSnapshot();
 
     try {
       await categoriesAPI.delete(id);
     } catch (err) {
       queryClient.setQueryData(queryKeys.categories.all, previousCategories);
+      await persistCategoriesSnapshot();
       setError(err.response?.data?.error || t('category.deleteFailed'));
     } finally {
       setSubmitting(false);

@@ -6,6 +6,7 @@ import CalendarView from './CalendarView';
 import TaskList from './TaskList';
 import CategoryManager from './CategoryManager';
 import Settings from './Settings';
+import SearchDialog from './SearchDialog';
 import {
   IconCalendar,
   IconClock,
@@ -21,6 +22,7 @@ import {
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { useCategoriesQuery } from '../query/hooks';
 import { moveTaskToCategoryLocal } from '../data/taskMutations';
+import { closeSearchDialog, openSearchDialog, subscribeSearchOverlay } from '../state/searchOverlay';
 
 function normalizeMobileDefaultTab(value) {
   if (value === 'calendar' || value === 'settings') return value;
@@ -59,6 +61,7 @@ function MainLayout({ user, setUser }) {
   const [dragOverCategoryID, setDragOverCategoryID] = useState(0);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [mobilePrefs, setMobilePrefs] = useState(readMobilePrefsFromStorage);
+  const [searchDialog, setSearchDialog] = useState({ open: false, query: '' });
   const didApplyMobileDefaultRef = useRef(false);
   const initialLocationRef = useRef({
     pathname: location.pathname,
@@ -67,10 +70,18 @@ function MainLayout({ user, setUser }) {
   const { data: categories = [] } = useCategoriesQuery();
 
   useEffect(() => {
+    const unsubscribe = subscribeSearchOverlay((next) => {
+      setSearchDialog(next);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     // 根据当前路径设置活动标签
     const path = location.pathname;
     if (path === '/') setActiveTab('calendar');
     else if (path === '/tasks') setActiveTab('tasks');
+    else if (path === '/search') setActiveTab('tasks');
     else if (path === '/categories') setActiveTab('categories');
     else if (path === '/settings') setActiveTab('settings');
     setMobileMenuOpen(false);
@@ -134,7 +145,7 @@ function MainLayout({ user, setUser }) {
     { key: 'inbox', to: '/tasks?view=inbox', label: t('task.inbox'), icon: IconInbox },
     { key: 'today', to: '/tasks?view=today', label: t('task.today'), icon: IconCalendar },
     { key: 'upcoming', to: '/tasks?view=upcoming', label: t('task.upcoming'), icon: IconClock },
-    { key: 'search', to: '/tasks?view=search', label: t('task.searchTasks'), icon: IconSearch },
+    { key: 'search', to: '/search', label: t('task.searchTasks'), icon: IconSearch, action: 'open_search' },
   ];
 
   const mobileTabs = useMemo(() => {
@@ -148,10 +159,11 @@ function MainLayout({ user, setUser }) {
       },
       search: {
         key: 'search',
-        to: '/tasks?view=search',
+        to: '/search',
         label: t('task.searchTasks'),
         icon: IconSearch,
         matchSearch: true,
+        action: 'open_search',
       },
       inbox: {
         key: 'inbox',
@@ -202,9 +214,7 @@ function MainLayout({ user, setUser }) {
 
   const isMobileTabActive = (item) => {
     if (item.matchSearch) {
-      if (location.pathname !== '/tasks') return false;
-      const current = new URLSearchParams(location.search || '');
-      return (current.get('view') || 'all') === 'search';
+      return location.pathname === '/search';
     }
     if (item.matchTasks) {
       if (location.pathname !== '/tasks') return false;
@@ -228,6 +238,7 @@ function MainLayout({ user, setUser }) {
       if (current.get('category_id')) return t('nav.tasks');
       return t('task.allTasks');
     }
+    if (location.pathname === '/search') return t('task.searchTasks');
     if (location.pathname === '/categories') return t('nav.categories');
     if (location.pathname === '/settings') return t('nav.settings');
     return t('nav.calendar');
@@ -285,6 +296,25 @@ function MainLayout({ user, setUser }) {
           </div>
           {taskNavItems.map((item) => {
             const ItemIcon = item.icon;
+            if (item.action === 'open_search') {
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => openSearchDialog()}
+                  className={`mt-1 block w-full rounded-lg px-4 py-2 text-left ${
+                    location.pathname === '/search'
+                      ? 'bg-blue-50 font-medium text-blue-700'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    <ItemIcon className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                </button>
+              );
+            }
             return (
               <Link
                 key={item.key}
@@ -409,6 +439,7 @@ function MainLayout({ user, setUser }) {
         <Routes>
           <Route path="/" element={<CalendarView />} />
           <Route path="/tasks" element={<TaskList />} />
+          <Route path="/search" element={<TaskList forcedView="search" />} />
           <Route path="/categories" element={<CategoryManager />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
@@ -419,6 +450,28 @@ function MainLayout({ user, setUser }) {
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
             const active = isMobileTabActive(item);
+            if (item.action === 'open_search') {
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  aria-label={item.label}
+                  title={item.label}
+                  onClick={() => openSearchDialog()}
+                  className={`appearance-none border-0 bg-transparent p-0 flex items-center justify-center ${
+                    active ? 'text-slate-900' : 'text-slate-500'
+                  }`}
+                >
+                  <span
+                    className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
+                      active ? 'border-slate-900' : 'border-transparent hover:border-slate-300'
+                    }`}
+                  >
+                    <ItemIcon className="h-[18px] w-[18px]" />
+                  </span>
+                </button>
+              );
+            }
             return (
               <Link
                 key={item.key}
@@ -426,12 +479,12 @@ function MainLayout({ user, setUser }) {
                 aria-label={item.label}
                 title={item.label}
                 className={`flex items-center justify-center ${
-                  active ? 'text-blue-600' : 'text-slate-500'
+                  active ? 'text-slate-900' : 'text-slate-500'
                 }`}
               >
                 <span
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
-                    active ? 'bg-blue-50' : 'hover:bg-slate-100'
+                  className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
+                    active ? 'border-slate-900' : 'border-transparent hover:border-slate-300'
                   }`}
                 >
                   <ItemIcon className="h-[18px] w-[18px]" />
@@ -441,6 +494,12 @@ function MainLayout({ user, setUser }) {
           })}
         </div>
       </div>
+
+      <SearchDialog
+        open={!!searchDialog.open}
+        initialQuery={searchDialog.query || ''}
+        onClose={() => closeSearchDialog()}
+      />
     </div>
   );
 }

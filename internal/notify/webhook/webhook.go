@@ -73,6 +73,10 @@ func (w *WebhookNotifier) Send(ctx context.Context, userID int64, config map[str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if key := strings.TrimSpace(config["idempotency_key"]); key != "" {
+		req.Header.Set("X-Notification-Key", key)
+		req.Header.Set("Idempotency-Key", key)
+	}
 
 	// Add custom headers if provided
 	if headers := config["headers"]; headers != "" {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 	"todo-app/internal/models"
@@ -13,6 +14,9 @@ import (
 )
 
 const processingLockTTL = 15 * time.Minute
+const pendingBatchLimit = 200
+const dedupeWindow = 10 * time.Minute
+const maxRetryDelay = 30 * time.Minute
 
 type NotifyService struct {
 	notifyRepo *repository.NotificationRepository
@@ -33,6 +37,51 @@ func NewNotifyService(
 		taskRepo:   taskRepo,
 		registry:   registry,
 	}
+}
+
+func buildDedupeKey(taskID int64, source models.NotificationSource, notifyAt time.Time) string {
+	return fmt.Sprintf("%d|%s|%s", taskID, source, notifyAt.UTC().Format(time.RFC3339))
+}
+
+func nextRetryDelay(retryCount int) time.Duration {
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	delay := time.Minute * time.Duration(1<<retryCount)
+	if delay > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return delay
+}
+
+func cloneNotifyConfig(input models.NotifyConfigMap) models.NotifyConfigMap {
+	if input == nil {
+		return models.NotifyConfigMap{}
+	}
+	output := make(models.NotifyConfigMap, len(input))
+	for k, v := range input {
+		output[k] = v
+	}
+	return output
+}
+
+func (s *NotifyService) resolveDeliveryTarget(n *models.Notification, userID int64) (models.NotifyChannel, models.NotifyConfigMap, error) {
+	if n == nil {
+		return "", nil, errors.New("notification is nil")
+	}
+
+	if n.DeliveryMode == models.NotificationDeliveryCurrentDefault {
+		setting, err := s.notifyRepo.GetDefaultSetting(userID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return "", nil, errors.New("no default notification setting")
+			}
+			return "", nil, err
+		}
+		return setting.Channel, cloneNotifyConfig(setting.Config), nil
+	}
+
+	return n.Channel, cloneNotifyConfig(n.Config), nil
 }
 
 func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.CreateNotificationRequest) (*models.Notification, error) {
@@ -59,15 +108,21 @@ func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.Cre
 	}
 
 	notification := &models.Notification{
-		TaskID:   taskID,
-		Channel:  channel,
-		Config:   config,
-		NotifyAt: req.NotifyAt.UTC(),
-		Status:   models.NotifyStatusPending,
+		TaskID:        taskID,
+		Source:        models.NotificationSourceManual,
+		DeliveryMode:  models.NotificationDeliveryLockedSnapshot,
+		Channel:       channel,
+		Config:        cloneNotifyConfig(config),
+		NotifyAt:      req.NotifyAt.UTC(),
+		NextRetryAt:   func() *time.Time { t := req.NotifyAt.UTC(); return &t }(),
+		DedupeKey:     buildDedupeKey(taskID, models.NotificationSourceManual, req.NotifyAt.UTC()),
+		RetryCount:    0,
+		LastAttemptAt: nil,
+		Status:        models.NotifyStatusPending,
 	}
 
 	// Keep only one active reminder per task to avoid duplicates when users edit repeatedly.
-	if err := s.notifyRepo.ReplaceActiveByTask(notification); err != nil {
+	if err := s.notifyRepo.ReplaceActiveByTaskSource(notification); err != nil {
 		return nil, err
 	}
 
@@ -199,12 +254,17 @@ func (s *NotifyService) TestNotification(userID int64, req *models.TestNotificat
 func (s *NotifyService) ProcessPendingNotifications() error {
 	now := time.Now().UTC()
 	processingStaleBefore := now.Add(-processingLockTTL)
-	notifications, err := s.notifyRepo.GetPendingNotifications(now, processingStaleBefore)
+	notifications, err := s.notifyRepo.GetPendingNotifications(now, processingStaleBefore, pendingBatchLimit)
 	if err != nil {
 		return err
 	}
 
 	for _, n := range notifications {
+		if n.Task == nil {
+			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
+			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, "task not found")
+			continue
+		}
 		claimed, err := s.notifyRepo.TryMarkProcessing(n.ID, processingStaleBefore)
 		if err != nil {
 			log.Printf("Failed to mark notification %d as processing: %v", n.ID, err)
@@ -214,10 +274,33 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 			continue
 		}
 
-		notifier, ok := s.registry.Get(string(n.Channel))
+		deliverChannel, deliverConfig, err := s.resolveDeliveryTarget(&n, n.Task.UserID)
+		if err != nil {
+			log.Printf("Failed to resolve delivery target for notification %d: %v", n.ID, err)
+			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
+			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
+			continue
+		}
+
+		notifier, ok := s.registry.Get(string(deliverChannel))
 		if !ok {
-			now := time.Now().UTC()
-			s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusFailed, &now, "unsupported channel")
+			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
+			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, "unsupported channel")
+			continue
+		}
+		if err := notifier.ValidateConfig(deliverConfig); err != nil {
+			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
+			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
+			continue
+		}
+
+		recentSent, err := s.notifyRepo.HasRecentSentByDedupeKey(n.DedupeKey, time.Now().UTC().Add(-dedupeWindow))
+		if err != nil {
+			log.Printf("Failed to check dedupe for notification %d: %v", n.ID, err)
+		}
+		if recentSent {
+			markAt := time.Now().UTC()
+			_ = s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusSent, &markAt, "dedupe_suppressed")
 			continue
 		}
 
@@ -240,15 +323,20 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err = notifier.Send(ctx, n.Task.UserID, n.Config, msg)
+		if deliverConfig == nil {
+			deliverConfig = models.NotifyConfigMap{}
+		}
+		deliverConfig["idempotency_key"] = n.DedupeKey
+		err = notifier.Send(ctx, n.Task.UserID, deliverConfig, msg)
 		cancel()
 
 		now := time.Now().UTC()
 		if err != nil {
 			log.Printf("Failed to send notification %d: %v", n.ID, err)
-			s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusFailed, &now, err.Error())
+			retryAt := now.Add(nextRetryDelay(n.RetryCount))
+			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
 		} else {
-			s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusSent, &now, "")
+			_ = s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusSent, &now, "")
 		}
 	}
 
@@ -311,13 +399,19 @@ func (s *NotifyService) ReconcileUserReminders(userID int64) error {
 		}
 
 		notification := &models.Notification{
-			TaskID:   task.ID,
-			Channel:  defaultSetting.Channel,
-			Config:   defaultSetting.Config,
-			NotifyAt: notifyAt,
-			Status:   models.NotifyStatusPending,
+			TaskID:       task.ID,
+			Source:       models.NotificationSourceDefaultAuto,
+			DeliveryMode: models.NotificationDeliveryCurrentDefault,
+			// Keep a snapshot fallback for compatibility/debug; runtime still reads current default.
+			Channel:     defaultSetting.Channel,
+			Config:      cloneNotifyConfig(defaultSetting.Config),
+			NotifyAt:    notifyAt,
+			NextRetryAt: &notifyAt,
+			DedupeKey:   buildDedupeKey(task.ID, models.NotificationSourceDefaultAuto, notifyAt),
+			RetryCount:  0,
+			Status:      models.NotifyStatusPending,
 		}
-		if err := s.notifyRepo.Create(notification); err != nil {
+		if err := s.notifyRepo.ReplaceActiveByTaskSource(notification); err != nil {
 			return err
 		}
 	}

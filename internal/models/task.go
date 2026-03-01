@@ -67,6 +67,7 @@ type Task struct {
 	EndTime           *time.Time      `json:"end_time"`
 	DueDate           *time.Time      `json:"due_date"`
 	AllDay            bool            `json:"all_day" gorm:"default:false"`
+	Revision          int64           `json:"revision" gorm:"not null;default:1;index"`
 	RecurrenceRule    *RecurrenceRule `json:"recurrence_rule,omitempty" gorm:"type:text"`
 	RecurrenceEndDate *time.Time      `json:"recurrence_end_date"`
 	CreatedAt         time.Time       `json:"created_at" gorm:"autoCreateTime"`

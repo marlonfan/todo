@@ -4,12 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
-import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle } from '../utils/naturalTime';
+import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery } from '../query/hooks';
-import { cancelTaskLocal, createTaskLocal, updateTaskLocal } from '../data/taskMutations';
+import { createTaskLocal, deleteTaskLocal, updateTaskLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 
@@ -69,6 +69,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [selectedDays, setSelectedDays] = useState([]);
   const [timeTouched, setTimeTouched] = useState(false);
   const [parsePreview, setParsePreview] = useState('');
+  const [parseSnapshot, setParseSnapshot] = useState(null);
   const [basicPanel, setBasicPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const basicPanelRef = useRef(null);
@@ -138,6 +139,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   useEffect(() => {
     setTimeTouched(false);
     setParsePreview('');
+    setParseSnapshot(null);
     
     if (task) {
       // 编辑模式：填充表单数据
@@ -225,20 +227,42 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   }, [isAllDay, getValues, setValue]);
 
   const applyNaturalTimeFromTitle = (titleValue, shouldUpdateTime) => {
+    const originalTitle = String(titleValue || '');
+    const originalStartTime = getValues('start_time') || '';
     const parsed = parseNaturalTimeFromTitle(titleValue, getUserTimezone(), getNaturalTimeOptionsFromUser(getStoredUser()));
     if (!parsed) {
       setParsePreview('');
+      setParseSnapshot(null);
       return null;
     }
 
+    let changed = false;
     if (parsed.cleanedTitle && parsed.cleanedTitle !== titleValue) {
       setValue('title', parsed.cleanedTitle);
+      changed = true;
     }
-    if (shouldUpdateTime) {
+    if (shouldUpdateTime && parsed.parsedAtInput !== originalStartTime) {
       setValue('start_time', parsed.parsedAtInput);
+      changed = true;
     }
     setParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
+    if (changed) {
+      setParseSnapshot({
+        originalTitle,
+        originalStartTime,
+      });
+    } else {
+      setParseSnapshot(null);
+    }
     return parsed;
+  };
+
+  const handleUndoNaturalParse = () => {
+    if (!parseSnapshot) return;
+    setValue('title', parseSnapshot.originalTitle || '');
+    setValue('start_time', parseSnapshot.originalStartTime || '');
+    setParsePreview('');
+    setParseSnapshot(null);
   };
 
   const onSubmit = async (data) => {
@@ -248,13 +272,15 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     try {
       const clientTimezone = getUserTimezone();
       const rawTitle = (data.title || '').trim();
-      const parsedNaturalTime = applyNaturalTimeFromTitle(rawTitle, !timeTouched);
-      const normalizedTitle = parsedNaturalTime?.cleanedTitle?.trim() || rawTitle;
+      const parsedPriority = !isEditing ? parsePriorityFromTitle(rawTitle) : null;
+      const priorityNormalizedTitle = parsedPriority?.cleanedTitle?.trim() || rawTitle;
+      const parsedNaturalTime = applyNaturalTimeFromTitle(priorityNormalizedTitle, !timeTouched);
+      const normalizedTitle = parsedNaturalTime?.cleanedTitle?.trim() || priorityNormalizedTitle;
 
       const payload = {
         title: normalizedTitle,
         description: data.description || '',
-        priority: parseInt(data.priority),
+        priority: Number.isInteger(parsedPriority?.priority) ? parsedPriority.priority : parseInt(data.priority),
         all_day: !!data.all_day,
         client_timezone: clientTimezone,
       };
@@ -334,8 +360,9 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
     setLoading(true);
     try {
-      const savedTask = await cancelTaskLocal(queryClient, task.id);
-      onSaved(savedTask || { ...task, status: 'cancelled' });
+      await deleteTaskLocal(queryClient, task.id);
+      onSaved(null);
+      onClose();
     } catch (err) {
       setError(err.response?.data?.error || t('task.deleteFailed'));
     } finally {
@@ -786,7 +813,20 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
                   />
                   <p className="mt-1 text-xs text-slate-500">{t('task.titleNaturalHint')}</p>
-                  {parsePreview && <p className="mt-1 text-xs text-emerald-600">{parsePreview}</p>}
+                  {parsePreview && (
+                    <div className="mt-1 flex items-center gap-2">
+                      <p className="text-xs text-emerald-600">{parsePreview}</p>
+                      {parseSnapshot && (
+                        <button
+                          type="button"
+                          onClick={handleUndoNaturalParse}
+                          className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
+                        >
+                          {t('task.naturalTimeUndo')}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <p className="mt-1 text-xs text-slate-500">
                     {startInputValue ? `${t('task.startTime')}: ${startInputValue}` : t('task.noDate')}
                   </p>

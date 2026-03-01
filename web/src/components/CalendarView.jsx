@@ -5,15 +5,19 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { calendarAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
+import { toServerRangeBoundary } from '../utils/syncTime';
 import { queryKeys } from '../query/keys';
-import { IconList, IconSearch } from './icons/TaskIcons';
+import { IconSearch } from './icons/TaskIcons';
 import { buildCalendarRangeKey, getCalendarRange, putCalendarRange } from '../data/localStore';
 import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
+import { useTasksQuery } from '../query/hooks';
+import { onSyncCycleFinished } from '../data/syncEngine';
+import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvents } from './calendarEventMerge';
+import { openSearchDialog } from '../state/searchOverlay';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -81,13 +85,24 @@ function annotateOverlapCount(events, defaultDurationMinutes = 30) {
   }));
 }
 
+function emitCalendarTrace(detail = {}) {
+  if (typeof window === 'undefined') return;
+  if (!window.__TODO_SYNC_DEBUG__) return;
+  window.dispatchEvent(new CustomEvent('sync:trace', {
+    detail: {
+      type: 'calendar_rebuilt',
+      at: new Date().toISOString(),
+      ...detail,
+    },
+  }));
+}
+
 function CalendarView() {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { data: tasksForProjection = [] } = useTasksQuery();
   const calendarRef = useRef(null);
   const stripViewportRef = useRef(null);
-  const mobileViewMenuRef = useRef(null);
   const stripDragRef = useRef({ active: false, startX: 0, deltaX: 0 });
   const stripAnimationRef = useRef({ phase: 'idle', direction: 0, width: 0 });
   const suppressStripClickRef = useRef(false);
@@ -105,12 +120,12 @@ function CalendarView() {
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
   const [mobileView, setMobileView] = useState('timeGridDay');
-  const [mobileViewMenuOpen, setMobileViewMenuOpen] = useState(false);
   const [mobileCurrentDate, setMobileCurrentDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
   const [mobileStripStartDate, setMobileStripStartDate] = useState(() => getWeekStripStart(dayjs().tz(getUserTimezone())));
   const [stripTranslateX, setStripTranslateX] = useState(0);
   const [stripTransitionMs, setStripTransitionMs] = useState(0);
   const [calendarNow, setCalendarNow] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DDTHH:mm:ss[Z]'));
+  const [currentViewTitle, setCurrentViewTitle] = useState('');
 
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
@@ -141,6 +156,15 @@ function CalendarView() {
   const activeCalendarView = isCompactMobile ? normalizeMobileView(mobileView) : calendarDefaultView;
   const mobileWeekdayShort = i18n.language === 'zh-CN' ? ZH_WEEKDAY_SHORT : EN_WEEKDAY_SHORT;
 
+  const desktopViewOptions = useMemo(
+    () => [
+      { value: 'dayGridMonth', label: t('calendar.month') },
+      { value: 'timeGridWeek', label: t('calendar.week') },
+      { value: 'timeGridDay', label: t('calendar.day') },
+    ],
+    [t]
+  );
+
   const mobileViewOptions = useMemo(
     () => [
       { value: 'timeGridDay', label: t('calendar.day') },
@@ -149,17 +173,7 @@ function CalendarView() {
     ],
     [i18n.language, t]
   );
-
-  const currentMobileViewLabel = useMemo(
-    () => mobileViewOptions.find((item) => item.value === mobileView)?.label || t('calendar.day'),
-    [mobileView, mobileViewOptions, t]
-  );
-
-  const mobileMonthTitle = useMemo(() => {
-    const value = dayjs(mobileCurrentDate);
-    if (i18n.language === 'zh-CN') return value.format('YYYY年M月');
-    return value.format('MMMM YYYY');
-  }, [i18n.language, mobileCurrentDate]);
+  const viewOptions = isCompactMobile ? mobileViewOptions : desktopViewOptions;
 
   const mobileDateStrip = useMemo(() => {
     const start = dayjs(mobileStripStartDate);
@@ -190,18 +204,6 @@ function CalendarView() {
   }, []);
 
   useEffect(() => {
-    if (!mobileViewMenuOpen) return undefined;
-    const handlePointerDown = (event) => {
-      if (!mobileViewMenuRef.current) return;
-      if (!mobileViewMenuRef.current.contains(event.target)) {
-        setMobileViewMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [mobileViewMenuOpen]);
-
-  useEffect(() => {
     if (!moreEventsOpen) return undefined;
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -223,15 +225,13 @@ function CalendarView() {
     () => queryKeys.calendar.events(dateRange.start || '', dateRange.end || '', timezone),
     [dateRange.end, dateRange.start, timezone]
   );
+  const taskStatusIndex = useMemo(
+    () => buildTaskStatusIndex(tasksForProjection),
+    [tasksForProjection]
+  );
 
   const toServerISO = useCallback((value) => {
-    if (!value) return null;
-
-    if (timezone === 'UTC') {
-      return dayjs(value).utc().toISOString();
-    }
-
-    return dayjs.utc(value).tz(timezone, true).utc().toISOString();
+    return toServerRangeBoundary(value, timezone);
   }, [timezone]);
 
   const toCalendarISO = useCallback((isoString) => {
@@ -252,12 +252,21 @@ function CalendarView() {
       end: toServerISO(rangeEnd),
     });
     const list = Array.isArray(res.data) ? res.data : [];
-    const mapped = list.map((event) => ({
-      ...event,
-      start: toCalendarISO(event.start),
-      end: event.end ? toCalendarISO(event.end) : undefined,
-    }));
-    const annotated = annotateOverlapCount(mapped, Math.max(15, timeGranularity));
+    const mapped = list
+      .map((event) => ({
+        ...event,
+        start: toCalendarISO(event.start),
+        end: event.end ? toCalendarISO(event.end) : undefined,
+      }))
+      .filter((event) => (event?.extendedProps?.status || 'pending') !== 'cancelled');
+    const projected = buildProjectedEventsFromTasks(tasksForProjection, {
+      rangeStart,
+      rangeEnd,
+      timezone,
+      toCalendarISO,
+    });
+    const merged = mergeCalendarEvents(mapped, projected, taskStatusIndex);
+    const annotated = annotateOverlapCount(merged, Math.max(15, timeGranularity));
     const cacheKey = buildCalendarRangeKey(rangeStart, rangeEnd, timezone);
 
     await putCalendarRange({
@@ -265,7 +274,7 @@ function CalendarView() {
       start: rangeStart,
       end: rangeEnd,
       timezone,
-      events: mapped,
+      events: merged,
       updated_at: Date.now(),
     });
 
@@ -273,8 +282,16 @@ function CalendarView() {
       queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), annotated);
     }
 
+    emitCalendarTrace({
+      source: 'server_merge',
+      range_start: rangeStart,
+      range_end: rangeEnd,
+      projected_count: projected.length,
+      event_count: annotated.length,
+    });
+
     return annotated;
-  }, [queryClient, timeGranularity, timezone, toCalendarISO, toServerISO]);
+  }, [queryClient, taskStatusIndex, tasksForProjection, timeGranularity, timezone, toCalendarISO, toServerISO]);
 
   const {
     data: events = [],
@@ -283,6 +300,14 @@ function CalendarView() {
     queryKey: currentCalendarQueryKey,
     enabled: Boolean(dateRange.start && dateRange.end),
     queryFn: async () => {
+      const projectedRangeStart = toServerISO(dateRange.start) || dateRange.start;
+      const projectedRangeEnd = toServerISO(dateRange.end) || dateRange.end;
+      const projected = buildProjectedEventsFromTasks(tasksForProjection, {
+        rangeStart: projectedRangeStart,
+        rangeEnd: projectedRangeEnd,
+        timezone,
+        toCalendarISO,
+      });
       const cacheKey = buildCalendarRangeKey(dateRange.start, dateRange.end, timezone);
       const cached = await getCalendarRange(cacheKey);
       if (cached?.events && Array.isArray(cached.events)) {
@@ -292,12 +317,51 @@ function CalendarView() {
             console.error('Failed to refresh stale calendar cache:', err);
           });
         }
-        return annotateOverlapCount(cached.events, Math.max(15, timeGranularity));
+        const merged = mergeCalendarEvents(cached.events, projected, taskStatusIndex);
+        return annotateOverlapCount(merged, Math.max(15, timeGranularity));
       }
 
+      if (projected.length > 0) {
+        return annotateOverlapCount(projected, Math.max(15, timeGranularity));
+      }
       return fetchCalendarRangeFromServer(dateRange.start, dateRange.end);
     },
   });
+
+  useEffect(() => {
+    if (!dateRange.start || !dateRange.end) return;
+    const projectedRangeStart = toServerISO(dateRange.start) || dateRange.start;
+    const projectedRangeEnd = toServerISO(dateRange.end) || dateRange.end;
+    const projected = buildProjectedEventsFromTasks(tasksForProjection, {
+      rangeStart: projectedRangeStart,
+      rangeEnd: projectedRangeEnd,
+      timezone,
+      toCalendarISO,
+    });
+    if (!projected.length) return;
+
+    queryClient.setQueryData(currentCalendarQueryKey, (prev) => {
+      const merged = mergeCalendarEvents(prev, projected, taskStatusIndex);
+      return annotateOverlapCount(merged, Math.max(15, timeGranularity));
+    });
+    emitCalendarTrace({
+      source: 'tasks_projection',
+      range_start: dateRange.start,
+      range_end: dateRange.end,
+      projected_count: projected.length,
+    });
+  }, [
+    currentCalendarQueryKey,
+    dateRange.end,
+    dateRange.start,
+    queryClient,
+    tasksForProjection,
+    taskStatusIndex,
+    timeGranularity,
+    timezone,
+    toCalendarISO,
+    toServerISO,
+  ]);
 
   const updateCurrentCalendarEvents = useCallback((updater) => {
     let nextEventsSnapshot = null;
@@ -357,7 +421,19 @@ function CalendarView() {
     };
   }, [dateRange.end, dateRange.start, fetchCalendarRangeFromServer, timezone]);
 
+  useEffect(() => {
+    const unsubscribe = onSyncCycleFinished((summary) => {
+      if (!summary?.ok) return;
+      if (!dateRange.start || !dateRange.end) return;
+      fetchCalendarRangeFromServer(dateRange.start, dateRange.end, { updateQuery: true }).catch((error) => {
+        console.error('Failed to refresh calendar after sync cycle:', error);
+      });
+    });
+    return unsubscribe;
+  }, [dateRange.end, dateRange.start, fetchCalendarRangeFromServer]);
+
   const handleDatesSet = (dateInfo) => {
+    setCurrentViewTitle(dateInfo?.view?.title || '');
     setDateRange({
       start: dayjs(dateInfo.start).toISOString(),
       end: dayjs(dateInfo.end).toISOString(),
@@ -416,29 +492,18 @@ function CalendarView() {
     api.gotoDate(targetDate);
   };
 
-  const handleMobileViewChange = (nextView) => {
-    const normalized = normalizeMobileView(nextView);
-    setMobileViewMenuOpen(false);
-    setMobileView(normalized);
-    const api = calendarRef.current?.getApi();
-    if (!api) return;
-    api.changeView(normalized);
-    api.gotoDate(mobileCurrentDate);
-  };
-
   const handleGoToday = () => {
     const today = dayjs().tz(timezone).format('YYYY-MM-DD');
     pendingFocusDateRef.current = today;
     setMobileCurrentDate(today);
     setMobileStripStartDate(getWeekStripStart(today));
-    setMobileViewMenuOpen(false);
     stripAnimationRef.current = { phase: 'idle', direction: 0, width: 0 };
     setStripTransitionMs(0);
     setStripTranslateX(0);
 
     const api = calendarRef.current?.getApi();
     if (!api) return;
-    api.changeView(mobileView);
+    api.changeView(isCompactMobile ? mobileView : calendarDefaultView);
     api.gotoDate(today);
   };
 
@@ -552,6 +617,24 @@ function CalendarView() {
       end: end.format('YYYY-MM-DDTHH:mm'),
     });
     setModalOpen(true);
+  };
+
+  const handleNavigatePeriod = (direction) => {
+    const api = calendarRef.current?.getApi();
+    if (!api) return;
+    if (direction < 0) api.prev();
+    else api.next();
+  };
+
+  const handleChangeView = (nextView) => {
+    const api = calendarRef.current?.getApi();
+    if (!api) return;
+    api.changeView(nextView);
+    if (isCompactMobile) {
+      setMobileView(normalizeMobileView(nextView));
+    } else {
+      setCalendarDefaultView(normalizeCalendarDefaultView(nextView));
+    }
   };
 
   const handleEventClick = async (info) => {
@@ -753,6 +836,20 @@ function CalendarView() {
 
   const renderEventContent = (arg) => {
     const completed = arg.event.extendedProps.status === 'completed';
+    const isMonthView = activeCalendarView === 'dayGridMonth';
+    const hideTimeForView = activeCalendarView === 'timeGridDay' || activeCalendarView === 'timeGridWeek' || activeCalendarView === 'timeGridThreeDay';
+    const hasTimeText = Boolean(arg.timeText) && !arg.event.allDay && !hideTimeForView;
+    if (isMonthView) {
+      const suffix = hasTimeText ? ` ${arg.timeText}` : '';
+      return (
+        <div className={`min-w-0 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`} title={arg.event.title}>
+          <span className={`block min-w-0 truncate leading-tight ${completed ? 'line-through opacity-80' : ''}`}>
+            {arg.event.title}
+            {suffix ? <span className="text-slate-500">{suffix}</span> : null}
+          </span>
+        </div>
+      );
+    }
     return (
       <div
         className={`flex min-w-0 items-center gap-1 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`}
@@ -772,6 +869,11 @@ function CalendarView() {
         >
           {completed ? '✓' : '○'}
         </button>
+        {hasTimeText && (
+          <span className="shrink-0 text-[10px] font-medium text-slate-500">
+            {arg.timeText}
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <span
             className={`block min-w-0 truncate leading-tight ${completed ? 'line-through opacity-80' : ''}`}
@@ -784,68 +886,90 @@ function CalendarView() {
   };
 
   return (
-    <div className="relative h-full flex flex-col bg-slate-100">
-      {!isCompactMobile && (
-        <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
-          <h2 className="text-xl font-semibold">{t('nav.calendar')}</h2>
-          <p className="text-sm text-gray-500">
-            {t('settings.timezone')}: {timezone === 'Asia/Shanghai' ? t('settings.timezoneCST') : timezone}
-          </p>
-        </div>
-      )}
-
-      {isCompactMobile && (
-        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-          <div className="flex items-center justify-between px-3 py-2">
-            <h2 className="text-xl font-semibold text-slate-800">{mobileMonthTitle}</h2>
-            <div className="relative flex items-center gap-1" ref={mobileViewMenuRef}>
-              <button
-                type="button"
-                onClick={() => navigate('/tasks?view=search')}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                title={t('common.search')}
-              >
-                <IconSearch className="h-5 w-5" />
-              </button>
-              <button
-                type="button"
-                onClick={handleGoToday}
-                className="inline-flex items-center rounded-full border border-blue-600 bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700"
-                title={t('calendar.today')}
-              >
-                {t('calendar.today')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setMobileViewMenuOpen((prev) => !prev)}
-                className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700"
-                title={t('settings.calendarDefaultView')}
-              >
-                <IconList className="h-4 w-4" />
-                <span>{currentMobileViewLabel}</span>
-              </button>
-              {mobileViewMenuOpen && (
-                <div className="absolute right-0 top-10 z-30 w-28 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
-                  {mobileViewOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => handleMobileViewChange(option.value)}
-                      className={`block w-full rounded-md px-2 py-1.5 text-left text-xs ${
-                        mobileView === option.value
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+    <div className="calendar-shell relative h-full flex flex-col bg-slate-100">
+      <div className="calendar-topbar sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+        <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
+          <div className="inline-flex items-center rounded-xl border border-slate-200 bg-white p-1">
+            <button
+              type="button"
+              onClick={() => handleNavigatePeriod(-1)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
+              aria-label="previous period"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={handleGoToday}
+              className="inline-flex h-8 items-center rounded-lg px-2.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+            >
+              {t('calendar.today')}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleNavigatePeriod(1)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
+              aria-label="next period"
+            >
+              ›
+            </button>
           </div>
 
-          <div className="px-2 pb-2">
+          <div className="min-w-0 flex-1 px-2 text-center">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-slate-800 md:text-base">
+              {currentViewTitle || t('nav.calendar')}
+            </h2>
+            {!isCompactMobile && (
+              <p className="truncate text-[11px] text-slate-500">
+                {t('settings.timezone')}: {timezone === 'Asia/Shanghai' ? t('settings.timezoneCST') : timezone}
+              </p>
+            )}
+          </div>
+
+          <div className="inline-flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => openSearchDialog()}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+              title={t('common.search')}
+            >
+              <IconSearch className="h-4 w-4" />
+            </button>
+            {!isCompactMobile && (
+              <button
+                type="button"
+                onClick={handleMobileQuickCreate}
+                className="inline-flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
+                title={t('task.newTask')}
+              >
+                + {t('task.newTask')}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="px-3 pb-2 md:px-4">
+          <div className="inline-flex w-full items-center rounded-xl border border-slate-200 bg-white p-1">
+            {viewOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => handleChangeView(option.value)}
+                className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
+                  activeCalendarView === option.value
+                    ? 'bg-slate-200 text-slate-800'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {isCompactMobile && activeCalendarView !== 'dayGridMonth' && (
+        <div className="border-b border-slate-200 bg-white/90 px-2 pb-2 backdrop-blur">
             <div
               ref={stripViewportRef}
               className="overflow-hidden rounded-xl"
@@ -895,12 +1019,11 @@ function CalendarView() {
                 })}
               </div>
             </div>
-          </div>
         </div>
       )}
 
-      <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'px-1 pt-1 pb-16' : 'overflow-auto p-4'}`}>
-        <div className="h-full overflow-hidden border border-slate-200 bg-white">
+      <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'px-1 pt-1 pb-8' : 'overflow-auto p-3 md:p-4'}`}>
+        <div className="h-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_40px_-28px_rgba(15,23,42,0.55)]">
           <FullCalendar
             key={`${activeCalendarView}-${timezone}-${calendarLocale}-${isCompactMobile ? 'mobile' : 'desktop'}`}
             ref={calendarRef}
@@ -909,15 +1032,7 @@ function CalendarView() {
             initialDate={initialDate}
             locale={calendarLocale}
             timeZone="UTC"
-            headerToolbar={
-              isCompactMobile
-                ? false
-                : {
-                    left: 'prev,next today',
-                    center: 'title',
-                    right: 'dayGridMonth,timeGridWeek,timeGridDay',
-                  }
-            }
+            headerToolbar={false}
             views={{
               timeGridThreeDay: {
                 type: 'timeGrid',
@@ -1010,6 +1125,23 @@ function CalendarView() {
             </div>
             <div className="max-h-[65vh] overflow-y-auto p-2">
               {moreEvents.map((event) => {
+                if (event.allDay) {
+                  return (
+                    <button
+                      key={event.id}
+                      type="button"
+                      className="mb-1 block w-full border border-slate-200 px-2 py-1.5 text-left hover:bg-slate-50"
+                      onClick={() => {
+                        setMoreEventsOpen(false);
+                        openTaskFromCalendarEvent(event);
+                      }}
+                      title={event.title}
+                    >
+                      <div className="truncate text-xs font-medium text-slate-800">{event.title}</div>
+                      <div className="text-[11px] text-slate-500">{t('task.allDay') || 'All day'}</div>
+                    </button>
+                  );
+                }
                 // Calendar events are already normalized to calendar timezone/UTC presentation.
                 // Avoid converting timezone again, otherwise labels shift by offset.
                 const startLabel = event.start ? dayjs(event.start).utc().format('HH:mm') : '--:--';

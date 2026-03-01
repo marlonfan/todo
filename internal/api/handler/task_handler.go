@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"todo-app/internal/api/middleware"
 	"todo-app/internal/models"
@@ -16,6 +18,31 @@ import (
 type TaskHandler struct {
 	taskService   *service.TaskService
 	notifyService *service.NotifyService
+}
+
+func parseIfMatchRevision(c *gin.Context) (*int64, error) {
+	value := strings.TrimSpace(c.GetHeader("If-Match"))
+	if value == "" {
+		return nil, nil
+	}
+	value = strings.Trim(value, "\"")
+	revision, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || revision <= 0 {
+		return nil, errors.New("invalid If-Match header")
+	}
+	return &revision, nil
+}
+
+func respondTaskError(c *gin.Context, err error) {
+	var conflict *service.RevisionConflictError
+	if errors.As(err, &conflict) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":  "revision conflict",
+			"latest": conflict.Latest,
+		})
+		return
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 }
 
 func NewTaskHandler(taskService *service.TaskService, notifyService *service.NotifyService) *TaskHandler {
@@ -129,9 +156,15 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		fieldMask["end_time"] = true
 	}
 
-	task, err := h.taskService.Update(userID, taskID, &req, fieldMask)
+	expectedRevision, err := parseIfMatchRevision(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	task, err := h.taskService.Update(userID, taskID, &req, fieldMask, expectedRevision)
+	if err != nil {
+		respondTaskError(c, err)
 		return
 	}
 
@@ -153,12 +186,19 @@ func (h *TaskHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.taskService.UpdateStatus(userID, taskID, req.Status, req.InstanceID, req.OccurrenceDate); err != nil {
+	expectedRevision, err := parseIfMatchRevision(c)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "status updated"})
+	task, err := h.taskService.UpdateStatus(userID, taskID, req.Status, req.InstanceID, req.OccurrenceDate, expectedRevision)
+	if err != nil {
+		respondTaskError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
 }
 
 func (h *TaskHandler) UpdateSchedule(c *gin.Context) {
@@ -176,12 +216,19 @@ func (h *TaskHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
-	if err := h.taskService.UpdateSchedule(userID, taskID, &req); err != nil {
+	expectedRevision, err := parseIfMatchRevision(c)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "schedule updated"})
+	task, err := h.taskService.UpdateSchedule(userID, taskID, &req, expectedRevision)
+	if err != nil {
+		respondTaskError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
 }
 
 func (h *TaskHandler) Delete(c *gin.Context) {
@@ -193,8 +240,14 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.taskService.Delete(userID, taskID); err != nil {
+	expectedRevision, err := parseIfMatchRevision(c)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.taskService.Delete(userID, taskID, expectedRevision); err != nil {
+		respondTaskError(c, err)
 		return
 	}
 

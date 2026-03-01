@@ -1,5 +1,11 @@
 import { queryKeys } from '../query/keys';
-import { upsertTask } from './localStore';
+import {
+  clearCalendarRanges,
+  invalidateCalendarRangesByTask,
+  removeOutboxByEntity,
+  removeTask,
+  upsertTask,
+} from './localStore';
 import { enqueueTaskOperation } from './syncEngine';
 
 function nowISO() {
@@ -13,12 +19,30 @@ function createOpID() {
   return `op_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
+function createTempTaskID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    return -Number(buf[0] || Date.now());
+  }
+  return -(Date.now() + Math.floor(Math.random() * 1000));
+}
+
 function setTasksCache(queryClient, updater) {
   queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
     const base = Array.isArray(prev) ? prev : [];
     const next = typeof updater === 'function' ? updater(base) : updater;
     return Array.isArray(next) ? next : base;
   });
+}
+
+async function invalidateCalendarCaches(queryClient, taskID = null) {
+  queryClient.removeQueries({ queryKey: ['calendar', 'events'] });
+  if (taskID) {
+    await invalidateCalendarRangesByTask(taskID);
+    return;
+  }
+  await clearCalendarRanges();
 }
 
 function getCachedCategories(queryClient) {
@@ -35,6 +59,7 @@ function resolveCategoriesFromIDs(queryClient, categoryIDs) {
 
 function applyTaskPatch(currentTask, payload, queryClient) {
   if (!currentTask) return currentTask;
+  const currentRevision = Number(currentTask.revision || 1);
   const patch = {
     ...currentTask,
     title: typeof payload.title === 'string' ? payload.title : currentTask.title,
@@ -46,6 +71,7 @@ function applyTaskPatch(currentTask, payload, queryClient) {
     end_time: typeof payload.end_time !== 'undefined' ? payload.end_time : currentTask.end_time,
     due_date: typeof payload.due_date !== 'undefined' ? payload.due_date : currentTask.due_date,
     recurrence_rule: typeof payload.recurrence_rule !== 'undefined' ? payload.recurrence_rule : currentTask.recurrence_rule,
+    revision: currentRevision + 1,
     sync_state: 'pending',
     last_error: '',
     client_updated_at: nowISO(),
@@ -59,7 +85,7 @@ function applyTaskPatch(currentTask, payload, queryClient) {
 }
 
 export async function createTaskLocal(queryClient, payload) {
-  const tempTaskID = -Date.now();
+  const tempTaskID = createTempTaskID();
   const optimisticTask = {
     id: tempTaskID,
     title: String(payload?.title || '').trim(),
@@ -71,6 +97,7 @@ export async function createTaskLocal(queryClient, payload) {
     due_date: payload?.due_date || null,
     all_day: !!payload?.all_day,
     recurrence_rule: payload?.recurrence_rule || null,
+    revision: 1,
     categories: resolveCategoriesFromIDs(queryClient, payload?.category_ids || []),
     sync_state: 'pending',
     last_error: '',
@@ -87,14 +114,17 @@ export async function createTaskLocal(queryClient, payload) {
     op_type: 'create',
     payload,
   });
+  await invalidateCalendarCaches(queryClient);
 
   return optimisticTask;
 }
 
 export async function updateTaskLocal(queryClient, taskID, payload) {
   let nextTask = null;
+  let baseRevision = 0;
   setTasksCache(queryClient, (prev) => prev.map((task) => {
     if (task.id !== taskID) return task;
+    baseRevision = Number(task.revision || 1);
     nextTask = applyTaskPatch(task, payload, queryClient);
     return nextTask;
   }));
@@ -109,7 +139,9 @@ export async function updateTaskLocal(queryClient, taskID, payload) {
     entity_id: taskID,
     op_type: 'update',
     payload,
+    if_match_revision: baseRevision || undefined,
   });
+  await invalidateCalendarCaches(queryClient, taskID);
 
   return nextTask;
 }
@@ -121,6 +153,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
 
   const shouldPatchBaseTask = !payload.instance_id && !payload.occurrence_date;
   let nextTask = null;
+  let baseRevision = 0;
 
   if (shouldPatchBaseTask) {
     setTasksCache(queryClient, (prev) => prev.map((task) => {
@@ -128,12 +161,16 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
       nextTask = {
         ...task,
         status: payload.status || task.status,
+        revision: Number(task.revision || 1) + 1,
         sync_state: 'pending',
         last_error: '',
         client_updated_at: nowISO(),
       };
       return nextTask;
     }));
+    if (nextTask) {
+      baseRevision = Number((nextTask.revision || 1) - 1);
+    }
 
     if (nextTask) {
       await upsertTask(nextTask);
@@ -146,21 +183,26 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
     entity_id: taskID,
     op_type: 'status',
     payload,
+    if_match_revision: shouldPatchBaseTask ? (baseRevision || undefined) : undefined,
   });
+  await invalidateCalendarCaches(queryClient, taskID);
 
   return nextTask;
 }
 
 export async function updateTaskScheduleLocal(queryClient, taskID, payload) {
   let nextTask = null;
+  let baseRevision = 0;
 
   setTasksCache(queryClient, (prev) => prev.map((task) => {
     if (task.id !== taskID) return task;
+    baseRevision = Number(task.revision || 1);
     nextTask = {
       ...task,
       start_time: typeof payload.start_time !== 'undefined' ? payload.start_time : task.start_time,
       end_time: typeof payload.end_time !== 'undefined' ? payload.end_time : task.end_time,
       all_day: typeof payload.all_day === 'boolean' ? payload.all_day : task.all_day,
+      revision: Number(task.revision || 1) + 1,
       sync_state: 'pending',
       last_error: '',
       client_updated_at: nowISO(),
@@ -178,7 +220,9 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload) {
     entity_id: taskID,
     op_type: 'schedule',
     payload,
+    if_match_revision: baseRevision || undefined,
   });
+  await invalidateCalendarCaches(queryClient, taskID);
 
   return nextTask;
 }
@@ -189,4 +233,32 @@ export async function moveTaskToCategoryLocal(queryClient, taskID, categoryID) {
 
 export async function cancelTaskLocal(queryClient, taskID) {
   return updateTaskStatusLocal(queryClient, taskID, { status: 'cancelled' });
+}
+
+export async function deleteTaskLocal(queryClient, taskID) {
+  const numericID = Number(taskID);
+  if (!numericID) return;
+  const currentList = queryClient.getQueryData(queryKeys.tasks.all);
+  const currentTask = Array.isArray(currentList)
+    ? currentList.find((task) => Number(task.id) === numericID)
+    : null;
+  const baseRevision = Number(currentTask?.revision || 0);
+
+  setTasksCache(queryClient, (prev) => prev.filter((task) => task.id !== numericID));
+  await removeTask(numericID);
+
+  if (numericID < 0) {
+    await removeOutboxByEntity('task', numericID);
+  } else {
+    await enqueueTaskOperation({
+      op_id: createOpID(),
+      entity_type: 'task',
+      entity_id: numericID,
+      op_type: 'delete',
+      payload: {},
+      if_match_revision: baseRevision || undefined,
+    });
+  }
+
+  await invalidateCalendarCaches(queryClient, numericID);
 }

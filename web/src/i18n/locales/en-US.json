@@ -90,6 +90,7 @@
     "weekdaysClear": "Clear",
     "titleNaturalHint": "Natural time is supported in title, e.g. tomorrow morning / next Tuesday / the day after tomorrow 8pm",
     "timeParsedHint": "Parsed time",
+    "naturalTimeUndo": "Undo parse",
     "noDate": "No date",
     "overdueDays": "Overdue {{days}} days",
     "selectTaskHint": "Select a task to view details",
