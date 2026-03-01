@@ -1066,9 +1066,6 @@ function CalendarView() {
             editable={true}
             selectable={true}
             selectMirror={true}
-            longPressDelay={500}
-            eventLongPressDelay={500}
-            selectLongPressDelay={500}
             dayMaxEvents={true}
             dayMaxEventRows={true}
             fixedWeekCount={false}
