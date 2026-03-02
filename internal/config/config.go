@@ -13,6 +13,7 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	JWT      JWTConfig      `yaml:"jwt"`
 	Notify   NotifyConfig   `yaml:"notify"`
+	Caldav   CaldavConfig   `yaml:"caldav"`
 	Plugins  PluginsConfig  `yaml:"plugins"`
 }
 
@@ -32,6 +33,10 @@ type JWTConfig struct {
 }
 
 type NotifyConfig struct {
+	CheckInterval time.Duration `yaml:"check_interval"`
+}
+
+type CaldavConfig struct {
 	CheckInterval time.Duration `yaml:"check_interval"`
 }
 
@@ -80,6 +85,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Notify.CheckInterval == 0 {
 		cfg.Notify.CheckInterval = 60 * time.Second
 	}
+	if cfg.Caldav.CheckInterval == 0 {
+		cfg.Caldav.CheckInterval = 10 * time.Minute
+	}
 
 	return &cfg, nil
 }
@@ -100,6 +108,9 @@ func Default() *Config {
 		},
 		Notify: NotifyConfig{
 			CheckInterval: 60 * time.Second,
+		},
+		Caldav: CaldavConfig{
+			CheckInterval: 10 * time.Minute,
 		},
 		Plugins: PluginsConfig{
 			Telegram: TelegramConfig{Enabled: true},

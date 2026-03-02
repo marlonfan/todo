@@ -68,6 +68,7 @@ func main() {
 	taskRepo := repository.NewTaskRepository(db)
 	catRepo := repository.NewCategoryRepository(db)
 	notifyRepo := repository.NewNotificationRepository(db)
+	caldavRepo := repository.NewCaldavRepository(db)
 
 	// Initialize notification registry
 	registry := notify.NewRegistry()
@@ -86,7 +87,9 @@ func main() {
 
 	// Initialize services
 	authService := service.NewAuthService(userRepo, &cfg.JWT)
+	caldavService := service.NewCaldavService(caldavRepo, cfg.JWT.Secret)
 	taskService := service.NewTaskService(taskRepo, catRepo, userRepo, notifyRepo)
+	taskService.SetCaldavService(caldavService)
 	catService := service.NewCategoryService(catRepo)
 	notifyService := service.NewNotifyService(notifyRepo, userRepo, taskRepo, registry)
 
@@ -94,8 +97,9 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService, notifyService)
 	taskHandler := handler.NewTaskHandler(taskService, notifyService)
 	catHandler := handler.NewCategoryHandler(catService)
-	calendarHandler := handler.NewCalendarHandler(taskService)
+	calendarHandler := handler.NewCalendarHandler(taskService, caldavService)
 	notifyHandler := handler.NewNotifyHandler(notifyService)
+	caldavHandler := handler.NewCaldavHandler(caldavService)
 
 	// Setup router
 	router := api.NewRouter(
@@ -104,6 +108,7 @@ func main() {
 		catHandler,
 		calendarHandler,
 		notifyHandler,
+		caldavHandler,
 		cfg,
 	).Setup()
 
@@ -115,6 +120,11 @@ func main() {
 	notifyScheduler.Start()
 	defer notifyScheduler.Stop()
 	log.Printf("Notification scheduler started with interval %v", cfg.Notify.CheckInterval)
+
+	caldavScheduler := scheduler.NewCaldavScheduler(caldavService, cfg.Caldav.CheckInterval)
+	caldavScheduler.Start()
+	defer caldavScheduler.Stop()
+	log.Printf("CalDAV scheduler started with interval %v", cfg.Caldav.CheckInterval)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

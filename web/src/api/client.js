@@ -86,6 +86,16 @@ export const calendarAPI = {
   getEvents: (params) => apiClient.get('/calendar', { params }),
 };
 
+export const caldavAPI = {
+  discover: (data) => apiClient.post('/caldav/discover', data),
+  listSources: () => apiClient.get('/caldav/sources'),
+  createSource: (data) => apiClient.post('/caldav/sources', data),
+  updateSource: (id, data) => apiClient.put(`/caldav/sources/${id}`, data),
+  deleteSource: (id) => apiClient.delete(`/caldav/sources/${id}`),
+  syncSource: (id) => apiClient.post(`/caldav/sources/${id}/sync`),
+  listTasks: (params) => apiClient.get('/caldav/tasks', { params }),
+};
+
 // Notifications API
 export const notifyAPI = {
   getSettings: () => apiClient.get('/notify/settings'),

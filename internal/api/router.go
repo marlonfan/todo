@@ -15,6 +15,7 @@ type Router struct {
 	categoryHandler *handler.CategoryHandler
 	calendarHandler *handler.CalendarHandler
 	notifyHandler   *handler.NotifyHandler
+	caldavHandler   *handler.CaldavHandler
 	cfg             *config.Config
 }
 
@@ -24,6 +25,7 @@ func NewRouter(
 	categoryHandler *handler.CategoryHandler,
 	calendarHandler *handler.CalendarHandler,
 	notifyHandler *handler.NotifyHandler,
+	caldavHandler *handler.CaldavHandler,
 	cfg *config.Config,
 ) *Router {
 	return &Router{
@@ -32,6 +34,7 @@ func NewRouter(
 		categoryHandler: categoryHandler,
 		calendarHandler: calendarHandler,
 		notifyHandler:   notifyHandler,
+		caldavHandler:   caldavHandler,
 		cfg:             cfg,
 	}
 }
@@ -96,6 +99,15 @@ func (r *Router) Setup() *gin.Engine {
 			protected.PATCH("/notify/settings/:id/default", r.notifyHandler.SetDefaultSetting)
 			protected.POST("/notify/test", r.notifyHandler.Test)
 			protected.GET("/notify/channels", r.notifyHandler.GetChannels)
+
+			// CalDAV
+			protected.POST("/caldav/discover", r.caldavHandler.Discover)
+			protected.GET("/caldav/sources", r.caldavHandler.ListSources)
+			protected.POST("/caldav/sources", r.caldavHandler.CreateSource)
+			protected.PUT("/caldav/sources/:id", r.caldavHandler.UpdateSource)
+			protected.DELETE("/caldav/sources/:id", r.caldavHandler.DeleteSource)
+			protected.POST("/caldav/sources/:id/sync", r.caldavHandler.SyncSource)
+			protected.GET("/caldav/tasks", r.caldavHandler.ListReadOnlyTasks)
 		}
 	}
 

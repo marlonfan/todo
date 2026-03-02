@@ -19,6 +19,7 @@ type TaskService struct {
 	catRepo    *repository.CategoryRepository
 	userRepo   *repository.UserRepository
 	notifyRepo *repository.NotificationRepository
+	caldavSvc  *CaldavService
 }
 
 type RevisionConflictError struct {
@@ -54,6 +55,10 @@ func NewTaskService(
 		userRepo:   userRepo,
 		notifyRepo: notifyRepo,
 	}
+}
+
+func (s *TaskService) SetCaldavService(caldavSvc *CaldavService) {
+	s.caldavSvc = caldavSvc
 }
 
 func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*models.Task, error) {

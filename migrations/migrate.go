@@ -15,5 +15,8 @@ func Migrate(db *gorm.DB) error {
 		&models.TaskCategory{},
 		&models.Notification{},
 		&models.UserNotifySetting{},
+		&models.CaldavSource{},
+		&models.CaldavCalendar{},
+		&models.CaldavEventCache{},
 	)
 }

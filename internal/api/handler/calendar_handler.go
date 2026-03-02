@@ -12,11 +12,12 @@ import (
 )
 
 type CalendarHandler struct {
-	taskService *service.TaskService
+	taskService   *service.TaskService
+	caldavService *service.CaldavService
 }
 
-func NewCalendarHandler(taskService *service.TaskService) *CalendarHandler {
-	return &CalendarHandler{taskService: taskService}
+func NewCalendarHandler(taskService *service.TaskService, caldavService *service.CaldavService) *CalendarHandler {
+	return &CalendarHandler{taskService: taskService, caldavService: caldavService}
 }
 
 func (h *CalendarHandler) GetEvents(c *gin.Context) {
@@ -84,6 +85,13 @@ func (h *CalendarHandler) GetEvents(c *gin.Context) {
 		}
 		event := instanceToEvent(&instance)
 		events = append(events, event)
+	}
+
+	if h.caldavService != nil {
+		externalEvents, err := h.caldavService.ListCalendarEvents(userID, start, end)
+		if err == nil {
+			events = append(events, externalEvents...)
+		}
 	}
 
 	c.JSON(http.StatusOK, events)

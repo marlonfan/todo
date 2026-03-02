@@ -11,4 +11,8 @@ export const queryKeys = {
   sync: {
     lastPull: ['sync', 'last_pull_at'],
   },
+  caldav: {
+    sources: ['caldav', 'sources'],
+    tasks: (start, end) => ['caldav', 'tasks', start, end],
+  },
 };

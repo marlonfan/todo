@@ -118,7 +118,9 @@ function mergeServerAndLocalTasks(serverTasks, localTasks) {
   const serverIDSet = new Set(serverList.map((task) => task.id));
   localList.forEach((task) => {
     if (!task) return;
-    if (Number(task.id) < 0 || !serverIDSet.has(task.id)) {
+    const state = String(task.sync_state || '');
+    const isUnsyncedLocal = state === 'pending' || state === 'syncing' || state === 'error';
+    if (isUnsyncedLocal && !serverIDSet.has(task.id)) {
       merged.push(task);
     }
   });

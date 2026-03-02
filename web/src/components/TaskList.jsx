@@ -16,7 +16,7 @@ import {
 } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
-import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
+import { useCaldavTasksQuery, useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import {
   createTaskLocal,
@@ -119,7 +119,24 @@ function TaskList({ forcedView = '' }) {
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const timeInputStepSeconds = timeGranularity * 60;
-  const { data: tasks = [], isLoading: tasksLoading } = useTasksQuery();
+  const { data: localTasks = [], isLoading: tasksLoading } = useTasksQuery();
+  const caldavRangeStart = useMemo(() => dayjs().subtract(7, 'day').startOf('day').toISOString(), []);
+  const caldavRangeEnd = useMemo(() => dayjs().add(3, 'month').endOf('day').toISOString(), []);
+  const { data: caldavTasks = [] } = useCaldavTasksQuery(caldavRangeStart, caldavRangeEnd);
+  const tasks = useMemo(() => {
+    const local = Array.isArray(localTasks) ? localTasks : [];
+    const external = Array.isArray(caldavTasks) ? caldavTasks : [];
+    const byID = new Map();
+    external.forEach((task) => {
+      if (!task || typeof task.id === 'undefined' || task.id === null) return;
+      byID.set(task.id, task);
+    });
+    local.forEach((task) => {
+      if (!task || typeof task.id === 'undefined' || task.id === null) return;
+      byID.set(task.id, task);
+    });
+    return Array.from(byID.values());
+  }, [caldavTasks, localTasks]);
   const { data: categories = [] } = useCategoriesQuery();
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -548,6 +565,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleStatusChange = async (task, newStatus) => {
+    if (task.read_only) return;
     try {
       if (task.recurrence_rule) {
         await updateTaskStatusLocal(queryClient, task.id, {
@@ -689,6 +707,7 @@ function TaskList({ forcedView = '' }) {
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
   const handleSaveDraft = async () => {
     if (!selectedTask || !draft) return;
+    if (selectedTask.read_only) return;
     if (savingDraft) return;
     const title = (draft.title || '').trim();
     if (!title) return;
@@ -740,6 +759,7 @@ function TaskList({ forcedView = '' }) {
 
   const handleDeleteSelected = async () => {
     if (!selectedTask) return;
+    if (selectedTask.read_only) return;
     if (!confirm(t('task.deleteConfirm'))) return;
 
     try {
@@ -775,6 +795,7 @@ function TaskList({ forcedView = '' }) {
   }, [isDraftDirty]);
 
   const openAdvancedModal = (task = null) => {
+    if (task?.read_only) return;
     setModalTask(task);
     setModalOpen(true);
   };
@@ -802,13 +823,15 @@ function TaskList({ forcedView = '' }) {
     const selected = selectedTaskID === task.id;
     const isCompleted = task.status === 'completed';
     const isDeleted = task.status === 'cancelled';
+    const isReadOnly = !!task.read_only;
     const priority = getPriorityLabel(task.priority);
 
     return (
       <div
         key={task.id}
-        draggable
+        draggable={!isReadOnly}
         onDragStart={(event) => {
+          if (isReadOnly) return;
           event.dataTransfer.setData('text/task-id', String(task.id));
           event.dataTransfer.effectAllowed = 'move';
         }}
@@ -828,7 +851,7 @@ function TaskList({ forcedView = '' }) {
           <input
             type="checkbox"
             checked={isCompleted}
-            disabled={isDeleted}
+            disabled={isDeleted || isReadOnly}
             onChange={(e) => {
               e.stopPropagation();
               handleStatusChange(task, isCompleted ? 'pending' : 'completed');
@@ -841,6 +864,9 @@ function TaskList({ forcedView = '' }) {
                 {task.title}
               </h3>
               <div className="hidden shrink-0 items-center gap-2 sm:flex">
+                {isReadOnly && (
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">CalDAV</span>
+                )}
                 {isDeleted && (
                   <button
                     type="button"
@@ -848,6 +874,7 @@ function TaskList({ forcedView = '' }) {
                       e.stopPropagation();
                       handleStatusChange(task, 'pending');
                     }}
+                    disabled={isReadOnly}
                     className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50"
                     title={t('task.markPending')}
                   >
@@ -869,6 +896,7 @@ function TaskList({ forcedView = '' }) {
                 {getTaskPrimaryTime(task) ? formatDateTime(getTaskPrimaryTime(task), 'MM/DD HH:mm') : ''}
               </span>
               {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{t('task.statusCancelled')}</span>}
+              {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
               <span className={`${priority.class}`}>{priority.text}</span>
               {task.categories?.slice(0, 2).map((cat) => (
                 <span
@@ -1179,6 +1207,9 @@ function TaskList({ forcedView = '' }) {
               <div className="border-b border-slate-200 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs">
+                    {selectedTask.read_only && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">CalDAV Read-only</span>
+                    )}
                     {savingDraft ? (
                       <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">{t('task.saving')}</span>
                     ) : isDraftDirty ? (
@@ -1240,13 +1271,14 @@ function TaskList({ forcedView = '' }) {
                     <button
                       type="button"
                       onClick={handleResetDraft}
-                      disabled={!isDraftDirty || savingDraft}
+                      disabled={!isDraftDirty || savingDraft || selectedTask.read_only}
                       className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
                     >
                       {t('task.resetChanges')}
                     </button>
                     <button
                       onClick={() => openAdvancedModal(selectedTask)}
+                      disabled={selectedTask.read_only}
                       className="rounded-md px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
                     >
                       {t('task.advancedEdit')}

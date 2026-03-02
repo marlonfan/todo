@@ -11,9 +11,11 @@ import { getShowCategoryEmoji, setShowCategoryEmoji } from '../utils/uiPrefs';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { authAPI } from '../api/client';
+import { caldavAPI } from '../api/client';
 import { forceManualSync, rebuildLocalDataAndSync } from '../data/syncEngine';
-import { getMeta, readOutbox } from '../data/localStore';
+import { clearCalendarRanges, clearTasksAndSet, getMeta, readOutbox, readTasks } from '../data/localStore';
 import { queryKeys } from '../query/keys';
+import { useCaldavSourcesQuery } from '../query/hooks';
 
 const TIMEZONES = [
   { value: 'Asia/Shanghai', label: 'China Standard Time (UTC+8)' },
@@ -120,6 +122,10 @@ function Settings() {
   );
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '' });
+  const [caldavForm, setCaldavForm] = useState({ name: '', baseURL: '', username: '', password: '' });
+  const [caldavCalendars, setCaldavCalendars] = useState([]);
+  const [caldavBusy, setCaldavBusy] = useState(false);
+  const { data: caldavSources = [] } = useCaldavSourcesQuery();
   const [saveToast, setSaveToast] = useState(null);
   const toastTimerRef = useRef(null);
   const defaultReminderOptions = buildReminderOptions(defaultTimeGranularity, defaultReminderMinutes);
@@ -407,6 +413,122 @@ function Settings() {
     }
   };
 
+  const handleCaldavDiscover = async () => {
+    setCaldavBusy(true);
+    try {
+      const res = await caldavAPI.discover({
+        base_url: caldavForm.baseURL,
+        username: caldavForm.username,
+        password: caldavForm.password,
+      });
+      const list = Array.isArray(res.data) ? res.data : [];
+      setCaldavCalendars(list.map((item) => ({ ...item, selected: true })));
+      showToast('success', 'Calendars discovered');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Discover failed');
+    } finally {
+      setCaldavBusy(false);
+    }
+  };
+
+  const handleCaldavCreate = async () => {
+    const selected = caldavCalendars.filter((item) => item.selected);
+    if (!selected.length) {
+      showToast('error', 'Please select at least one calendar');
+      return;
+    }
+    setCaldavBusy(true);
+    try {
+      await caldavAPI.createSource({
+        name: caldavForm.name || caldavForm.baseURL,
+        base_url: caldavForm.baseURL,
+        username: caldavForm.username,
+        password: caldavForm.password,
+        calendars: selected.map((item) => ({
+          calendar_url: item.calendar_url,
+          display_name: item.display_name || '',
+          color: item.color || '',
+        })),
+        is_active: true,
+      });
+      setCaldavForm({ name: '', baseURL: '', username: '', password: '' });
+      setCaldavCalendars([]);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.caldav.sources }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+        queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] }),
+      ]);
+      showToast('success', 'CalDAV source added');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Create source failed');
+    } finally {
+      setCaldavBusy(false);
+    }
+  };
+
+  const handleCaldavDelete = async (sourceID) => {
+    if (!window.confirm('Delete this source and all synced events?')) return;
+    setCaldavBusy(true);
+    try {
+      await caldavAPI.deleteSource(sourceID);
+      try {
+        localStorage.removeItem('caldav_tasks_cache_v1');
+      } catch {
+        // ignore
+      }
+      queryClient.setQueriesData({ queryKey: ['caldav', 'tasks'] }, []);
+      queryClient.setQueriesData({ queryKey: ['calendar', 'events'] }, (prev) => {
+        const list = Array.isArray(prev) ? prev : [];
+        return list.filter((event) => String(event?.extendedProps?.source || '') !== 'caldav');
+      });
+      queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
+        const list = Array.isArray(prev) ? prev : [];
+        return list.filter((task) => !(task?.read_only || String(task?.source || '') === 'caldav'));
+      });
+      try {
+        const cachedTasks = await readTasks();
+        const filtered = (Array.isArray(cachedTasks) ? cachedTasks : [])
+          .filter((task) => !(task?.read_only || String(task?.source || '') === 'caldav'));
+        await clearTasksAndSet(filtered);
+      } catch (cacheErr) {
+        console.error('Failed to clear local caldav tasks cache:', cacheErr);
+      }
+      try {
+        await clearCalendarRanges();
+      } catch (cacheErr) {
+        console.error('Failed to clear local calendar ranges cache:', cacheErr);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.caldav.sources }),
+        queryClient.removeQueries({ queryKey: ['caldav', 'tasks'] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+        queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] }),
+      ]);
+      showToast('success', 'CalDAV source deleted');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Delete source failed');
+    } finally {
+      setCaldavBusy(false);
+    }
+  };
+
+  const handleCaldavSync = async (sourceID) => {
+    setCaldavBusy(true);
+    try {
+      await caldavAPI.syncSource(sourceID);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.caldav.sources }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+        queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] }),
+      ]);
+      showToast('success', 'CalDAV synced');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Sync failed');
+    } finally {
+      setCaldavBusy(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       {saveToast && (
@@ -459,6 +581,16 @@ function Settings() {
               }`}
             >
               {t('settings.syncSettings')}
+            </button>
+            <button
+              onClick={() => setActiveTab('caldav')}
+              className={`px-4 py-2 font-medium ${
+                activeTab === 'caldav'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              CalDAV
             </button>
           </div>
 
@@ -713,6 +845,127 @@ function Settings() {
                 >
                   {syncBusy ? t('settings.syncRunning') : t('settings.syncRebuild')}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'caldav' && (
+            <div className="bg-white border border-gray-200 p-6 space-y-4">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">CalDAV Subscriptions</h3>
+                <p className="mt-1 text-sm text-gray-500">Read-only events are synced into Tasks and Calendar views.</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input
+                  value={caldavForm.name}
+                  onChange={(e) => setCaldavForm((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Display name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+                <input
+                  value={caldavForm.baseURL}
+                  onChange={(e) => setCaldavForm((prev) => ({ ...prev, baseURL: e.target.value }))}
+                  placeholder="Server URL"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+                <input
+                  value={caldavForm.username}
+                  onChange={(e) => setCaldavForm((prev) => ({ ...prev, username: e.target.value }))}
+                  placeholder="Username"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+                <input
+                  type="password"
+                  value={caldavForm.password}
+                  onChange={(e) => setCaldavForm((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder="App password"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={caldavBusy}
+                  onClick={handleCaldavDiscover}
+                  className="inline-flex items-center rounded-md bg-slate-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  Discover Calendars
+                </button>
+                <button
+                  type="button"
+                  disabled={caldavBusy || caldavCalendars.length === 0}
+                  onClick={handleCaldavCreate}
+                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  Save Source
+                </button>
+              </div>
+
+              {caldavCalendars.length > 0 && (
+                <div className="rounded-md border border-gray-200 p-3">
+                  <p className="mb-2 text-sm font-medium text-gray-700">Select calendars to sync</p>
+                  <div className="space-y-2">
+                    {caldavCalendars.map((item, idx) => (
+                      <label key={`${item.calendar_url}-${idx}`} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={!!item.selected}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setCaldavCalendars((prev) => prev.map((entry, entryIdx) => (
+                              entryIdx === idx ? { ...entry, selected: checked } : entry
+                            )));
+                          }}
+                        />
+                        <span>{item.display_name || item.calendar_url}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-md border border-gray-200 p-3">
+                <p className="mb-2 text-sm font-medium text-gray-700">Configured sources</p>
+                {caldavSources.length === 0 ? (
+                  <p className="text-sm text-gray-500">No CalDAV source yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {caldavSources.map((source) => (
+                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-gray-200 px-3 py-2">
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{source.name}</div>
+                          <div className="text-xs text-gray-500">{source.base_url}</div>
+                          <div className="text-xs text-gray-500">
+                            {source.last_sync_at ? `Last sync: ${new Date(source.last_sync_at).toLocaleString()}` : 'Never synced'}
+                          </div>
+                          {source.last_error ? (
+                            <div className="mt-1 text-xs text-rose-600 break-all">Error: {source.last_error}</div>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={caldavBusy}
+                            onClick={() => handleCaldavSync(source.id)}
+                            className="rounded bg-blue-600 px-2 py-1 text-xs text-white disabled:opacity-60"
+                          >
+                            Sync now
+                          </button>
+                          <button
+                            type="button"
+                            disabled={caldavBusy}
+                            onClick={() => handleCaldavDelete(source.id)}
+                            className="rounded bg-rose-600 px-2 py-1 text-xs text-white disabled:opacity-60"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

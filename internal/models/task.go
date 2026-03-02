@@ -72,6 +72,9 @@ type Task struct {
 	RecurrenceEndDate *time.Time      `json:"recurrence_end_date"`
 	CreatedAt         time.Time       `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt         time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
+	ReadOnly          bool            `json:"read_only" gorm:"-"`
+	Source            string          `json:"source,omitempty" gorm:"-"`
+	ExternalRef       string          `json:"external_ref,omitempty" gorm:"-"`
 
 	// Relations
 	User       *User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
@@ -176,4 +179,7 @@ type ExtendedProps struct {
 	Status      TaskStatus `json:"status"`
 	IsRecurring bool       `json:"isRecurring"`
 	InstanceID  string     `json:"instanceId,omitempty"`
+	ReadOnly    bool       `json:"readOnly,omitempty"`
+	Source      string     `json:"source,omitempty"`
+	ExternalID  string     `json:"externalId,omitempty"`
 }
