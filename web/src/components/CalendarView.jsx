@@ -12,7 +12,7 @@ import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { toServerRangeBoundary } from '../utils/syncTime';
 import { queryKeys } from '../query/keys';
 import { IconSearch } from './icons/TaskIcons';
-import { buildCalendarRangeKey, getCalendarRange, putCalendarRange } from '../data/localStore';
+import { buildCalendarRangeKey, getCalendarRange, getMeta, putCalendarRange, setMeta } from '../data/localStore';
 import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
 import { useTasksQuery } from '../query/hooks';
 import { onSyncCycleFinished } from '../data/syncEngine';
@@ -85,6 +85,48 @@ function annotateOverlapCount(events, defaultDurationMinutes = 30) {
   }));
 }
 
+function filterEventsForRange(events, rangeStartISO, rangeEndISO, defaultDurationMinutes = 30) {
+  const list = Array.isArray(events) ? events : [];
+  if (!rangeStartISO || !rangeEndISO) return list;
+  const rangeStart = dayjs(rangeStartISO);
+  const rangeEnd = dayjs(rangeEndISO);
+  if (!rangeStart.isValid() || !rangeEnd.isValid()) return list;
+
+  return list.filter((event) => {
+    const start = dayjs(event?.start);
+    if (!start.isValid()) return false;
+    const endRaw = event?.end ? dayjs(event.end) : start.add(defaultDurationMinutes, 'minute');
+    const end = endRaw.isValid() && endRaw.isAfter(start) ? endRaw : start.add(defaultDurationMinutes, 'minute');
+    return start.isBefore(rangeEnd) && end.isAfter(rangeStart);
+  });
+}
+
+function buildCalendarPoolRange(rangeStartISO, rangeEndISO) {
+  const start = dayjs(rangeStartISO);
+  const end = dayjs(rangeEndISO);
+  const safeStart = start.isValid() ? start : dayjs();
+  const safeEnd = end.isValid() && end.isAfter(safeStart) ? end : safeStart.add(1, 'day');
+  return {
+    start: safeStart.subtract(45, 'day').startOf('day').toISOString(),
+    end: safeEnd.add(120, 'day').endOf('day').toISOString(),
+  };
+}
+
+function isRangeCoveredByPool(rangeStartISO, rangeEndISO, pool) {
+  if (!rangeStartISO || !rangeEndISO || !pool?.start || !pool?.end) return false;
+  const rangeStart = dayjs(rangeStartISO);
+  const rangeEnd = dayjs(rangeEndISO);
+  const poolStart = dayjs(pool.start);
+  const poolEnd = dayjs(pool.end);
+  if (!rangeStart.isValid() || !rangeEnd.isValid() || !poolStart.isValid() || !poolEnd.isValid()) return false;
+  return (rangeStart.isAfter(poolStart) || rangeStart.isSame(poolStart)) &&
+    (rangeEnd.isBefore(poolEnd) || rangeEnd.isSame(poolEnd));
+}
+
+function buildCalendarSnapshotMetaKey(timezone) {
+  return `calendar_last_success_snapshot:${timezone || 'UTC'}`;
+}
+
 function emitCalendarTrace(detail = {}) {
   if (typeof window === 'undefined') return;
   if (!window.__TODO_SYNC_DEBUG__) return;
@@ -115,7 +157,11 @@ function CalendarView() {
   const [moreEventsOpen, setMoreEventsOpen] = useState(false);
   const [moreEventsDateLabel, setMoreEventsDateLabel] = useState('');
   const [moreEvents, setMoreEvents] = useState([]);
+  const [readonlyEventOpen, setReadonlyEventOpen] = useState(false);
+  const [readonlyEventDetail, setReadonlyEventDetail] = useState(null);
+  const [readonlyCopyHint, setReadonlyCopyHint] = useState('');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [calendarPool, setCalendarPool] = useState({ start: '', end: '' });
   const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
   const [isCompactMobile, setIsCompactMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
@@ -187,6 +233,7 @@ function CalendarView() {
     const syncCalendarPrefs = () => {
       setCalendarDefaultView(readCalendarDefaultView());
       setTimezone(getUserTimezone());
+      setCalendarPool({ start: '', end: '' });
     };
     window.addEventListener('user:profile-updated', syncCalendarPrefs);
     window.addEventListener('storage', syncCalendarPrefs);
@@ -224,8 +271,8 @@ function CalendarView() {
   }, [mobileCurrentDate, mobileStripStartDate]);
 
   const currentCalendarQueryKey = useMemo(
-    () => queryKeys.calendar.events(dateRange.start || '', dateRange.end || '', timezone),
-    [dateRange.end, dateRange.start, timezone]
+    () => queryKeys.calendar.events(calendarPool.start || '', calendarPool.end || '', timezone),
+    [calendarPool.end, calendarPool.start, timezone]
   );
   const taskStatusIndex = useMemo(
     () => buildTaskStatusIndex(tasksForProjection),
@@ -279,6 +326,13 @@ function CalendarView() {
       events: merged,
       updated_at: Date.now(),
     });
+    await setMeta(buildCalendarSnapshotMetaKey(timezone), {
+      start: rangeStart,
+      end: rangeEnd,
+      timezone,
+      events: merged,
+      updated_at: Date.now(),
+    });
 
     if (options.updateQuery) {
       queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), annotated);
@@ -296,26 +350,28 @@ function CalendarView() {
   }, [queryClient, taskStatusIndex, tasksForProjection, timeGranularity, timezone, toCalendarISO, toServerISO]);
 
   const {
-    data: events = [],
+    data: pooledEvents = [],
     isFetching: loading,
   } = useQuery({
     queryKey: currentCalendarQueryKey,
-    enabled: Boolean(dateRange.start && dateRange.end),
+    enabled: Boolean(calendarPool.start && calendarPool.end),
+    staleTime: 60 * 1000,
+    placeholderData: (previousData) => previousData ?? [],
     queryFn: async () => {
-      const projectedRangeStart = toServerISO(dateRange.start) || dateRange.start;
-      const projectedRangeEnd = toServerISO(dateRange.end) || dateRange.end;
+      const projectedRangeStart = toServerISO(calendarPool.start) || calendarPool.start;
+      const projectedRangeEnd = toServerISO(calendarPool.end) || calendarPool.end;
       const projected = buildProjectedEventsFromTasks(tasksForProjection, {
         rangeStart: projectedRangeStart,
         rangeEnd: projectedRangeEnd,
         timezone,
         toCalendarISO,
       });
-      const cacheKey = buildCalendarRangeKey(dateRange.start, dateRange.end, timezone);
+      const cacheKey = buildCalendarRangeKey(calendarPool.start, calendarPool.end, timezone);
       const cached = await getCalendarRange(cacheKey);
       if (cached?.events && Array.isArray(cached.events)) {
         const age = Date.now() - Number(cached.updated_at || 0);
         if (age > 60 * 1000) {
-          fetchCalendarRangeFromServer(dateRange.start, dateRange.end, { updateQuery: true }).catch((err) => {
+          fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((err) => {
             console.error('Failed to refresh stale calendar cache:', err);
           });
         }
@@ -323,17 +379,31 @@ function CalendarView() {
         return annotateOverlapCount(merged, Math.max(15, timeGranularity));
       }
 
-      if (projected.length > 0) {
-        return annotateOverlapCount(projected, Math.max(15, timeGranularity));
+      try {
+        return await fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end);
+      } catch (error) {
+        const snapshot = await getMeta(buildCalendarSnapshotMetaKey(timezone), null);
+        const snapshotEvents = Array.isArray(snapshot?.events) ? snapshot.events : [];
+        if (snapshotEvents.length > 0) {
+          const merged = mergeCalendarEvents(snapshotEvents, projected, taskStatusIndex);
+          emitCalendarTrace({
+            source: 'snapshot_fallback',
+            range_start: calendarPool.start,
+            range_end: calendarPool.end,
+            projected_count: projected.length,
+            event_count: merged.length,
+          });
+          return annotateOverlapCount(merged, Math.max(15, timeGranularity));
+        }
+        throw error;
       }
-      return fetchCalendarRangeFromServer(dateRange.start, dateRange.end);
     },
   });
 
   useEffect(() => {
-    if (!dateRange.start || !dateRange.end) return;
-    const projectedRangeStart = toServerISO(dateRange.start) || dateRange.start;
-    const projectedRangeEnd = toServerISO(dateRange.end) || dateRange.end;
+    if (!calendarPool.start || !calendarPool.end) return;
+    const projectedRangeStart = toServerISO(calendarPool.start) || calendarPool.start;
+    const projectedRangeEnd = toServerISO(calendarPool.end) || calendarPool.end;
     const projected = buildProjectedEventsFromTasks(tasksForProjection, {
       rangeStart: projectedRangeStart,
       rangeEnd: projectedRangeEnd,
@@ -348,14 +418,14 @@ function CalendarView() {
     });
     emitCalendarTrace({
       source: 'tasks_projection',
-      range_start: dateRange.start,
-      range_end: dateRange.end,
+      range_start: calendarPool.start,
+      range_end: calendarPool.end,
       projected_count: projected.length,
     });
   }, [
+    calendarPool.end,
+    calendarPool.start,
     currentCalendarQueryKey,
-    dateRange.end,
-    dateRange.start,
     queryClient,
     tasksForProjection,
     taskStatusIndex,
@@ -374,66 +444,46 @@ function CalendarView() {
       return nextEventsSnapshot;
     });
 
-    if (!dateRange.start || !dateRange.end || !Array.isArray(nextEventsSnapshot)) return;
-    const cacheKey = buildCalendarRangeKey(dateRange.start, dateRange.end, timezone);
+    if (!calendarPool.start || !calendarPool.end || !Array.isArray(nextEventsSnapshot)) return;
+    const cacheKey = buildCalendarRangeKey(calendarPool.start, calendarPool.end, timezone);
     putCalendarRange({
       key: cacheKey,
-      start: dateRange.start,
-      end: dateRange.end,
+      start: calendarPool.start,
+      end: calendarPool.end,
       timezone,
       events: nextEventsSnapshot,
       updated_at: Date.now(),
     }).catch((error) => {
       console.error('Failed to persist calendar range cache:', error);
     });
-  }, [currentCalendarQueryKey, dateRange.end, dateRange.start, queryClient, timezone]);
+  }, [calendarPool.end, calendarPool.start, currentCalendarQueryKey, queryClient, timezone]);
 
   useEffect(() => {
     if (!dateRange.start || !dateRange.end) return;
-    let cancelled = false;
-
-    const prefetchAdjacentRanges = async () => {
-      const rangeStart = dayjs(dateRange.start);
-      const rangeEnd = dayjs(dateRange.end);
-      const spanDays = Math.max(1, rangeEnd.diff(rangeStart, 'day'));
-      if (spanDays > 45) return;
-      const candidates = [1, -1];
-
-      for (const multiplier of candidates) {
-        if (cancelled) return;
-        const start = rangeStart.add(spanDays * multiplier, 'day').toISOString();
-        const end = rangeEnd.add(spanDays * multiplier, 'day').toISOString();
-        const key = buildCalendarRangeKey(start, end, timezone);
-        const cached = await getCalendarRange(key);
-        const age = Date.now() - Number(cached?.updated_at || 0);
-        if (cached?.events && age < 5 * 60 * 1000) {
-          continue;
-        }
-
-        try {
-          await fetchCalendarRangeFromServer(start, end);
-        } catch (error) {
-          console.error('Failed to prefetch adjacent calendar range:', error);
-        }
-      }
-    };
-
-    prefetchAdjacentRanges();
-    return () => {
-      cancelled = true;
-    };
-  }, [dateRange.end, dateRange.start, fetchCalendarRangeFromServer, timezone]);
+    if (isRangeCoveredByPool(dateRange.start, dateRange.end, calendarPool)) return;
+    setCalendarPool(buildCalendarPoolRange(dateRange.start, dateRange.end));
+  }, [calendarPool, dateRange.end, dateRange.start]);
 
   useEffect(() => {
     const unsubscribe = onSyncCycleFinished((summary) => {
       if (!summary?.ok) return;
-      if (!dateRange.start || !dateRange.end) return;
-      fetchCalendarRangeFromServer(dateRange.start, dateRange.end, { updateQuery: true }).catch((error) => {
+      if (!calendarPool.start || !calendarPool.end) return;
+      fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
         console.error('Failed to refresh calendar after sync cycle:', error);
       });
     });
     return unsubscribe;
-  }, [dateRange.end, dateRange.start, fetchCalendarRangeFromServer]);
+  }, [calendarPool.end, calendarPool.start, fetchCalendarRangeFromServer]);
+
+  const events = useMemo(() => {
+    const clipped = filterEventsForRange(
+      pooledEvents,
+      dateRange.start,
+      dateRange.end,
+      Math.max(15, timeGranularity)
+    );
+    return annotateOverlapCount(clipped, Math.max(15, timeGranularity));
+  }, [dateRange.end, dateRange.start, pooledEvents, timeGranularity]);
 
   const handleDatesSet = (dateInfo) => {
     setCurrentViewTitle(dateInfo?.view?.title || '');
@@ -653,9 +703,77 @@ function CalendarView() {
     }
   };
 
+  const formatReadonlyEventDateTime = useCallback((value, allDay = false) => {
+    if (!value) return '';
+    const parsed = dayjs(value);
+    if (!parsed.isValid()) return '';
+    if (allDay) return parsed.utc().format('YYYY-MM-DD');
+    return parsed.utc().format('YYYY-MM-DD HH:mm');
+  }, []);
+
+  const buildReadonlyEventDetail = useCallback((eventLike) => {
+    const ext = eventLike?.extendedProps || {};
+    const allDay = !!eventLike?.allDay;
+    return {
+      title: String(eventLike?.title || ''),
+      allDay,
+      startText: formatReadonlyEventDateTime(eventLike?.start, allDay),
+      endText: formatReadonlyEventDateTime(eventLike?.end, allDay),
+      description: String(ext?.description || '').trim(),
+      source: String(ext?.source || 'caldav'),
+      externalId: String(ext?.externalId || '').trim(),
+      taskId: Number(ext?.taskId || 0),
+    };
+  }, [formatReadonlyEventDateTime]);
+
+  const openReadonlyEventModal = useCallback((eventLike) => {
+    setReadonlyCopyHint('');
+    setReadonlyEventDetail(buildReadonlyEventDetail(eventLike));
+    setReadonlyEventOpen(true);
+  }, [buildReadonlyEventDetail]);
+
+  const closeReadonlyEventModal = useCallback(() => {
+    setReadonlyEventOpen(false);
+    setReadonlyEventDetail(null);
+    setReadonlyCopyHint('');
+  }, []);
+
+  const isExternalLink = useCallback((value) => /^https?:\/\//i.test(String(value || '').trim()), []);
+
+  const handleCopyReadonlyExternalID = useCallback(async () => {
+    const raw = readonlyEventDetail?.externalId || '';
+    if (!raw) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(raw);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = raw;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setReadonlyCopyHint('ID copied');
+      window.setTimeout(() => setReadonlyCopyHint(''), 1800);
+    } catch {
+      setReadonlyCopyHint('Copy failed');
+      window.setTimeout(() => setReadonlyCopyHint(''), 1800);
+    }
+  }, [readonlyEventDetail?.externalId]);
+
   const handleEventClick = async (info) => {
     if (info?.event?.extendedProps?.readOnly) {
-      alert('This CalDAV event is read-only.');
+      openReadonlyEventModal({
+        id: info.event.id,
+        title: info.event.title,
+        start: info.event.start,
+        end: info.event.end,
+        allDay: info.event.allDay,
+        extendedProps: info.event.extendedProps || {},
+      });
       return;
     }
     const taskId = info.event.extendedProps.taskId;
@@ -683,7 +801,7 @@ function CalendarView() {
 
   const openTaskFromCalendarEvent = useCallback(async (eventLike) => {
     if (eventLike?.extendedProps?.readOnly) {
-      alert('This CalDAV event is read-only.');
+      openReadonlyEventModal(eventLike);
       return;
     }
     const taskId = Number(eventLike?.extendedProps?.taskId || 0);
@@ -708,7 +826,7 @@ function CalendarView() {
     if (!cachedTask) {
       alert(t('calendar.loadTaskFailed'));
     }
-  }, [queryClient, t]);
+  }, [openReadonlyEventModal, queryClient, t]);
 
   const handleMoreLinkClick = useCallback((info) => {
     const allSegs = Array.isArray(info?.allSegs) ? info.allSegs : [];
@@ -864,8 +982,8 @@ function CalendarView() {
         return [savedTask, ...base];
       });
     }
-    if (dateRange.start && dateRange.end) {
-      fetchCalendarRangeFromServer(dateRange.start, dateRange.end, { updateQuery: true }).catch((error) => {
+    if (calendarPool.start && calendarPool.end) {
+      fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
         console.error('Failed to refresh calendar after save:', error);
       });
     }
@@ -1087,6 +1205,7 @@ function CalendarView() {
             selectMirror={true}
             dayMaxEvents={true}
             dayMaxEventRows={true}
+            eventMaxStack={2}
             fixedWeekCount={false}
             weekends={true}
             events={events}
@@ -1160,6 +1279,91 @@ function CalendarView() {
           onClose={handleModalClose}
           onSaved={handleTaskSaved}
         />
+      )}
+
+      {readonlyEventOpen && readonlyEventDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeReadonlyEventModal}>
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-sm font-semibold text-slate-800">
+                {readonlyEventDetail.title || 'Untitled event'}
+              </h3>
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                onClick={closeReadonlyEventModal}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3 px-4 py-3 text-sm text-slate-700">
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Source</p>
+                <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.source || 'caldav'}</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Start</p>
+                  <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.startText || '-'}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">End</p>
+                  <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.endText || '-'}</p>
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-xs uppercase tracking-wide text-slate-500">All day</p>
+                <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.allDay ? 'Yes' : 'No'}</p>
+              </div>
+              {readonlyEventDetail.description && (
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Description</p>
+                  <p className="mt-1 whitespace-pre-wrap text-slate-700">{readonlyEventDetail.description}</p>
+                </div>
+              )}
+              {readonlyEventDetail.externalId && (
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">External</p>
+                  <p className="mt-1 break-all text-slate-700">{readonlyEventDetail.externalId}</p>
+                </div>
+              )}
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                This event comes from CalDAV and is read-only in Todo.
+              </p>
+            </div>
+            <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
+              <div className="text-xs text-slate-500">{readonlyCopyHint || ''}</div>
+              <div className="flex items-center gap-2">
+                {readonlyEventDetail.externalId && isExternalLink(readonlyEventDetail.externalId) && (
+                  <a
+                    href={readonlyEventDetail.externalId}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Open source event
+                  </a>
+                )}
+                {readonlyEventDetail.externalId && !isExternalLink(readonlyEventDetail.externalId) && (
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={handleCopyReadonlyExternalID}
+                  >
+                    Copy external ID
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeReadonlyEventModal}
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {moreEventsOpen && (

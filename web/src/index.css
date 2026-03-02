@@ -523,6 +523,15 @@ body {
   box-shadow: 0 1px 0 rgba(148, 163, 184, 0.24);
 }
 
+/* Leave a stable click gutter on the right side of each time-grid column. */
+.todo-calendar.fc .fc-timegrid-col-events {
+  padding-right: 10px;
+}
+
+.todo-calendar.fc .fc-timegrid-event-harness {
+  right: 8px !important;
+}
+
 .todo-calendar.fc .fc-daygrid-event {
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-left: 3px solid rgba(37, 99, 235, 0.75);
@@ -558,6 +567,14 @@ body {
 .mobile-calendar .fc-timeGridWeek-view .fc-timegrid-slot,
 .mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot {
   height: 1.95rem;
+}
+
+.mobile-calendar .fc-timegrid-col-events {
+  padding-right: 8px;
+}
+
+.mobile-calendar .fc-timegrid-event-harness {
+  right: 6px !important;
 }
 
 @media (hover: none) and (pointer: coarse) {
