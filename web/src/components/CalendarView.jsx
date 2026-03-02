@@ -1203,9 +1203,9 @@ function CalendarView() {
             editable={true}
             selectable={true}
             selectMirror={true}
-            dayMaxEvents={true}
-            dayMaxEventRows={true}
-            eventMaxStack={2}
+            dayMaxEvents={activeCalendarView === 'dayGridMonth'}
+            dayMaxEventRows={activeCalendarView === 'dayGridMonth'}
+            eventMaxStack={activeCalendarView === 'dayGridMonth' ? undefined : 99}
             fixedWeekCount={false}
             weekends={true}
             events={events}

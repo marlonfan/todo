@@ -9,7 +9,7 @@ import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery } from '../query/hooks';
-import { createTaskLocal, deleteTaskLocal, updateTaskLocal } from '../data/taskMutations';
+import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 
@@ -360,7 +360,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
     setLoading(true);
     try {
-      await deleteTaskLocal(queryClient, task.id);
+      if (task?.status === 'cancelled') {
+        await deleteTaskLocal(queryClient, task.id);
+      } else {
+        await cancelTaskLocal(queryClient, task.id);
+      }
       onSaved(null);
       onClose();
     } catch (err) {

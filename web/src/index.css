@@ -523,37 +523,6 @@ body {
   box-shadow: 0 1px 0 rgba(148, 163, 184, 0.24);
 }
 
-/* Leave a stable click gutter on the right side of each time-grid column. */
-.todo-calendar.fc .fc-timegrid-col-events {
-  padding-right: 10px;
-  pointer-events: none;
-}
-
-.todo-calendar.fc .fc-timegrid-event-harness {
-  right: 8px !important;
-  max-width: calc(100% - 8px);
-  pointer-events: auto;
-}
-
-.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-col-events {
-  padding-right: 30px !important;
-}
-
-.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-event-harness {
-  inset-inline-end: 24px !important;
-  right: 24px !important;
-  max-width: calc(100% - 24px);
-}
-
-.todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-col-events {
-  padding-right: 12px;
-}
-
-.todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
-  right: 10px !important;
-  max-width: calc(100% - 10px);
-}
-
 .todo-calendar.fc .fc-daygrid-event {
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-left: 3px solid rgba(37, 99, 235, 0.75);
@@ -577,40 +546,6 @@ body {
   padding: 1px 7px;
 }
 
-.mobile-calendar.fc {
-  font-size: 0.74rem;
-}
-
-.mobile-calendar .fc-timeGridWeek-view .fc-col-header-cell-cushion,
-.mobile-calendar .fc-timeGridDay-view .fc-col-header-cell-cushion {
-  font-size: 10px;
-}
-
-.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-slot,
-.mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot {
-  height: 1.95rem;
-}
-
-.mobile-calendar .fc-timegrid-col-events {
-  padding-right: 8px;
-  pointer-events: none;
-}
-
-.mobile-calendar .fc-timegrid-event-harness {
-  right: 6px !important;
-  max-width: calc(100% - 6px);
-  pointer-events: auto;
-}
-
-.mobile-calendar .fc-timeGridThreeDay-view .fc-timegrid-col-events {
-  padding-right: 10px;
-}
-
-.mobile-calendar .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
-  right: 8px !important;
-  max-width: calc(100% - 8px);
-}
-
 @media (hover: none) and (pointer: coarse) {
   .todo-calendar.fc .fc-event {
     -webkit-tap-highlight-color: transparent;
@@ -628,47 +563,73 @@ body {
   }
 }
 
-/* Runtime override: FullCalendar root is nested under .todo-calendar/.mobile-calendar */
-.todo-calendar .fc .fc-timegrid-col-events {
+/* Stable click gutter for time-grid views. */
+.fc .fc-timegrid-col-events {
   padding-right: 10px !important;
-  pointer-events: none;
+  pointer-events: none !important;
 }
 
-.todo-calendar .fc .fc-timegrid-event-harness {
+.fc .fc-timegrid-event-harness {
   inset-inline-end: 8px !important;
   right: 8px !important;
   max-width: calc(100% - 8px) !important;
-  pointer-events: auto;
+  pointer-events: auto !important;
 }
 
-.todo-calendar .fc .fc-timeGridWeek-view .fc-timegrid-col-events {
+.fc .fc-timeGridWeek-view .fc-timegrid-event,
+.fc .fc-timeGridDay-view .fc-timegrid-event,
+.fc .fc-timeGridThreeDay-view .fc-timegrid-event {
+  min-height: 22px !important;
+}
+
+.fc .fc-timeGridWeek-view .fc-timegrid-event .fc-event-main-frame,
+.fc .fc-timeGridDay-view .fc-timegrid-event .fc-event-main-frame,
+.fc .fc-timeGridThreeDay-view .fc-timegrid-event .fc-event-main-frame {
+  min-height: 22px !important;
+}
+
+.fc .fc-timeGridWeek-view .fc-timegrid-col-events {
   padding-right: 30px !important;
+  pointer-events: none !important;
 }
 
-.todo-calendar .fc .fc-timeGridWeek-view .fc-timegrid-event-harness {
+.fc .fc-timeGridWeek-view .fc-timegrid-event-harness {
   inset-inline-end: 24px !important;
   right: 24px !important;
   max-width: calc(100% - 24px) !important;
+  pointer-events: auto !important;
 }
 
-.todo-calendar .fc .fc-timeGridThreeDay-view .fc-timegrid-col-events {
+.fc .fc-timeGridThreeDay-view .fc-timegrid-col-events {
   padding-right: 12px !important;
+  pointer-events: none !important;
 }
 
-.todo-calendar .fc .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
+.fc .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
   inset-inline-end: 10px !important;
   right: 10px !important;
   max-width: calc(100% - 10px) !important;
+  pointer-events: auto !important;
 }
 
-.mobile-calendar .fc .fc-timegrid-col-events {
-  padding-right: 8px !important;
-  pointer-events: none;
+.fc .fc-timeGridDay-view .fc-timegrid-col-events {
+  padding-right: 28px !important;
+  pointer-events: none !important;
 }
 
-.mobile-calendar .fc .fc-timegrid-event-harness {
-  inset-inline-end: 6px !important;
-  right: 6px !important;
-  max-width: calc(100% - 6px) !important;
-  pointer-events: auto;
+.fc .fc-timeGridDay-view .fc-timegrid-event-harness {
+  inset-inline-end: 22px !important;
+  right: 22px !important;
+  max-width: calc(100% - 22px) !important;
+  pointer-events: auto !important;
+}
+
+/* Mobile day view readability */
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot {
+  height: 2.65rem !important;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-axis-cushion,
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot-label-cushion {
+  font-size: 12px !important;
 }

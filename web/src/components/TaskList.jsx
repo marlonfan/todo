@@ -19,6 +19,7 @@ import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCaldavTasksQuery, useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import {
+  cancelTaskLocal,
   createTaskLocal,
   deleteTaskLocal,
   updateTaskLocal,
@@ -763,7 +764,11 @@ function TaskList({ forcedView = '' }) {
     if (!confirm(t('task.deleteConfirm'))) return;
 
     try {
-      await deleteTaskLocal(queryClient, selectedTask.id);
+      if (selectedTask?.status === 'cancelled') {
+        await deleteTaskLocal(queryClient, selectedTask.id);
+      } else {
+        await cancelTaskLocal(queryClient, selectedTask.id);
+      }
       setSelectedTaskID(0);
     } catch (err) {
       console.error('Failed to delete task:', err);
