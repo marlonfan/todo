@@ -54,6 +54,7 @@ function withIfMatch(options = {}) {
 // Tasks API
 export const tasksAPI = {
   list: (params) => apiClient.get('/tasks', { params }),
+  sync: (params) => apiClient.get('/tasks/sync', { params }),
   get: (id) => apiClient.get(`/tasks/${id}`),
   create: (data) => apiClient.post('/tasks', data),
   update: (id, data, options = {}) => apiClient.put(`/tasks/${id}`, data, withIfMatch(options)),

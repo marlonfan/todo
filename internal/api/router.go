@@ -72,6 +72,7 @@ func (r *Router) Setup() *gin.Engine {
 
 			// Tasks
 			protected.GET("/tasks", r.taskHandler.List)
+			protected.GET("/tasks/sync", r.taskHandler.Sync)
 			protected.POST("/tasks", r.taskHandler.Create)
 			protected.GET("/tasks/:id", r.taskHandler.Get)
 			protected.PUT("/tasks/:id", r.taskHandler.Update)

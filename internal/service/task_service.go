@@ -65,6 +65,9 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 	if err := normalizeTaskTimes(req.ClientTimezone, req.StartTimeLocal, req.EndTimeLocal, &req.StartTime, &req.EndTime); err != nil {
 		return nil, err
 	}
+	if err := validateTaskTimeRange(req.StartTime, req.EndTime); err != nil {
+		return nil, err
+	}
 
 	// Validate categories
 	if len(req.CategoryIDs) > 0 {
@@ -183,6 +186,9 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	if fieldMask["recurrence_end_date"] {
 		task.RecurrenceEndDate = req.RecurrenceEndDate
 	}
+	if err := validateTaskTimeRange(task.StartTime, task.EndTime); err != nil {
+		return nil, err
+	}
 
 	if task.Revision <= 0 {
 		task.Revision = 1
@@ -284,6 +290,9 @@ func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTas
 	task.StartTime = req.StartTime
 	task.EndTime = req.EndTime
 	task.AllDay = req.AllDay
+	if err := validateTaskTimeRange(task.StartTime, task.EndTime); err != nil {
+		return nil, err
+	}
 	if task.Revision <= 0 {
 		task.Revision = 1
 	}
@@ -319,8 +328,19 @@ func (s *TaskService) Delete(userID, taskID int64, expectedRevision *int64) erro
 	if err := s.notifyRepo.DeleteByTask(taskID); err != nil {
 		return err
 	}
+	return s.taskRepo.DeleteWithDeleteLog(userID, taskID, time.Now().UTC())
+}
 
-	return s.taskRepo.Delete(taskID)
+func (s *TaskService) ListChangedSince(userID int64, since time.Time, limit int) ([]models.Task, []models.TaskDeleteLog, error) {
+	changed, err := s.taskRepo.ListChangedSince(userID, since, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	deleted, err := s.taskRepo.ListDeletedSince(userID, since, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	return changed, deleted, nil
 }
 
 func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
@@ -566,4 +586,14 @@ func parseClientLocalTime(value string, loc *time.Location) (time.Time, error) {
 	}
 
 	return time.Time{}, errors.New("unsupported datetime format")
+}
+
+func validateTaskTimeRange(start, end *time.Time) error {
+	if start == nil || end == nil {
+		return nil
+	}
+	if end.Before(*start) {
+		return errors.New("end_time must be greater than or equal to start_time")
+	}
+	return nil
 }

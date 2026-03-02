@@ -92,6 +92,14 @@ type TaskOccurrenceStatus struct {
 	UpdatedAt      time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
+type TaskDeleteLog struct {
+	ID        int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	UserID    int64     `json:"user_id" gorm:"not null;index;index:idx_task_delete_user_time"`
+	TaskID    int64     `json:"task_id" gorm:"not null;index"`
+	DeletedAt time.Time `json:"deleted_at" gorm:"not null;index;index:idx_task_delete_user_time"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+}
+
 type TaskInstance struct {
 	InstanceID   string     `json:"instance_id"` // virtual ID: taskID_date
 	TaskID       int64      `json:"task_id"`

@@ -124,6 +124,64 @@ func (h *TaskHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
+func (h *TaskHandler) Sync(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	since := time.Unix(0, 0).UTC()
+	if raw := strings.TrimSpace(c.Query("since")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid since date format"})
+			return
+		}
+		since = parsed.UTC()
+	}
+
+	limit := 500
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		if parsed > 2000 {
+			parsed = 2000
+		}
+		limit = parsed
+	}
+
+	changed, deleted, err := h.taskService.ListChangedSince(userID, since, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	nextSince := since
+	for _, task := range changed {
+		if task.UpdatedAt.After(nextSince) {
+			nextSince = task.UpdatedAt
+		}
+	}
+	for _, item := range deleted {
+		if item.DeletedAt.After(nextSince) {
+			nextSince = item.DeletedAt
+		}
+	}
+	hasMore := len(changed) >= limit || len(deleted) >= limit
+	now := time.Now().UTC()
+	if !hasMore && now.After(nextSince) {
+		nextSince = now
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"tasks":      changed,
+		"deleted":    deleted,
+		"next_since": nextSince.Format(time.RFC3339),
+		"has_more":   hasMore,
+		"server_at":  now.Format(time.RFC3339),
+	})
+}
+
 func (h *TaskHandler) Update(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 

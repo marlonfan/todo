@@ -99,6 +99,66 @@ func (r *TaskRepository) Delete(id int64) error {
 	})
 }
 
+func (r *TaskRepository) DeleteWithDeleteLog(userID, taskID int64, deletedAt time.Time) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&models.TaskDeleteLog{
+			UserID:    userID,
+			TaskID:    taskID,
+			DeletedAt: deletedAt.UTC(),
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM task_categories WHERE task_id = ?", taskID).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&models.Task{}, taskID).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func (r *TaskRepository) CreateDeleteLog(userID, taskID int64, deletedAt time.Time) error {
+	record := &models.TaskDeleteLog{
+		UserID:    userID,
+		TaskID:    taskID,
+		DeletedAt: deletedAt.UTC(),
+	}
+	return r.db.Create(record).Error
+}
+
+func (r *TaskRepository) ListChangedSince(userID int64, since time.Time, limit int) ([]models.Task, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	var tasks []models.Task
+	err := r.db.Preload("Categories").
+		Where("user_id = ? AND updated_at > ?", userID, since.UTC()).
+		Order("updated_at asc, id asc").
+		Limit(limit).
+		Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *TaskRepository) ListDeletedSince(userID int64, since time.Time, limit int) ([]models.TaskDeleteLog, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	var logs []models.TaskDeleteLog
+	err := r.db.
+		Where("user_id = ? AND deleted_at > ?", userID, since.UTC()).
+		Order("deleted_at asc, id asc").
+		Limit(limit).
+		Find(&logs).Error
+	return logs, err
+}
+
 func (r *TaskRepository) UpdateCategories(taskID int64, categoryIDs []int64) error {
 	// Fix 3: 使用事务确保原子性
 	return r.db.Transaction(func(tx *gorm.DB) error {

@@ -196,11 +196,9 @@ func (s *CaldavService) SyncSourceNow(ctx context.Context, userID, sourceID int6
 		return err
 	}
 	now := time.Now().UTC()
-	rangeStart := now.AddDate(0, 0, -7)
-	rangeEnd := now.AddDate(0, 3, 0)
 	var syncErr error
 	for _, cal := range calendars {
-		_, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, &cal, rangeStart, rangeEnd, true)
+		err := s.syncCalendarCache(ctx, source, password, &cal)
 		if err != nil {
 			syncErr = err
 			cal.LastError = err.Error()
@@ -238,7 +236,7 @@ func (s *CaldavService) SyncAllActiveSources(ctx context.Context) error {
 }
 
 func (s *CaldavService) ListReadOnlyTasks(userID int64, start, end time.Time) ([]models.Task, error) {
-	events, _, err := s.fetchUserEventsDetailed(context.Background(), userID, start, end)
+	events, err := s.repo.ListEventsInRange(userID, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -270,9 +268,9 @@ func (s *CaldavService) ListReadOnlyTasks(userID int64, start, end time.Time) ([
 }
 
 func (s *CaldavService) ListReadOnlyTasksWithDebug(userID int64, start, end time.Time) ([]models.Task, *models.CaldavFetchDebug, error) {
-	events, debug, err := s.fetchUserEventsDetailed(context.Background(), userID, start, end)
+	events, err := s.repo.ListEventsInRange(userID, start, end)
 	if err != nil {
-		return nil, debug, err
+		return nil, nil, err
 	}
 	out := make([]models.Task, 0, len(events))
 	for _, ev := range events {
@@ -298,11 +296,16 @@ func (s *CaldavService) ListReadOnlyTasksWithDebug(userID int64, start, end time
 		}
 		out = append(out, task)
 	}
-	return out, debug, nil
+	return out, &models.CaldavFetchDebug{
+		AttemptedCalendars:  0,
+		SuccessfulCalendars: 0,
+		EventCount:          len(out),
+		Messages:            []string{"served from local cache"},
+	}, nil
 }
 
 func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) ([]models.CalendarEvent, error) {
-	events, _, err := s.fetchUserEventsDetailed(context.Background(), userID, start, end)
+	events, err := s.repo.ListEventsInRange(userID, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -325,23 +328,84 @@ func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) (
 				Priority:    models.PriorityMedium,
 				Status:      taskStatus,
 				IsRecurring: false,
-					ReadOnly:    true,
-					Source:      caldavSourceName,
-					ExternalID:  fmt.Sprintf("%d:%d:%s:%s", ev.SourceID, ev.CalendarID, ev.EventUID, ev.RecurrenceID),
-					Location:    strings.TrimSpace(ev.Location),
-					Organizer:   strings.TrimSpace(ev.Organizer),
-					Attendees:   splitCaldavAttendees(ev.Attendees),
-					MeetingLink: strings.TrimSpace(ev.MeetingLink),
-				},
-				BackgroundColor: "#64748b",
-				BorderColor:     "#64748b",
-			}
+				ReadOnly:    true,
+				Source:      caldavSourceName,
+				ExternalID:  fmt.Sprintf("%d:%d:%s:%s", ev.SourceID, ev.CalendarID, ev.EventUID, ev.RecurrenceID),
+				Location:    strings.TrimSpace(ev.Location),
+				Organizer:   strings.TrimSpace(ev.Organizer),
+				Attendees:   splitCaldavAttendees(ev.Attendees),
+				MeetingLink: strings.TrimSpace(ev.MeetingLink),
+			},
+			BackgroundColor: "#64748b",
+			BorderColor:     "#64748b",
+		}
 		if ev.EndTime != nil {
 			item.End = ev.EndTime.Format(time.RFC3339)
 		}
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.CaldavSource, password string, calendar *models.CaldavCalendar) error {
+	remoteCTag, remoteSyncToken, stateErr := s.fetchCalendarState(ctx, source, password, calendar.CalendarURL)
+	if stateErr == nil && remoteCTag != "" && remoteCTag == strings.TrimSpace(calendar.CTag) {
+		calendar.SyncToken = remoteSyncToken
+		return nil
+	}
+
+	items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, time.Time{}, time.Time{}, false)
+	if err != nil {
+		return err
+	}
+	keepKeys := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.EventUID == "" {
+			continue
+		}
+		event := item
+		event.UserID = source.UserID
+		event.SourceID = source.ID
+		event.CalendarID = calendar.ID
+		if err := s.repo.UpsertEvent(&event); err != nil {
+			return err
+		}
+		keepKeys = append(keepKeys, event.EventUID+"|"+strings.TrimSpace(event.RecurrenceID))
+	}
+	if err := s.repo.DeleteEventsNotInSet(source.UserID, source.ID, calendar.ID, keepKeys); err != nil {
+		return err
+	}
+	if remoteCTag != "" {
+		calendar.CTag = remoteCTag
+	}
+	if remoteSyncToken != "" {
+		calendar.SyncToken = remoteSyncToken
+	}
+	return nil
+}
+
+func (s *CaldavService) fetchCalendarState(ctx context.Context, source *models.CaldavSource, password, calendarURL string) (string, string, error) {
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
+  <d:prop>
+    <cs:getctag/>
+    <d:sync-token/>
+  </d:prop>
+</d:propfind>`
+	parsed, err := s.propfindMultiStatus(ctx, calendarURL, source.Username, password, "0", body)
+	if err != nil {
+		return "", "", err
+	}
+	for _, response := range parsed.Responses {
+		for _, propStat := range response.PropStat {
+			ctag := strings.TrimSpace(propStat.Prop.GetCTag)
+			token := strings.TrimSpace(propStat.Prop.SyncToken)
+			if ctag != "" || token != "" {
+				return ctag, token, nil
+			}
+		}
+	}
+	return "", "", errors.New("missing ctag and sync-token")
 }
 
 type discoveredCalendar struct {
@@ -367,6 +431,8 @@ type propBody struct {
 	DisplayName          string `xml:"displayname"`
 	CalendarData         string `xml:"calendar-data"`
 	GetEtag              string `xml:"getetag"`
+	GetCTag              string `xml:"getctag"`
+	SyncToken            string `xml:"sync-token"`
 	LastModified         string `xml:"getlastmodified"`
 	CurrentUserPrincipal struct {
 		Href string `xml:"href"`
@@ -693,23 +759,23 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 				}
 				recurrenceID := strings.TrimSpace(item.RecurrenceID)
 				endTime := item.End
-					event := models.CaldavEventCache{
-						UserID:       source.UserID,
-						SourceID:     source.ID,
-						CalendarID:   calendarID,
-						EventUID:     item.UID,
-						RecurrenceID: recurrenceID,
-						Title:        item.Summary,
-						Description:  item.Description,
-						Location:     item.Location,
-						Organizer:    item.Organizer,
-						Attendees:    strings.Join(item.Attendees, "\n"),
-						MeetingLink:  extractMeetingURL(item.URL, item.Description),
-						StartTime:    item.Start.UTC(),
-						AllDay:       item.AllDay,
-						Status:       item.Status,
-						Etag:         strings.TrimSpace(prop.Prop.GetEtag),
-						RawHref:      href,
+				event := models.CaldavEventCache{
+					UserID:       source.UserID,
+					SourceID:     source.ID,
+					CalendarID:   calendarID,
+					EventUID:     item.UID,
+					RecurrenceID: recurrenceID,
+					Title:        item.Summary,
+					Description:  item.Description,
+					Location:     item.Location,
+					Organizer:    item.Organizer,
+					Attendees:    strings.Join(item.Attendees, "\n"),
+					MeetingLink:  extractMeetingURL(item.URL, item.Description),
+					StartTime:    item.Start.UTC(),
+					AllDay:       item.AllDay,
+					Status:       item.Status,
+					Etag:         strings.TrimSpace(prop.Prop.GetEtag),
+					RawHref:      href,
 				}
 				if !endTime.IsZero() {
 					endUTC := endTime.UTC()
@@ -754,23 +820,23 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 						}
 						recurrenceID := strings.TrimSpace(item.RecurrenceID)
 						endTime := item.End
-							event := models.CaldavEventCache{
-								UserID:       source.UserID,
-								SourceID:     source.ID,
-								CalendarID:   calendarID,
-								EventUID:     item.UID,
-								RecurrenceID: recurrenceID,
-								Title:        item.Summary,
-								Description:  item.Description,
-								Location:     item.Location,
-								Organizer:    item.Organizer,
-								Attendees:    strings.Join(item.Attendees, "\n"),
-								MeetingLink:  extractMeetingURL(item.URL, item.Description),
-								StartTime:    item.Start.UTC(),
-								AllDay:       item.AllDay,
-								Status:       item.Status,
-								Etag:         strings.TrimSpace(prop.Prop.GetEtag),
-								RawHref:      href,
+						event := models.CaldavEventCache{
+							UserID:       source.UserID,
+							SourceID:     source.ID,
+							CalendarID:   calendarID,
+							EventUID:     item.UID,
+							RecurrenceID: recurrenceID,
+							Title:        item.Summary,
+							Description:  item.Description,
+							Location:     item.Location,
+							Organizer:    item.Organizer,
+							Attendees:    strings.Join(item.Attendees, "\n"),
+							MeetingLink:  extractMeetingURL(item.URL, item.Description),
+							StartTime:    item.Start.UTC(),
+							AllDay:       item.AllDay,
+							Status:       item.Status,
+							Etag:         strings.TrimSpace(prop.Prop.GetEtag),
+							RawHref:      href,
 						}
 						if !endTime.IsZero() {
 							endUTC := endTime.UTC()

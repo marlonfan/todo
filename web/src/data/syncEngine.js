@@ -19,12 +19,13 @@ import {
   updateOutbox,
 } from './localStore';
 import { getCoalescePlan } from './outboxCoalesce';
-import { collectPendingDeleteTaskIDs, mergeServerAndLocalTasks, normalizeServerTask } from './taskMerge';
+import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } from './taskMerge';
 
 const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
 const MAX_SYNC_INTERVAL_SECONDS = 1800;
 const SYNC_INTERVAL_STORAGE_KEY = 'sync_interval_seconds';
+const TASK_SYNC_CURSOR_KEY = 'tasks_sync_cursor';
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 let queryClientRef = null;
@@ -56,6 +57,10 @@ function getSyncIntervalMs() {
   const seconds = readSyncIntervalSecondsFromStorage();
   if (seconds <= 0) return 0;
   return seconds * 1000;
+}
+
+function isAutoSyncEnabled() {
+  return getSyncIntervalMs() > 0;
 }
 
 function resetSyncIntervalTimer() {
@@ -310,17 +315,67 @@ async function processOutbox() {
 async function pullServerData() {
   if (!queryClientRef || !hasToken()) return;
 
-  const [tasksRes, categoriesRes, outboxOps] = await Promise.all([
-    tasksAPI.list(),
+  const [categoriesRes, outboxOps, lastCursor] = await Promise.all([
     categoriesAPI.list(),
     readOutbox(),
+    getMeta(TASK_SYNC_CURSOR_KEY, ''),
   ]);
-
-  const serverTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
+  let nextCursor = String(lastCursor || '');
   const categories = Array.isArray(categoriesRes?.data) ? categoriesRes.data : [];
-  const localTasks = queryClientRef.getQueryData(queryKeys.tasks.all) || await readTasks();
   const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
-  const mergedTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs });
+
+  const syncLimit = 1000;
+  let rounds = 0;
+  let hasMore = true;
+  let mergedTasks = queryClientRef.getQueryData(queryKeys.tasks.all) || await readTasks();
+  while (hasMore && rounds < 6) {
+    rounds += 1;
+    const syncRes = await tasksAPI.sync({
+      since: nextCursor || undefined,
+      limit: syncLimit,
+    });
+    const payload = syncRes?.data || {};
+    const changed = Array.isArray(payload.tasks) ? payload.tasks : [];
+    const deleted = Array.isArray(payload.deleted) ? payload.deleted : [];
+    const deletedIDs = new Set(
+      deleted
+        .map((item) => Number(item?.task_id))
+        .filter((id) => Number.isFinite(id) && id > 0 && !pendingDeleteIDs.has(id))
+    );
+
+    const byID = new Map();
+    (Array.isArray(mergedTasks) ? mergedTasks : []).forEach((task) => {
+      if (!task?.id) return;
+      if (deletedIDs.has(Number(task.id))) return;
+      byID.set(task.id, task);
+    });
+
+    changed.forEach((task) => {
+      const taskID = Number(task?.id || 0);
+      if (!taskID || pendingDeleteIDs.has(taskID)) return;
+      const normalized = normalizeServerTask(task);
+      const local = byID.get(taskID);
+      if (!local) {
+        byID.set(taskID, normalized);
+        return;
+      }
+      const state = String(local.sync_state || '');
+      const localTs = getTaskTimestamp(local);
+      const serverTs = getTaskTimestamp(task);
+      if (state === 'pending' || state === 'syncing' || (state === 'error' && localTs > serverTs)) {
+        byID.set(taskID, {
+          ...local,
+          updated_at: task?.updated_at || local.updated_at,
+        });
+        return;
+      }
+      byID.set(taskID, normalized);
+    });
+
+    mergedTasks = Array.from(byID.values()).sort((a, b) => getTaskTimestamp(b) - getTaskTimestamp(a));
+    nextCursor = String(payload.next_since || nextCursor || '');
+    hasMore = Boolean(payload.has_more);
+  }
 
   queryClientRef.setQueryData(queryKeys.tasks.all, mergedTasks);
   queryClientRef.setQueryData(queryKeys.categories.all, categories);
@@ -329,11 +384,13 @@ async function pullServerData() {
     upsertTasks(mergedTasks),
     replaceCategories(categories),
     setMeta('last_pull_at', nowISO()),
+    setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO()),
   ]);
   emitSyncTrace('pull_merged', {
-    server_tasks: serverTasks.length,
+    rounds,
     merged_tasks: mergedTasks.length,
     categories: categories.length,
+    has_more: hasMore,
   });
 }
 
@@ -506,9 +563,13 @@ export function initializeSyncEngine(queryClient) {
   });
 
   if (typeof window !== 'undefined') {
-    const onOnline = () => scheduleSync();
+    const onOnline = () => {
+      if (!isAutoSyncEnabled()) return;
+      scheduleSync();
+    };
     const onVisible = () => {
-      if (!document.hidden) scheduleSync();
+      if (document.hidden || !isAutoSyncEnabled()) return;
+      scheduleSync();
     };
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
