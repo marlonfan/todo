@@ -140,7 +140,7 @@ function emitCalendarTrace(detail = {}) {
   }));
 }
 
-const CALENDAR_CACHE_REFRESH_MS = 10 * 60 * 1000;
+const CALENDAR_CACHE_REFRESH_MS = 3 * 24 * 60 * 60 * 1000;
 
 function CalendarView() {
   const { t, i18n } = useTranslation();
