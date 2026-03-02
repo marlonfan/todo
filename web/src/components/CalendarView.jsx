@@ -120,6 +120,7 @@ function CalendarView() {
   const [isCompactMobile, setIsCompactMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
+  const [timezone, setTimezone] = useState(getUserTimezone);
   const [mobileView, setMobileView] = useState('timeGridDay');
   const [mobileCurrentDate, setMobileCurrentDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
   const [mobileStripStartDate, setMobileStripStartDate] = useState(() => getWeekStripStart(dayjs().tz(getUserTimezone())));
@@ -128,7 +129,6 @@ function CalendarView() {
   const [calendarNow, setCalendarNow] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DDTHH:mm:ss[Z]'));
   const [currentViewTitle, setCurrentViewTitle] = useState('');
 
-  const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
   const slotDuration = timeGranularity === 60 ? '01:00:00' : `00:${String(timeGranularity).padStart(2, '0')}:00`;
@@ -184,14 +184,15 @@ function CalendarView() {
   const todayDateString = useMemo(() => dayjs().tz(timezone).format('YYYY-MM-DD'), [timezone]);
 
   useEffect(() => {
-    const syncCalendarDefaultView = () => {
+    const syncCalendarPrefs = () => {
       setCalendarDefaultView(readCalendarDefaultView());
+      setTimezone(getUserTimezone());
     };
-    window.addEventListener('user:profile-updated', syncCalendarDefaultView);
-    window.addEventListener('storage', syncCalendarDefaultView);
+    window.addEventListener('user:profile-updated', syncCalendarPrefs);
+    window.addEventListener('storage', syncCalendarPrefs);
     return () => {
-      window.removeEventListener('user:profile-updated', syncCalendarDefaultView);
-      window.removeEventListener('storage', syncCalendarDefaultView);
+      window.removeEventListener('user:profile-updated', syncCalendarPrefs);
+      window.removeEventListener('storage', syncCalendarPrefs);
     };
   }, []);
 
@@ -395,7 +396,8 @@ function CalendarView() {
       const rangeStart = dayjs(dateRange.start);
       const rangeEnd = dayjs(dateRange.end);
       const spanDays = Math.max(1, rangeEnd.diff(rangeStart, 'day'));
-      const candidates = [1, -1, 2];
+      if (spanDays > 45) return;
+      const candidates = [1, -1];
 
       for (const multiplier of candidates) {
         if (cancelled) return;
@@ -652,6 +654,10 @@ function CalendarView() {
   };
 
   const handleEventClick = async (info) => {
+    if (info?.event?.extendedProps?.readOnly) {
+      alert('This CalDAV event is read-only.');
+      return;
+    }
     const taskId = info.event.extendedProps.taskId;
     const instanceId = info.event.id;
     const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
@@ -676,6 +682,10 @@ function CalendarView() {
   };
 
   const openTaskFromCalendarEvent = useCallback(async (eventLike) => {
+    if (eventLike?.extendedProps?.readOnly) {
+      alert('This CalDAV event is read-only.');
+      return;
+    }
     const taskId = Number(eventLike?.extendedProps?.taskId || 0);
     if (!taskId) return;
     const instanceId = eventLike?.id;
@@ -721,6 +731,7 @@ function CalendarView() {
   }, [timezone]);
 
   const handleQuickComplete = async (event) => {
+    if (event?.extendedProps?.readOnly) return;
     const taskId = event.extendedProps.taskId;
     const instanceId = event.extendedProps.instanceId || event.id;
     const isRecurring = !!event.extendedProps.isRecurring;
@@ -756,6 +767,10 @@ function CalendarView() {
   };
 
   const handleEventDrop = async (info) => {
+    if (info?.event?.extendedProps?.readOnly) {
+      info.revert();
+      return;
+    }
     const taskId = info.event.extendedProps.taskId;
     const isRecurring = info.event.extendedProps.isRecurring;
     const newStart = toServerISO(info.event.start);
@@ -769,8 +784,8 @@ function CalendarView() {
     }
 
     const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    const optimisticStart = dayjs(info.event.start).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
-    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().format('YYYY-MM-DDTHH:mm:ss[Z]') : undefined;
+    const optimisticStart = dayjs(info.event.start).utc().toISOString();
+    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().toISOString() : undefined;
     updateCurrentCalendarEvents((prev) => {
       if (!Array.isArray(prev)) return prev;
       return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
@@ -792,6 +807,10 @@ function CalendarView() {
   };
 
   const handleEventResize = async (info) => {
+    if (info?.event?.extendedProps?.readOnly) {
+      info.revert();
+      return;
+    }
     const taskId = info.event.extendedProps.taskId;
     const isRecurring = info.event.extendedProps.isRecurring;
     const newStart = toServerISO(info.event.start);
@@ -805,8 +824,8 @@ function CalendarView() {
     }
 
     const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    const optimisticStart = dayjs(info.event.start).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
-    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().format('YYYY-MM-DDTHH:mm:ss[Z]') : undefined;
+    const optimisticStart = dayjs(info.event.start).utc().toISOString();
+    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().toISOString() : undefined;
     updateCurrentCalendarEvents((prev) => {
       if (!Array.isArray(prev)) return prev;
       return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
@@ -1177,8 +1196,6 @@ function CalendarView() {
                     </button>
                   );
                 }
-                // Calendar events are already normalized to calendar timezone/UTC presentation.
-                // Avoid converting timezone again, otherwise labels shift by offset.
                 const startLabel = event.start ? dayjs(event.start).utc().format('HH:mm') : '--:--';
                 const endLabel = event.end ? dayjs(event.end).utc().format('HH:mm') : '';
                 return (

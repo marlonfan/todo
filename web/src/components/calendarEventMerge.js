@@ -46,14 +46,16 @@ export function buildProjectedEventsFromTasks(tasks, options) {
         start: start || dayjs().tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]'),
         end,
         allDay,
-        editable: true,
+        editable: !task.read_only,
         extendedProps: {
           taskId: Number(task.id),
           status: task.status || 'pending',
           priority: Number.parseInt(task.priority, 10) || 0,
           isRecurring: false,
           syncState: task.sync_state || 'synced',
-          source: 'local_projection',
+          readOnly: !!task.read_only,
+          source: task.source || 'local_projection',
+          externalId: task.external_ref || '',
         },
       };
     });
@@ -85,11 +87,14 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
   base.forEach((event) => {
     const taskID = Number(event?.extendedProps?.taskId || 0);
     const serverStatus = event?.extendedProps?.status || 'pending';
+    const isReadOnly = !!event?.extendedProps?.readOnly;
+    const eventSource = String(event?.extendedProps?.source || '');
     if (taskID && (serverStatus === 'cancelled' || taskStatusIndex.cancelled.has(taskID))) {
       return;
     }
     const isRecurring = !!event?.extendedProps?.isRecurring;
-    if (taskID && !isRecurring && canPruneMissingTask && !presentSet.has(taskID)) {
+    const shouldKeepExternalReadOnly = isReadOnly || eventSource === 'caldav';
+    if (taskID && !isRecurring && canPruneMissingTask && !shouldKeepExternalReadOnly && !presentSet.has(taskID)) {
       return;
     }
     if (!taskID || isRecurring) {
