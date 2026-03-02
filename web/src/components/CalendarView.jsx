@@ -15,7 +15,6 @@ import { IconSearch } from './icons/TaskIcons';
 import { buildCalendarRangeKey, getCalendarRange, getMeta, putCalendarRange, setMeta } from '../data/localStore';
 import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
 import { useTasksQuery } from '../query/hooks';
-import { onSyncCycleFinished } from '../data/syncEngine';
 import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvents } from './calendarEventMerge';
 import { openSearchDialog } from '../state/searchOverlay';
 
@@ -482,17 +481,6 @@ function CalendarView() {
     if (isRangeCoveredByPool(dateRange.start, dateRange.end, calendarPool)) return;
     setCalendarPool(buildCalendarPoolRange(dateRange.start, dateRange.end));
   }, [calendarPool, dateRange.end, dateRange.start]);
-
-  useEffect(() => {
-    const unsubscribe = onSyncCycleFinished((summary) => {
-      if (!summary?.ok) return;
-      if (!calendarPool.start || !calendarPool.end) return;
-      fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
-        console.error('Failed to refresh calendar after sync cycle:', error);
-      });
-    });
-    return unsubscribe;
-  }, [calendarPool.end, calendarPool.start, fetchCalendarRangeFromServer]);
 
   const events = useMemo(() => {
     const clipped = filterEventsForRange(
