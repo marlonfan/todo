@@ -12,7 +12,7 @@ import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { toServerRangeBoundary } from '../utils/syncTime';
 import { queryKeys } from '../query/keys';
 import { IconSearch } from './icons/TaskIcons';
-import { buildCalendarRangeKey, getCalendarRange, getMeta, putCalendarRange, setMeta } from '../data/localStore';
+import { buildCalendarRangeKey, getCalendarRange, getMeta, listCalendarRanges, putCalendarRange, setMeta } from '../data/localStore';
 import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
 import { useTasksQuery } from '../query/hooks';
 import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvents } from './calendarEventMerge';
@@ -139,6 +139,8 @@ function emitCalendarTrace(detail = {}) {
     },
   }));
 }
+
+const CALENDAR_CACHE_REFRESH_MS = 10 * 60 * 1000;
 
 function CalendarView() {
   const { t, i18n } = useTranslation();
@@ -390,12 +392,36 @@ function CalendarView() {
       const cached = await getCalendarRange(cacheKey);
       if (cached?.events && Array.isArray(cached.events)) {
         const age = Date.now() - Number(cached.updated_at || 0);
-        if (age > 60 * 1000) {
+        if (age > CALENDAR_CACHE_REFRESH_MS) {
           fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((err) => {
             console.error('Failed to refresh stale calendar cache:', err);
           });
         }
         const merged = mergeCalendarEvents(cached.events, projected, taskStatusIndex);
+        return annotateOverlapCount(merged, Math.max(15, timeGranularity));
+      }
+
+      // Fallback to any cached range that fully covers requested window.
+      const rangeEntries = await listCalendarRanges();
+      const covering = (Array.isArray(rangeEntries) ? rangeEntries : [])
+        .filter((entry) => entry?.timezone === timezone)
+        .filter((entry) => isRangeCoveredByPool(calendarPool.start, calendarPool.end, entry))
+        .sort((a, b) => Number(b?.updated_at || 0) - Number(a?.updated_at || 0));
+      const fallback = covering[0];
+      if (fallback?.events && Array.isArray(fallback.events)) {
+        const age = Date.now() - Number(fallback.updated_at || 0);
+        if (age > CALENDAR_CACHE_REFRESH_MS) {
+          fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((err) => {
+            console.error('Failed to refresh stale fallback calendar cache:', err);
+          });
+        }
+        const clippedFallback = filterEventsForRange(
+          fallback.events,
+          calendarPool.start,
+          calendarPool.end,
+          Math.max(15, timeGranularity)
+        );
+        const merged = mergeCalendarEvents(clippedFallback, projected, taskStatusIndex);
         return annotateOverlapCount(merged, Math.max(15, timeGranularity));
       }
 
