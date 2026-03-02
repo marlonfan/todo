@@ -41,6 +41,10 @@ type CaldavEventCache struct {
 	RecurrenceID string     `json:"recurrence_id" gorm:"size:255;default:'';index:idx_caldav_event_unique,unique"`
 	Title        string     `json:"title" gorm:"size:500"`
 	Description  string     `json:"description" gorm:"type:text"`
+	Location     string     `json:"location" gorm:"size:500"`
+	Organizer    string     `json:"organizer" gorm:"size:500"`
+	Attendees    string     `json:"attendees" gorm:"type:text"`
+	MeetingLink  string     `json:"meeting_link" gorm:"size:1000"`
 	StartTime    time.Time  `json:"start_time" gorm:"index;not null"`
 	EndTime      *time.Time `json:"end_time" gorm:"index"`
 	AllDay       bool       `json:"all_day" gorm:"default:false"`

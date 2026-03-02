@@ -19,6 +19,7 @@ import {
   updateOutbox,
 } from './localStore';
 import { getCoalescePlan } from './outboxCoalesce';
+import { collectPendingDeleteTaskIDs, mergeServerAndLocalTasks, normalizeServerTask } from './taskMerge';
 
 const SYNC_INTERVAL_MS = 15 * 1000;
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
@@ -65,68 +66,6 @@ function hasToken() {
 
 function nowISO() {
   return new Date().toISOString();
-}
-
-function getTaskTimestamp(task) {
-  const value = task?.client_updated_at || task?.updated_at || task?.created_at || '';
-  const ts = Date.parse(value);
-  return Number.isFinite(ts) ? ts : 0;
-}
-
-function normalizeServerTask(task) {
-  const revision = Number(task?.revision || 1);
-  return {
-    ...task,
-    revision,
-    sync_state: 'synced',
-    client_updated_at: task?.updated_at || nowISO(),
-    last_error: '',
-  };
-}
-
-function mergeServerAndLocalTasks(serverTasks, localTasks) {
-  const serverList = Array.isArray(serverTasks) ? serverTasks : [];
-  const localList = Array.isArray(localTasks) ? localTasks : [];
-
-  const localByID = new Map();
-  localList.forEach((task) => {
-    if (!task) return;
-    localByID.set(task.id, task);
-  });
-
-  const merged = serverList.map((task) => {
-    const localTask = localByID.get(task.id);
-    if (localTask && (localTask.sync_state === 'pending' || localTask.sync_state === 'syncing')) {
-      return {
-        ...localTask,
-        updated_at: task.updated_at,
-      };
-    }
-    if (localTask && localTask.sync_state === 'error') {
-      const localTs = getTaskTimestamp(localTask);
-      const serverTs = getTaskTimestamp(task);
-      if (localTs > serverTs) {
-        return {
-          ...localTask,
-          updated_at: task.updated_at,
-        };
-      }
-    }
-    return normalizeServerTask(task);
-  });
-
-  const serverIDSet = new Set(serverList.map((task) => task.id));
-  localList.forEach((task) => {
-    if (!task) return;
-    const state = String(task.sync_state || '');
-    const isUnsyncedLocal = state === 'pending' || state === 'syncing' || state === 'error';
-    if (isUnsyncedLocal && !serverIDSet.has(task.id)) {
-      merged.push(task);
-    }
-  });
-
-  merged.sort((a, b) => getTaskTimestamp(b) - getTaskTimestamp(a));
-  return merged;
 }
 
 async function patchTaskSyncState(taskID, patch) {
@@ -331,15 +270,17 @@ async function processOutbox() {
 async function pullServerData() {
   if (!queryClientRef || !hasToken()) return;
 
-  const [tasksRes, categoriesRes] = await Promise.all([
+  const [tasksRes, categoriesRes, outboxOps] = await Promise.all([
     tasksAPI.list(),
     categoriesAPI.list(),
+    readOutbox(),
   ]);
 
   const serverTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
   const categories = Array.isArray(categoriesRes?.data) ? categoriesRes.data : [];
   const localTasks = queryClientRef.getQueryData(queryKeys.tasks.all) || await readTasks();
-  const mergedTasks = mergeServerAndLocalTasks(serverTasks, localTasks);
+  const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
+  const mergedTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs });
 
   queryClientRef.setQueryData(queryKeys.tasks.all, mergedTasks);
   queryClientRef.setQueryData(queryKeys.categories.all, categories);

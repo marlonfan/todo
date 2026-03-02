@@ -1,6 +1,5 @@
 import { queryKeys } from '../query/keys';
 import {
-  clearCalendarRanges,
   invalidateCalendarRangesByTask,
   removeOutboxByEntity,
   removeTask,
@@ -37,12 +36,10 @@ function setTasksCache(queryClient, updater) {
 }
 
 async function invalidateCalendarCaches(queryClient, taskID = null) {
-  queryClient.removeQueries({ queryKey: ['calendar', 'events'] });
+  await queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] });
   if (taskID) {
     await invalidateCalendarRangesByTask(taskID);
-    return;
   }
-  await clearCalendarRanges();
 }
 
 function getCachedCategories(queryClient) {

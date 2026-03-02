@@ -325,13 +325,17 @@ func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) (
 				Priority:    models.PriorityMedium,
 				Status:      taskStatus,
 				IsRecurring: false,
-				ReadOnly:    true,
-				Source:      caldavSourceName,
-				ExternalID:  fmt.Sprintf("%d:%d:%s:%s", ev.SourceID, ev.CalendarID, ev.EventUID, ev.RecurrenceID),
-			},
-			BackgroundColor: "#64748b",
-			BorderColor:     "#64748b",
-		}
+					ReadOnly:    true,
+					Source:      caldavSourceName,
+					ExternalID:  fmt.Sprintf("%d:%d:%s:%s", ev.SourceID, ev.CalendarID, ev.EventUID, ev.RecurrenceID),
+					Location:    strings.TrimSpace(ev.Location),
+					Organizer:   strings.TrimSpace(ev.Organizer),
+					Attendees:   splitCaldavAttendees(ev.Attendees),
+					MeetingLink: strings.TrimSpace(ev.MeetingLink),
+				},
+				BackgroundColor: "#64748b",
+				BorderColor:     "#64748b",
+			}
 		if ev.EndTime != nil {
 			item.End = ev.EndTime.Format(time.RFC3339)
 		}
@@ -689,19 +693,23 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 				}
 				recurrenceID := strings.TrimSpace(item.RecurrenceID)
 				endTime := item.End
-				event := models.CaldavEventCache{
-					UserID:       source.UserID,
-					SourceID:     source.ID,
-					CalendarID:   calendarID,
-					EventUID:     item.UID,
-					RecurrenceID: recurrenceID,
-					Title:        item.Summary,
-					Description:  item.Description,
-					StartTime:    item.Start.UTC(),
-					AllDay:       item.AllDay,
-					Status:       item.Status,
-					Etag:         strings.TrimSpace(prop.Prop.GetEtag),
-					RawHref:      href,
+					event := models.CaldavEventCache{
+						UserID:       source.UserID,
+						SourceID:     source.ID,
+						CalendarID:   calendarID,
+						EventUID:     item.UID,
+						RecurrenceID: recurrenceID,
+						Title:        item.Summary,
+						Description:  item.Description,
+						Location:     item.Location,
+						Organizer:    item.Organizer,
+						Attendees:    strings.Join(item.Attendees, "\n"),
+						MeetingLink:  extractMeetingURL(item.URL, item.Description),
+						StartTime:    item.Start.UTC(),
+						AllDay:       item.AllDay,
+						Status:       item.Status,
+						Etag:         strings.TrimSpace(prop.Prop.GetEtag),
+						RawHref:      href,
 				}
 				if !endTime.IsZero() {
 					endUTC := endTime.UTC()
@@ -746,19 +754,23 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 						}
 						recurrenceID := strings.TrimSpace(item.RecurrenceID)
 						endTime := item.End
-						event := models.CaldavEventCache{
-							UserID:       source.UserID,
-							SourceID:     source.ID,
-							CalendarID:   calendarID,
-							EventUID:     item.UID,
-							RecurrenceID: recurrenceID,
-							Title:        item.Summary,
-							Description:  item.Description,
-							StartTime:    item.Start.UTC(),
-							AllDay:       item.AllDay,
-							Status:       item.Status,
-							Etag:         strings.TrimSpace(prop.Prop.GetEtag),
-							RawHref:      href,
+							event := models.CaldavEventCache{
+								UserID:       source.UserID,
+								SourceID:     source.ID,
+								CalendarID:   calendarID,
+								EventUID:     item.UID,
+								RecurrenceID: recurrenceID,
+								Title:        item.Summary,
+								Description:  item.Description,
+								Location:     item.Location,
+								Organizer:    item.Organizer,
+								Attendees:    strings.Join(item.Attendees, "\n"),
+								MeetingLink:  extractMeetingURL(item.URL, item.Description),
+								StartTime:    item.Start.UTC(),
+								AllDay:       item.AllDay,
+								Status:       item.Status,
+								Etag:         strings.TrimSpace(prop.Prop.GetEtag),
+								RawHref:      href,
 						}
 						if !endTime.IsZero() {
 							endUTC := endTime.UTC()
@@ -1004,6 +1016,10 @@ type parsedEvent struct {
 	ExDates      []time.Time
 	Summary      string
 	Description  string
+	Location     string
+	Organizer    string
+	Attendees    []string
+	URL          string
 	Status       string
 	Start        time.Time
 	End          time.Time
@@ -1071,6 +1087,14 @@ func parseICSCalendarData(raw string) []parsedEvent {
 			current.Summary = unescapeICS(value)
 		case strings.HasPrefix(keyUpper, "DESCRIPTION"):
 			current.Description = unescapeICS(value)
+		case strings.HasPrefix(keyUpper, "LOCATION"):
+			current.Location = unescapeICS(value)
+		case strings.HasPrefix(keyUpper, "ORGANIZER"):
+			current.Organizer = parseICSParticipant(key, value)
+		case strings.HasPrefix(keyUpper, "ATTENDEE"):
+			current.Attendees = appendUniqueString(current.Attendees, parseICSParticipant(key, value))
+		case strings.HasPrefix(keyUpper, "URL"):
+			current.URL = strings.TrimSpace(unescapeICS(value))
 		case strings.HasPrefix(keyUpper, "STATUS"):
 			current.Status = strings.ToLower(strings.TrimSpace(value))
 		case strings.HasPrefix(keyUpper, "DTSTART"):
@@ -1204,6 +1228,78 @@ func unescapeICS(input string) string {
 	v = strings.ReplaceAll(v, `\,`, ",")
 	v = strings.ReplaceAll(v, `\;`, ";")
 	return strings.TrimSpace(v)
+}
+
+func parseICSParticipant(key, value string) string {
+	if name := extractICSParam(key, "CN"); name != "" {
+		return strings.TrimSpace(unescapeICS(name))
+	}
+	raw := strings.TrimSpace(unescapeICS(value))
+	if strings.HasPrefix(strings.ToLower(raw), "mailto:") {
+		raw = raw[len("mailto:"):]
+	}
+	return strings.TrimSpace(raw)
+}
+
+func extractICSParam(key, target string) string {
+	parts := strings.Split(key, ";")
+	for _, part := range parts[1:] {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(kv[0]), target) {
+			return strings.Trim(strings.TrimSpace(kv[1]), `"`)
+		}
+	}
+	return ""
+}
+
+func appendUniqueString(list []string, value string) []string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return list
+	}
+	for _, item := range list {
+		if strings.EqualFold(strings.TrimSpace(item), v) {
+			return list
+		}
+	}
+	return append(list, v)
+}
+
+func splitCaldavAttendees(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		v := strings.TrimSpace(line)
+		if v == "" {
+			continue
+		}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func extractMeetingURL(primaryURL, description string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(primaryURL)), "http://") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(primaryURL)), "https://") {
+		return strings.TrimSpace(primaryURL)
+	}
+	fields := strings.Fields(strings.TrimSpace(description))
+	for _, field := range fields {
+		candidate := strings.Trim(field, " \t\r\n,.;:()[]<>\"'")
+		lower := strings.ToLower(candidate)
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func sourceToResponse(source models.CaldavSource, calendars []models.CaldavCalendar) models.CaldavSourceResponse {

@@ -113,6 +113,10 @@ func (r *CaldavRepository) UpsertEvent(event *models.CaldavEventCache) error {
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"title":         event.Title,
 			"description":   event.Description,
+			"location":      event.Location,
+			"organizer":     event.Organizer,
+			"attendees":     event.Attendees,
+			"meeting_link":  event.MeetingLink,
 			"start_time":    event.StartTime,
 			"end_time":      event.EndTime,
 			"all_day":       event.AllDay,

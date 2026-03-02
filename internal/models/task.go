@@ -182,4 +182,8 @@ type ExtendedProps struct {
 	ReadOnly    bool       `json:"readOnly,omitempty"`
 	Source      string     `json:"source,omitempty"`
 	ExternalID  string     `json:"externalId,omitempty"`
+	Location    string     `json:"location,omitempty"`
+	Organizer   string     `json:"organizer,omitempty"`
+	Attendees   []string   `json:"attendees,omitempty"`
+	MeetingLink string     `json:"meetingLink,omitempty"`
 }

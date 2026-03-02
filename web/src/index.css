@@ -526,10 +526,24 @@ body {
 /* Leave a stable click gutter on the right side of each time-grid column. */
 .todo-calendar.fc .fc-timegrid-col-events {
   padding-right: 10px;
+  pointer-events: none;
 }
 
 .todo-calendar.fc .fc-timegrid-event-harness {
   right: 8px !important;
+  max-width: calc(100% - 8px);
+  pointer-events: auto;
+}
+
+.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-col-events,
+.todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-col-events {
+  padding-right: 12px;
+}
+
+.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-event-harness,
+.todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
+  right: 10px !important;
+  max-width: calc(100% - 10px);
 }
 
 .todo-calendar.fc .fc-daygrid-event {
@@ -571,10 +585,22 @@ body {
 
 .mobile-calendar .fc-timegrid-col-events {
   padding-right: 8px;
+  pointer-events: none;
 }
 
 .mobile-calendar .fc-timegrid-event-harness {
   right: 6px !important;
+  max-width: calc(100% - 6px);
+  pointer-events: auto;
+}
+
+.mobile-calendar .fc-timeGridThreeDay-view .fc-timegrid-col-events {
+  padding-right: 10px;
+}
+
+.mobile-calendar .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
+  right: 8px !important;
+  max-width: calc(100% - 8px);
 }
 
 @media (hover: none) and (pointer: coarse) {
