@@ -21,7 +21,10 @@ import {
 import { getCoalescePlan } from './outboxCoalesce';
 import { collectPendingDeleteTaskIDs, mergeServerAndLocalTasks, normalizeServerTask } from './taskMerge';
 
-const SYNC_INTERVAL_MS = 15 * 1000;
+const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
+const MIN_SYNC_INTERVAL_SECONDS = 15;
+const MAX_SYNC_INTERVAL_SECONDS = 1800;
+const SYNC_INTERVAL_STORAGE_KEY = 'sync_interval_seconds';
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 let queryClientRef = null;
@@ -30,6 +33,43 @@ let running = false;
 let rerunRequested = false;
 let intervalID = null;
 const syncFinishedListeners = new Set();
+
+function clampSyncIntervalSeconds(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_SYNC_INTERVAL_SECONDS;
+  if (parsed === 0) return 0;
+  return Math.min(MAX_SYNC_INTERVAL_SECONDS, Math.max(MIN_SYNC_INTERVAL_SECONDS, parsed));
+}
+
+function readSyncIntervalSecondsFromStorage() {
+  if (typeof window === 'undefined') return DEFAULT_SYNC_INTERVAL_SECONDS;
+  try {
+    const raw = localStorage.getItem(SYNC_INTERVAL_STORAGE_KEY);
+    if (!raw) return DEFAULT_SYNC_INTERVAL_SECONDS;
+    return clampSyncIntervalSeconds(raw);
+  } catch {
+    return DEFAULT_SYNC_INTERVAL_SECONDS;
+  }
+}
+
+function getSyncIntervalMs() {
+  const seconds = readSyncIntervalSecondsFromStorage();
+  if (seconds <= 0) return 0;
+  return seconds * 1000;
+}
+
+function resetSyncIntervalTimer() {
+  if (typeof window === 'undefined') return;
+  if (intervalID) {
+    window.clearInterval(intervalID);
+    intervalID = null;
+  }
+  const intervalMs = getSyncIntervalMs();
+  if (intervalMs <= 0) return;
+  intervalID = window.setInterval(() => {
+    scheduleSync();
+  }, intervalMs);
+}
 
 function emitSyncTrace(type, detail = {}) {
   if (typeof window === 'undefined') return;
@@ -473,9 +513,7 @@ export function initializeSyncEngine(queryClient) {
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
 
-    intervalID = window.setInterval(() => {
-      scheduleSync();
-    }, SYNC_INTERVAL_MS);
+    resetSyncIntervalTimer();
   }
 }
 
@@ -488,6 +526,25 @@ export function stopSyncEngine() {
   running = false;
   rerunRequested = false;
   queryClientRef = null;
+}
+
+export function getConfiguredSyncIntervalSeconds() {
+  return readSyncIntervalSecondsFromStorage();
+}
+
+export function setConfiguredSyncIntervalSeconds(seconds) {
+  const normalized = clampSyncIntervalSeconds(seconds);
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(SYNC_INTERVAL_STORAGE_KEY, String(normalized));
+    } catch {
+      // ignore storage write error
+    }
+    if (initialized) {
+      resetSyncIntervalTimer();
+    }
+  }
+  return normalized;
 }
 
 export function onSyncCycleFinished(callback) {

@@ -105,9 +105,11 @@ function buildCalendarPoolRange(rangeStartISO, rangeEndISO) {
   const end = dayjs(rangeEndISO);
   const safeStart = start.isValid() ? start : dayjs();
   const safeEnd = end.isValid() && end.isAfter(safeStart) ? end : safeStart.add(1, 'day');
+  const prefetchPastDays = 14;
+  const prefetchFutureDays = 45;
   return {
-    start: safeStart.subtract(45, 'day').startOf('day').toISOString(),
-    end: safeEnd.add(120, 'day').endOf('day').toISOString(),
+    start: safeStart.subtract(prefetchPastDays, 'day').startOf('day').toISOString(),
+    end: safeEnd.add(prefetchFutureDays, 'day').endOf('day').toISOString(),
   };
 }
 

@@ -12,7 +12,12 @@ import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { authAPI } from '../api/client';
 import { caldavAPI } from '../api/client';
-import { forceManualSync, rebuildLocalDataAndSync } from '../data/syncEngine';
+import {
+  forceManualSync,
+  getConfiguredSyncIntervalSeconds,
+  rebuildLocalDataAndSync,
+  setConfiguredSyncIntervalSeconds,
+} from '../data/syncEngine';
 import { clearCalendarRanges, clearTasksAndSet, getMeta, readOutbox, readTasks } from '../data/localStore';
 import { queryKeys } from '../query/keys';
 import { useCaldavSourcesQuery } from '../query/hooks';
@@ -122,6 +127,7 @@ function Settings() {
   );
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '' });
+  const [syncIntervalSeconds, setSyncIntervalSeconds] = useState(getConfiguredSyncIntervalSeconds());
   const [caldavForm, setCaldavForm] = useState({ name: '', baseURL: '', username: '', password: '' });
   const [caldavCalendars, setCaldavCalendars] = useState([]);
   const [caldavBusy, setCaldavBusy] = useState(false);
@@ -411,6 +417,16 @@ function Settings() {
     } finally {
       setSyncBusy(false);
     }
+  };
+
+  const handleSyncIntervalChange = (nextValue) => {
+    const applied = setConfiguredSyncIntervalSeconds(nextValue);
+    setSyncIntervalSeconds(applied);
+    if (applied <= 0) {
+      showToast('success', 'Auto sync disabled');
+      return;
+    }
+    showToast('success', `Auto sync interval set to ${applied}s`);
   };
 
   const handleCaldavDiscover = async () => {
@@ -819,6 +835,23 @@ function Settings() {
                 <p className="mt-1 text-sm text-gray-700">
                   {t('settings.syncLastPull')}: <span className="font-medium">{formatSyncTime(syncStatus.lastPullAt)}</span>
                 </p>
+              </div>
+
+              <div className="rounded-md border border-gray-200 p-4">
+                <p className="text-sm font-medium text-gray-700">Auto sync interval</p>
+                <p className="mt-1 text-sm text-gray-500">Longer interval avoids overlapping slow calendar/task pulls.</p>
+                <select
+                  value={String(syncIntervalSeconds)}
+                  onChange={(e) => handleSyncIntervalChange(e.target.value)}
+                  className="mt-3 w-full max-w-xs rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="0">Disabled (manual only)</option>
+                  <option value="30">30 seconds</option>
+                  <option value="60">1 minute</option>
+                  <option value="120">2 minutes (recommended)</option>
+                  <option value="300">5 minutes</option>
+                  <option value="600">10 minutes</option>
+                </select>
               </div>
 
               <div className="rounded-md border border-blue-200 bg-blue-50 p-4">
