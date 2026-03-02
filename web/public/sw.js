@@ -1,4 +1,4 @@
-const CACHE_NAME = "todo-kimi-cache-v1";
+const CACHE_NAME = "todo-kimi-cache-v2";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
@@ -55,14 +55,13 @@ self.addEventListener("fetch", (event) => {
 
   if (isStaticAsset) {
     event.respondWith(
-      caches.match(request).then((cached) => {
-        if (cached) return cached;
-        return fetch(request).then((response) => {
+      fetch(request)
+        .then((response) => {
           const responseClone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
           return response;
-        });
-      })
+        })
+        .catch(() => caches.match(request))
     );
   }
 });
