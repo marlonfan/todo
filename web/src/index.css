@@ -535,12 +535,19 @@ body {
   pointer-events: auto;
 }
 
-.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-col-events,
+.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-col-events {
+  padding-right: 18px;
+}
+
+.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-event-harness {
+  right: 14px !important;
+  max-width: calc(100% - 14px);
+}
+
 .todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-col-events {
   padding-right: 12px;
 }
 
-.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-event-harness,
 .todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-event-harness {
   right: 10px !important;
   max-width: calc(100% - 10px);
