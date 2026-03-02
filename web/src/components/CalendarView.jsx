@@ -150,6 +150,7 @@ function CalendarView() {
   const suppressStripClickRef = useRef(false);
   const pendingFocusDateRef = useRef('');
   const touchDraggingEventRef = useRef(false);
+  const calendarFetchInFlightRef = useRef(new Map());
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -295,58 +296,76 @@ function CalendarView() {
 
   const fetchCalendarRangeFromServer = useCallback(async (rangeStart, rangeEnd, options = {}) => {
     if (!rangeStart || !rangeEnd) return [];
-
-    const res = await calendarAPI.getEvents({
-      start: toServerISO(rangeStart),
-      end: toServerISO(rangeEnd),
-    });
-    const list = Array.isArray(res.data) ? res.data : [];
-    const mapped = list
-      .map((event) => ({
-        ...event,
-        start: toCalendarISO(event.start),
-        end: event.end ? toCalendarISO(event.end) : undefined,
-      }))
-      .filter((event) => (event?.extendedProps?.status || 'pending') !== 'cancelled');
-    const projected = buildProjectedEventsFromTasks(tasksForProjection, {
-      rangeStart,
-      rangeEnd,
-      timezone,
-      toCalendarISO,
-    });
-    const merged = mergeCalendarEvents(mapped, projected, taskStatusIndex);
-    const annotated = annotateOverlapCount(merged, Math.max(15, timeGranularity));
-    const cacheKey = buildCalendarRangeKey(rangeStart, rangeEnd, timezone);
-
-    await putCalendarRange({
-      key: cacheKey,
-      start: rangeStart,
-      end: rangeEnd,
-      timezone,
-      events: merged,
-      updated_at: Date.now(),
-    });
-    await setMeta(buildCalendarSnapshotMetaKey(timezone), {
-      start: rangeStart,
-      end: rangeEnd,
-      timezone,
-      events: merged,
-      updated_at: Date.now(),
-    });
-
-    if (options.updateQuery) {
-      queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), annotated);
+    const requestKey = `${timezone}|${rangeStart}|${rangeEnd}`;
+    const existing = calendarFetchInFlightRef.current.get(requestKey);
+    if (existing) {
+      const deduped = await existing;
+      if (options.updateQuery) {
+        queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), deduped);
+      }
+      return deduped;
     }
 
-    emitCalendarTrace({
-      source: 'server_merge',
-      range_start: rangeStart,
-      range_end: rangeEnd,
-      projected_count: projected.length,
-      event_count: annotated.length,
-    });
+    const fetchPromise = (async () => {
+      const res = await calendarAPI.getEvents({
+        start: toServerISO(rangeStart),
+        end: toServerISO(rangeEnd),
+      });
+      const list = Array.isArray(res.data) ? res.data : [];
+      const mapped = list
+        .map((event) => ({
+          ...event,
+          start: toCalendarISO(event.start),
+          end: event.end ? toCalendarISO(event.end) : undefined,
+        }))
+        .filter((event) => (event?.extendedProps?.status || 'pending') !== 'cancelled');
+      const projected = buildProjectedEventsFromTasks(tasksForProjection, {
+        rangeStart,
+        rangeEnd,
+        timezone,
+        toCalendarISO,
+      });
+      const merged = mergeCalendarEvents(mapped, projected, taskStatusIndex);
+      const annotated = annotateOverlapCount(merged, Math.max(15, timeGranularity));
+      const cacheKey = buildCalendarRangeKey(rangeStart, rangeEnd, timezone);
 
-    return annotated;
+      await putCalendarRange({
+        key: cacheKey,
+        start: rangeStart,
+        end: rangeEnd,
+        timezone,
+        events: merged,
+        updated_at: Date.now(),
+      });
+      await setMeta(buildCalendarSnapshotMetaKey(timezone), {
+        start: rangeStart,
+        end: rangeEnd,
+        timezone,
+        events: merged,
+        updated_at: Date.now(),
+      });
+
+      emitCalendarTrace({
+        source: 'server_merge',
+        range_start: rangeStart,
+        range_end: rangeEnd,
+        projected_count: projected.length,
+        event_count: annotated.length,
+      });
+
+      return annotated;
+    })();
+
+    calendarFetchInFlightRef.current.set(requestKey, fetchPromise);
+    try {
+      const annotated = await fetchPromise;
+      if (options.updateQuery) {
+        queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), annotated);
+      }
+      return annotated;
+    } finally {
+      calendarFetchInFlightRef.current.delete(requestKey);
+    }
   }, [queryClient, taskStatusIndex, tasksForProjection, timeGranularity, timezone, toCalendarISO, toServerISO]);
 
   const {
