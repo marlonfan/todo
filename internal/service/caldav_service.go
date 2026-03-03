@@ -581,8 +581,9 @@ func isSyncTokenRecoverableError(err error) bool {
 
 func parseICSDataToEvents(source *models.CaldavSource, calendarID int64, href, calendarData, etag, lastModified string) []models.CaldavEventCache {
 	parsedEvents := parseICSCalendarData(calendarData)
+	windowStart, windowEnd := defaultCaldavExpansionWindow()
 	out := make([]models.CaldavEventCache, 0, len(parsedEvents))
-	for _, item := range expandParsedEvents(parsedEvents, time.Time{}, time.Time{}, false) {
+	for _, item := range expandParsedEvents(parsedEvents, windowStart, windowEnd, true) {
 		if item.UID == "" || item.Start.IsZero() {
 			continue
 		}
@@ -655,6 +656,11 @@ func parseHTTPStatusCode(statusLine string) int {
 		return 0
 	}
 	return code
+}
+
+func defaultCaldavExpansionWindow() (time.Time, time.Time) {
+	now := time.Now().UTC()
+	return now.AddDate(-1, 0, 0), now.AddDate(2, 0, 0)
 }
 
 type discoveredCalendar struct {
@@ -948,6 +954,13 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 	startUTC := start.UTC()
 	endUTC := end.UTC()
 	useRange := applyRange && !startUTC.IsZero() && !endUTC.IsZero() && endUTC.After(startUTC)
+	effectiveStart := startUTC
+	effectiveEnd := endUTC
+	effectiveRange := useRange
+	if !effectiveRange {
+		effectiveStart, effectiveEnd = defaultCaldavExpansionWindow()
+		effectiveRange = true
+	}
 	filter := `<c:filter>
     <c:comp-filter name="VCALENDAR"/>
   </c:filter>`
@@ -1004,7 +1017,7 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 				continue
 			}
 			calendarDataBlocks += 1
-			events := expandParsedEvents(parseICSCalendarData(data), startUTC, endUTC, useRange)
+			events := expandParsedEvents(parseICSCalendarData(data), effectiveStart, effectiveEnd, effectiveRange)
 			for _, item := range events {
 				if item.UID == "" || item.Start.IsZero() {
 					continue
@@ -1036,15 +1049,15 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 				if lm := parseHTTPTime(prop.Prop.LastModified); lm != nil {
 					event.LastModified = lm
 				}
-				if useRange {
-					if !event.StartTime.Before(endUTC) {
+				if effectiveRange {
+					if !event.StartTime.Before(effectiveEnd) {
 						continue
 					}
 					if event.EndTime != nil {
-						if !event.EndTime.After(startUTC) {
+						if !event.EndTime.After(effectiveStart) {
 							continue
 						}
-					} else if event.StartTime.Before(startUTC) {
+					} else if event.StartTime.Before(effectiveStart) {
 						continue
 					}
 				}
@@ -1065,7 +1078,7 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 						continue
 					}
 					calendarDataBlocks += 1
-					events := expandParsedEvents(parseICSCalendarData(data), startUTC, endUTC, useRange)
+					events := expandParsedEvents(parseICSCalendarData(data), effectiveStart, effectiveEnd, effectiveRange)
 					for _, item := range events {
 						if item.UID == "" || item.Start.IsZero() {
 							continue
@@ -1097,15 +1110,15 @@ func (s *CaldavService) fetchCalendarRemoteEventsAtURL(ctx context.Context, sour
 						if lm := parseHTTPTime(prop.Prop.LastModified); lm != nil {
 							event.LastModified = lm
 						}
-						if useRange {
-							if !event.StartTime.Before(endUTC) {
+						if effectiveRange {
+							if !event.StartTime.Before(effectiveEnd) {
 								continue
 							}
 							if event.EndTime != nil {
-								if !event.EndTime.After(startUTC) {
+								if !event.EndTime.After(effectiveStart) {
 									continue
 								}
-							} else if event.StartTime.Before(startUTC) {
+							} else if event.StartTime.Before(effectiveStart) {
 								continue
 							}
 						}

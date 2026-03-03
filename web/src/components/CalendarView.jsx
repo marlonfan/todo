@@ -140,7 +140,12 @@ function emitCalendarTrace(detail = {}) {
   }));
 }
 
-const CALENDAR_CACHE_REFRESH_MS = 3 * 24 * 60 * 60 * 1000;
+const CALENDAR_CACHE_SCHEMA_VERSION = 2;
+const CALENDAR_CACHE_REFRESH_MS = 10 * 60 * 1000;
+
+function isCurrentCalendarCache(entry) {
+  return Number(entry?.cache_version || 0) === CALENDAR_CACHE_SCHEMA_VERSION;
+}
 
 function CalendarView() {
   const { t, i18n } = useTranslation();
@@ -338,6 +343,7 @@ function CalendarView() {
         end: rangeEnd,
         timezone,
         events: merged,
+        cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
         updated_at: Date.now(),
       });
       await setMeta(buildCalendarSnapshotMetaKey(timezone), {
@@ -345,6 +351,7 @@ function CalendarView() {
         end: rangeEnd,
         timezone,
         events: merged,
+        cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
         updated_at: Date.now(),
       });
 
@@ -390,7 +397,7 @@ function CalendarView() {
       });
       const cacheKey = buildCalendarRangeKey(calendarPool.start, calendarPool.end, timezone);
       const cached = await getCalendarRange(cacheKey);
-      if (cached?.events && Array.isArray(cached.events)) {
+      if (cached?.events && Array.isArray(cached.events) && isCurrentCalendarCache(cached)) {
         const age = Date.now() - Number(cached.updated_at || 0);
         if (age > CALENDAR_CACHE_REFRESH_MS) {
           fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((err) => {
@@ -404,6 +411,7 @@ function CalendarView() {
       // Fallback to any cached range that fully covers requested window.
       const rangeEntries = await listCalendarRanges();
       const covering = (Array.isArray(rangeEntries) ? rangeEntries : [])
+        .filter((entry) => isCurrentCalendarCache(entry))
         .filter((entry) => entry?.timezone === timezone)
         .filter((entry) => isRangeCoveredByPool(calendarPool.start, calendarPool.end, entry))
         .sort((a, b) => Number(b?.updated_at || 0) - Number(a?.updated_at || 0));
@@ -429,7 +437,7 @@ function CalendarView() {
         return await fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end);
       } catch (error) {
         const snapshot = await getMeta(buildCalendarSnapshotMetaKey(timezone), null);
-        const snapshotEvents = Array.isArray(snapshot?.events) ? snapshot.events : [];
+        const snapshotEvents = isCurrentCalendarCache(snapshot) && Array.isArray(snapshot?.events) ? snapshot.events : [];
         if (snapshotEvents.length > 0) {
           const merged = mergeCalendarEvents(snapshotEvents, projected, taskStatusIndex);
           emitCalendarTrace({
@@ -498,6 +506,7 @@ function CalendarView() {
       end: calendarPool.end,
       timezone,
       events: nextEventsSnapshot,
+      cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
       updated_at: Date.now(),
     }).catch((error) => {
       console.error('Failed to persist calendar range cache:', error);
@@ -1045,20 +1054,6 @@ function CalendarView() {
         className={`flex min-w-0 items-center gap-1 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`}
         title={arg.event.title}
       >
-        <button
-          type="button"
-          className={`shrink-0 leading-none ${isCompactMobile ? 'text-[10px]' : 'text-[11px]'} ${
-            completed ? 'text-green-700' : 'text-gray-700'
-          }`}
-          title={completed ? t('task.markPending') : t('task.markComplete')}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleQuickComplete(arg.event);
-          }}
-        >
-          {completed ? '✓' : '○'}
-        </button>
         {hasTimeText && (
           <span className="shrink-0 text-[10px] font-medium text-slate-500">
             {arg.timeText}

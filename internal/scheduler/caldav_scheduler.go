@@ -35,8 +35,6 @@ func (s *CaldavScheduler) run() {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	s.process()
-
 	for {
 		select {
 		case <-ticker.C:
