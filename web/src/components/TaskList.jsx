@@ -876,9 +876,9 @@ function TaskList({ forcedView = '' }) {
 
       const savedTask = await updateTaskLocal(queryClient, selectedTask.id, payload, { scheduleSync: false });
       draftTouchedRef.current = false;
-      if (savedTask) {
-        setDraft(buildDraftFromTask(savedTask));
-      }
+      // Do not overwrite draft from saved response here.
+      // For controlled editors, forced value resets can clear redo history stack.
+      void savedTask;
       if (draftSyncTimerRef.current) {
         window.clearTimeout(draftSyncTimerRef.current);
       }

@@ -80,7 +80,36 @@ function LiveMarkdownEditor({
       },
     });
 
+    const handleRedoAlias = (event) => {
+      const key = String(event.key || '').toLowerCase();
+      const isRedoAlias = event.ctrlKey && event.shiftKey && key === 'z';
+      if (!isRedoAlias) return;
+      const target = event.target;
+      if (!target || typeof target.closest !== 'function' || !target.closest('.vditor')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        const core = instance?.vditor;
+        if (core?.undo?.redo && typeof core.undo.redo === 'function') {
+          core.undo.redo(core);
+          return;
+        }
+      } catch {
+        // Fall through to synthetic Ctrl+Y when internal redo API is unavailable.
+      }
+      const synthetic = new KeyboardEvent('keydown', {
+        key: 'y',
+        code: 'KeyY',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(synthetic);
+    };
+    window.addEventListener('keydown', handleRedoAlias, true);
+
     return () => {
+      window.removeEventListener('keydown', handleRedoAlias, true);
       readyRef.current = false;
       instance.destroy();
       editorRef.current = null;
