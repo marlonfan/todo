@@ -203,6 +203,7 @@ function CalendarView() {
   const [stripTransitionMs, setStripTransitionMs] = useState(0);
   const [calendarNow, setCalendarNow] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DDTHH:mm:ss[Z]'));
   const [currentViewTitle, setCurrentViewTitle] = useState('');
+  const [hasCalendarDataLoaded, setHasCalendarDataLoaded] = useState(false);
 
   const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
@@ -621,8 +622,37 @@ function CalendarView() {
       dateRange.end,
       Math.max(15, timeGranularity)
     );
-    return annotateOverlapCount(clipped, Math.max(15, timeGranularity));
-  }, [dateRange.end, dateRange.start, pooledEvents, timeGranularity]);
+    const projectedRangeStart = toServerISO(dateRange.start) || dateRange.start;
+    const projectedRangeEnd = toServerISO(dateRange.end) || dateRange.end;
+    const projectedVisible = buildProjectedEventsFromTasks(tasksForProjection, {
+      rangeStart: projectedRangeStart,
+      rangeEnd: projectedRangeEnd,
+      timezone,
+      toCalendarISO,
+    });
+    const merged = mergeCalendarEvents(clipped, projectedVisible, taskStatusIndex);
+    return annotateOverlapCount(merged, Math.max(15, timeGranularity));
+  }, [
+    dateRange.end,
+    dateRange.start,
+    pooledEvents,
+    taskStatusIndex,
+    tasksForProjection,
+    timeGranularity,
+    timezone,
+    toCalendarISO,
+    toServerISO,
+  ]);
+
+  useEffect(() => {
+    if (events.length > 0) {
+      setHasCalendarDataLoaded(true);
+      return;
+    }
+    if (!loading) {
+      setHasCalendarDataLoaded(true);
+    }
+  }, [events.length, loading]);
 
   const handleDatesSet = (dateInfo) => {
     setCurrentViewTitle(dateInfo?.view?.title || '');
@@ -853,31 +883,29 @@ function CalendarView() {
     const width = desktopViewportRef.current?.clientWidth || 0;
     const height = desktopViewportRef.current?.clientHeight || 0;
     // Keep previous frame visible to avoid "white flash" during navigation.
-    const baseDistance = Math.max(96, axis === 'y' ? height : width);
-    const distance = Math.round(baseDistance * 0.22);
+    const baseDistance = Math.max(72, axis === 'y' ? height : width);
+    const distance = Math.round(baseDistance * 0.1);
     const outOffset = direction > 0 ? -distance : distance;
 
     desktopNavAnimatingRef.current = true;
     setDesktopAnimatingClass(true);
-    applyDesktopMotion(axis === 'x' ? outOffset : 0, axis === 'y' ? outOffset : 0, 180);
+    applyDesktopMotion(axis === 'x' ? outOffset : 0, axis === 'y' ? outOffset : 0, 95);
 
     window.setTimeout(() => {
       if (direction > 0) api.next();
       else api.prev();
 
-      const inOffset = -outOffset;
+      const inOffset = Math.round(-outOffset * 0.45);
       applyDesktopMotion(axis === 'x' ? inOffset : 0, axis === 'y' ? inOffset : 0, 0);
 
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          applyDesktopMotion(0, 0, 220);
-          window.setTimeout(() => {
-            desktopNavAnimatingRef.current = false;
-            setDesktopAnimatingClass(false);
-          }, 280);
-        });
+        applyDesktopMotion(0, 0, 190);
+        window.setTimeout(() => {
+          desktopNavAnimatingRef.current = false;
+          setDesktopAnimatingClass(false);
+        }, 220);
       });
-    }, 180);
+    }, 95);
 
     return true;
   }, [applyDesktopMotion, isCompactMobile, setDesktopAnimatingClass]);
@@ -889,27 +917,25 @@ function CalendarView() {
     if (!api) return false;
 
     const width = desktopViewportRef.current?.clientWidth || 0;
-    const distance = Math.round(Math.max(64, width * 0.12));
+    const distance = Math.round(Math.max(48, width * 0.08));
     const outOffset = direction > 0 ? -distance : distance;
 
     mobileNavAnimatingRef.current = true;
     setDesktopAnimatingClass(true);
-    applyDesktopMotion(outOffset, 0, 140);
+    applyDesktopMotion(outOffset, 0, 85);
 
     window.setTimeout(() => {
       if (direction > 0) api.next();
       else api.prev();
-      applyDesktopMotion(-outOffset, 0, 0);
+      applyDesktopMotion(Math.round(-outOffset * 0.45), 0, 0);
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          applyDesktopMotion(0, 0, 180);
-          window.setTimeout(() => {
-            mobileNavAnimatingRef.current = false;
-            setDesktopAnimatingClass(false);
-          }, 220);
-        });
+        applyDesktopMotion(0, 0, 165);
+        window.setTimeout(() => {
+          mobileNavAnimatingRef.current = false;
+          setDesktopAnimatingClass(false);
+        }, 190);
       });
-    }, 140);
+    }, 85);
 
     return true;
   }, [applyDesktopMotion, isCompactMobile, setDesktopAnimatingClass]);
@@ -1409,10 +1435,14 @@ function CalendarView() {
         return [savedTask, ...base];
       });
     }
+    // Avoid immediate stale overwrite from server right after local save/outbox enqueue.
+    // Let local projection render first, then softly revalidate after sync has time to finish.
     if (calendarPool.start && calendarPool.end) {
-      fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
-        console.error('Failed to refresh calendar after save:', error);
-      });
+      window.setTimeout(() => {
+        fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
+          console.error('Failed to refresh calendar after delayed save revalidate:', error);
+        });
+      }, 3500);
     }
   };
 
@@ -1460,21 +1490,21 @@ function CalendarView() {
     const source = String(ext.source || '');
     const readOnly = !!ext.readOnly;
     const list = [];
-    if (readOnly) {
+    if (readOnly || source === 'caldav') {
       list.push('event-readonly');
     }
     return list;
   }, []);
 
   return (
-    <div className="calendar-shell relative h-full flex flex-col bg-slate-100">
-      <div className="calendar-topbar sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+    <div className="calendar-shell md-page relative flex h-full flex-col">
+      <div className="calendar-topbar sticky top-0 z-30 border-b border-blue-100 bg-white/90 backdrop-blur">
         <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
-          <div className="inline-flex items-center rounded-xl border border-slate-200 bg-white p-1">
+          <div className="inline-flex items-center rounded-xl border border-blue-100 bg-white p-1 shadow-sm">
             <button
               type="button"
               onClick={() => handleNavigatePeriod(-1)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
+              className="md-icon-btn h-8 w-8 text-slate-600"
               aria-label="previous period"
             >
               ‹
@@ -1489,7 +1519,7 @@ function CalendarView() {
             <button
               type="button"
               onClick={() => handleNavigatePeriod(1)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
+              className="md-icon-btn h-8 w-8 text-slate-600"
               aria-label="next period"
             >
               ›
@@ -1511,7 +1541,7 @@ function CalendarView() {
             <button
               type="button"
               onClick={() => openSearchDialog()}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-100 bg-white text-slate-600 hover:bg-blue-50"
               title={t('common.search')}
             >
               <IconSearch className="h-4 w-4" />
@@ -1520,7 +1550,7 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={handleMobileQuickCreate}
-                className="inline-flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
+                className="btn-primary inline-flex h-8 items-center rounded-lg px-3 py-0 text-xs font-semibold"
                 title={t('task.newTask')}
               >
                 + {t('task.newTask')}
@@ -1530,7 +1560,7 @@ function CalendarView() {
         </div>
 
         <div className="px-3 pb-2 md:px-4">
-          <div className="inline-flex w-full items-center rounded-xl border border-slate-200 bg-white p-1">
+          <div className="inline-flex w-full items-center rounded-xl border border-blue-100 bg-white p-1 shadow-sm">
             {viewOptions.map((option) => (
               <button
                 key={option.value}
@@ -1538,8 +1568,8 @@ function CalendarView() {
                 onClick={() => handleChangeView(option.value)}
                 className={`flex-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
                   activeCalendarView === option.value
-                    ? 'bg-slate-200 text-slate-800'
-                    : 'text-slate-600 hover:bg-slate-100'
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'text-slate-600 hover:bg-blue-50'
                 }`}
               >
                 {option.label}
@@ -1550,7 +1580,7 @@ function CalendarView() {
       </div>
 
       {isCompactMobile && activeCalendarView !== 'dayGridMonth' && (
-        <div className="border-b border-slate-200 bg-white/90 px-2 pt-1.5 pb-2 backdrop-blur">
+        <div className="border-b border-blue-100 bg-white/90 px-2 pt-1.5 pb-2 backdrop-blur">
             <div
               ref={stripViewportRef}
               className="overflow-hidden rounded-xl"
@@ -1591,7 +1621,7 @@ function CalendarView() {
                           ? 'bg-blue-600 text-white shadow-sm'
                           : isToday
                             ? 'bg-blue-50 text-blue-700'
-                            : 'text-slate-500 hover:bg-slate-100'
+                            : 'text-slate-500 hover:bg-blue-50'
                       }`}
                     >
                       <span className="text-[10px] leading-4">{mobileWeekdayShort[dateValue.day()]}</span>
@@ -1607,7 +1637,7 @@ function CalendarView() {
       <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'px-1 pt-1 pb-8' : 'overflow-auto p-3 md:p-4'}`}>
         <div
           ref={desktopViewportRef}
-          className="h-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_40px_-28px_rgba(15,23,42,0.55)]"
+          className="h-full overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm"
           onWheel={handleDesktopCalendarWheel}
           onPointerDown={handleDesktopSwipeStart}
           onPointerMove={handleDesktopSwipeMove}
@@ -1700,7 +1730,7 @@ function CalendarView() {
         <button
           type="button"
           onClick={handleMobileQuickCreate}
-          className="fixed bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg"
+          className="btn-primary fixed bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full p-0 text-white shadow-sm"
           title={t('task.newTask')}
         >
           <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
@@ -1710,7 +1740,7 @@ function CalendarView() {
         </button>
       )}
 
-      {loading && events.length === 0 && (
+      {!hasCalendarDataLoaded && loading && events.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-40">
           <div className="text-lg">{t('common.loading')}</div>
         </div>
@@ -1728,10 +1758,10 @@ function CalendarView() {
       {readonlyEventOpen && readonlyEventDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={requestCloseReadonlyEventModal}>
           <div
-            className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl"
+            className="md-card w-full max-w-lg shadow-lg"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2.5">
+            <div className="flex items-center justify-between border-b border-blue-100 px-3 py-2.5">
               <h3 className="flex min-w-0 items-center gap-1.5 pr-2 text-sm font-semibold text-slate-800">
                 <span className="truncate">{readonlyEventDetail.title || 'Untitled event'}</span>
                 {readonlyEventDetail.allDay && (
@@ -1746,7 +1776,7 @@ function CalendarView() {
               </h3>
               <button
                 type="button"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                className="md-icon-btn h-7 w-7"
                 onClick={requestCloseReadonlyEventModal}
               >
                 ✕
@@ -1812,16 +1842,16 @@ function CalendarView() {
       {moreEventsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={requestCloseMoreEventsModal}>
           <div
-            className="w-full max-w-md border border-slate-200 bg-white shadow-xl"
+            className="md-card w-full max-w-md shadow-lg"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+            <div className="flex items-center justify-between border-b border-blue-100 px-3 py-2">
               <h3 className="text-sm font-semibold text-slate-800">
                 {moreEventsDateLabel} · {t('task.taskCount', { count: moreEvents.length })}
               </h3>
               <button
                 type="button"
-                className="inline-flex h-7 w-7 items-center justify-center text-slate-500 hover:bg-slate-100"
+                className="md-icon-btn h-7 w-7"
                 onClick={requestCloseMoreEventsModal}
               >
                 ✕
@@ -1834,7 +1864,7 @@ function CalendarView() {
                     <button
                       key={event.id}
                       type="button"
-                      className="mb-1 block w-full border border-slate-200 px-2 py-1.5 text-left hover:bg-slate-50"
+                      className="mb-1 block w-full rounded-lg border-l-2 border-l-blue-400 bg-slate-50/80 px-2.5 py-1.5 text-left transition-colors hover:bg-blue-50/70"
                       onClick={() => {
                         requestCloseMoreEventsModal();
                         openTaskFromCalendarEvent(event);
@@ -1852,7 +1882,7 @@ function CalendarView() {
                   <button
                     key={event.id}
                     type="button"
-                    className="mb-1 block w-full border border-slate-200 px-2 py-1.5 text-left hover:bg-slate-50"
+                    className="mb-1 block w-full rounded-lg border-l-2 border-l-blue-400 bg-slate-50/80 px-2.5 py-1.5 text-left transition-colors hover:bg-blue-50/70"
                     onClick={() => {
                       requestCloseMoreEventsModal();
                       openTaskFromCalendarEvent(event);

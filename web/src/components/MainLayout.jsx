@@ -244,14 +244,16 @@ function MainLayout({ user, setUser }) {
     return t('nav.calendar');
   }, [location.pathname, location.search, t]);
 
+  const navItemClass = (active) => `md-nav-item ${active ? 'md-nav-item-active' : 'md-nav-item-idle'}`;
+
   return (
-    <div className="h-screen bg-slate-100 flex flex-col md:flex-row">
-      <div className="md:hidden flex h-11 items-center justify-between px-3 border-b border-slate-200 bg-white">
+    <div className="h-screen bg-[#eaf2ff] flex flex-col md:flex-row">
+      <div className="md:hidden flex h-12 items-center justify-between border-b border-blue-100 bg-white/95 px-4 backdrop-blur">
         <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
         <button
           type="button"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-100 bg-blue-50/70 text-blue-700"
         >
           {mobileMenuOpen ? '✕' : '☰'}
         </button>
@@ -271,7 +273,7 @@ function MainLayout({ user, setUser }) {
         className={`sidebar flex flex-col fixed md:static inset-y-0 left-0 z-40 transform transition-transform duration-200
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
-        <div className="m-3 rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 px-4 py-4 text-white">
+        <div className="m-3 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 px-4 py-4 text-white shadow-sm">
           <h1 className="text-xl font-semibold">{t('app.name')}</h1>
           <p className="text-sm text-blue-100">{user.username}</p>
         </div>
@@ -279,11 +281,7 @@ function MainLayout({ user, setUser }) {
         <nav className="flex-1 p-3 space-y-1">
           <Link
             to="/"
-            className={`block px-4 py-2 rounded-lg transition-colors ${
-              activeTab === 'calendar'
-                ? 'bg-blue-50 text-blue-700 font-medium'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
+            className={navItemClass(activeTab === 'calendar')}
           >
             <span className="inline-flex min-w-0 items-center gap-2">
               <IconCalendar className="h-4 w-4 shrink-0" />
@@ -291,7 +289,7 @@ function MainLayout({ user, setUser }) {
             </span>
           </Link>
 
-          <div className="mt-4 px-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          <div className="mt-4 px-4 text-xs font-semibold uppercase tracking-wide text-blue-400">
             {t('task.listView')}
           </div>
           {taskNavItems.map((item) => {
@@ -302,11 +300,7 @@ function MainLayout({ user, setUser }) {
                   key={item.key}
                   type="button"
                   onClick={() => openSearchDialog()}
-                  className={`mt-1 block w-full rounded-lg px-4 py-2 text-left ${
-                    location.pathname === '/search'
-                      ? 'bg-blue-50 font-medium text-blue-700'
-                      : 'text-slate-600 hover:bg-slate-100'
-                  }`}
+                  className={`${navItemClass(location.pathname === '/search')} w-full text-left`}
                 >
                   <span className="inline-flex min-w-0 items-center gap-2">
                     <ItemIcon className="h-4 w-4 shrink-0" />
@@ -319,11 +313,7 @@ function MainLayout({ user, setUser }) {
               <Link
                 key={item.key}
                 to={item.to}
-                className={`mt-1 block px-4 py-2 rounded-lg ${
-                  isTaskNavActive(item.to)
-                    ? 'bg-blue-50 text-blue-700 font-medium'
-                    : 'text-slate-600 hover:bg-slate-100'
-                }`}
+                className={navItemClass(isTaskNavActive(item.to))}
               >
                 <span className="inline-flex min-w-0 items-center gap-2">
                   <ItemIcon className="h-4 w-4 shrink-0" />
@@ -344,12 +334,12 @@ function MainLayout({ user, setUser }) {
                 }}
                 onDragLeave={() => setDragOverCategoryID(0)}
                 onDrop={(event) => handleDropToCategory(event, cat.id)}
-                className={`block px-4 py-2 rounded-lg ${
+                className={`md-nav-item ${
                   isTaskNavActive(`/tasks?category_id=${cat.id}`)
-                    ? 'bg-blue-50 text-blue-700 font-medium'
+                    ? 'md-nav-item-active'
                     : dragOverCategoryID === cat.id
                       ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-300'
-                      : 'text-slate-600 hover:bg-slate-100'
+                      : 'md-nav-item-idle'
                 }`}
               >
                 <span className="inline-flex min-w-0 items-center gap-2">
@@ -364,14 +354,10 @@ function MainLayout({ user, setUser }) {
             ))}
           </div>
 
-          <div className="mt-4 border-t border-slate-200 pt-3">
+          <div className="mt-4 border-t border-blue-100 pt-3">
             <Link
               to="/tasks?view=completed"
-              className={`block px-4 py-2 rounded-lg transition-colors ${
-                isTaskNavActive('/tasks?view=completed')
-                  ? 'bg-blue-50 text-blue-700 font-medium'
-                  : 'text-slate-700 hover:bg-slate-100'
-              }`}
+              className={navItemClass(isTaskNavActive('/tasks?view=completed'))}
             >
               <span className="inline-flex min-w-0 items-center gap-2">
                 <IconStatus className="h-4 w-4 shrink-0" />
@@ -380,11 +366,7 @@ function MainLayout({ user, setUser }) {
             </Link>
             <Link
               to="/tasks?view=deleted"
-              className={`mt-1 block px-4 py-2 rounded-lg transition-colors ${
-                isTaskNavActive('/tasks?view=deleted')
-                  ? 'bg-blue-50 text-blue-700 font-medium'
-                  : 'text-slate-700 hover:bg-slate-100'
-              }`}
+              className={navItemClass(isTaskNavActive('/tasks?view=deleted'))}
             >
               <span className="inline-flex min-w-0 items-center gap-2">
                 <IconTrash className="h-4 w-4 shrink-0" />
@@ -393,11 +375,7 @@ function MainLayout({ user, setUser }) {
             </Link>
             <Link
               to="/categories"
-              className={`mt-1 block px-4 py-2 rounded-lg transition-colors ${
-                activeTab === 'categories'
-                  ? 'bg-blue-50 text-blue-700 font-medium'
-                  : 'text-slate-700 hover:bg-slate-100'
-              }`}
+              className={navItemClass(activeTab === 'categories')}
             >
               <span className="inline-flex min-w-0 items-center gap-2">
                 <IconTag className="h-4 w-4 shrink-0" />
@@ -408,11 +386,7 @@ function MainLayout({ user, setUser }) {
 
           <Link
             to="/settings"
-            className={`mt-1 block px-4 py-2 rounded-lg transition-colors ${
-              activeTab === 'settings'
-                ? 'bg-blue-50 text-blue-700 font-medium'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
+            className={navItemClass(activeTab === 'settings')}
           >
             <span className="inline-flex min-w-0 items-center gap-2">
               <IconSettings className="h-4 w-4 shrink-0" />
@@ -421,10 +395,10 @@ function MainLayout({ user, setUser }) {
           </Link>
         </nav>
 
-        <div className="p-3 border-t border-slate-200">
+        <div className="border-t border-blue-100 p-3">
           <button
             onClick={handleLogout}
-            className="w-full px-4 py-2 text-left text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+            className="md-nav-item md-nav-item-idle w-full text-left"
           >
             <span className="inline-flex min-w-0 items-center gap-2">
               <IconLogout className="h-4 w-4 shrink-0" />
@@ -445,7 +419,7 @@ function MainLayout({ user, setUser }) {
         </Routes>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-blue-100 bg-white/95 backdrop-blur md:hidden">
         <div className={`grid h-14 ${mobileTabs.length === 5 ? 'grid-cols-5' : mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
@@ -459,12 +433,12 @@ function MainLayout({ user, setUser }) {
                   title={item.label}
                   onClick={() => openSearchDialog()}
                   className={`appearance-none border-0 bg-transparent p-0 flex items-center justify-center ${
-                    active ? 'text-slate-900' : 'text-slate-500'
+                    active ? 'text-blue-700' : 'text-slate-500'
                   }`}
                 >
                   <span
                     className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                      active ? 'border-slate-900' : 'border-transparent hover:border-slate-300'
+                      active ? 'border-blue-700' : 'border-transparent hover:border-blue-200'
                     }`}
                   >
                     <ItemIcon className="h-[18px] w-[18px]" />
@@ -479,12 +453,12 @@ function MainLayout({ user, setUser }) {
                 aria-label={item.label}
                 title={item.label}
                 className={`flex items-center justify-center ${
-                  active ? 'text-slate-900' : 'text-slate-500'
+                  active ? 'text-blue-700' : 'text-slate-500'
                 }`}
               >
                 <span
                   className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                    active ? 'border-slate-900' : 'border-transparent hover:border-slate-300'
+                    active ? 'border-blue-700' : 'border-transparent hover:border-blue-200'
                   }`}
                 >
                   <ItemIcon className="h-[18px] w-[18px]" />

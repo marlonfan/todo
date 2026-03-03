@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
@@ -25,6 +25,7 @@ import {
   updateTaskLocal,
   updateTaskStatusLocal,
 } from '../data/taskMutations';
+import { scheduleSync } from '../data/syncEngine';
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -135,6 +136,117 @@ function sanitizeGroupValue(value) {
   return GROUP_OPTIONS.has(value) ? value : 'none';
 }
 
+const TaskRow = React.memo(function TaskRow({
+  task,
+  selected,
+  timezone,
+  labels,
+  onSelectTask,
+  onToggleStatus,
+}) {
+  const isCompleted = task.status === 'completed';
+  const isDeleted = task.status === 'cancelled';
+  const isReadOnly = !!task.read_only;
+  const priorityValue = Number.parseInt(task.priority, 10) || 0;
+  const priority = priorityValue === 1
+    ? { text: labels.priorityHigh, class: 'text-rose-600' }
+    : priorityValue === -1
+      ? { text: labels.priorityLow, class: 'text-emerald-600' }
+      : { text: labels.priorityMedium, class: 'text-sky-600' };
+  const primaryTime = getTaskPrimaryTime(task);
+
+  return (
+    <div
+      key={task.id}
+      draggable={!isReadOnly}
+      onDragStart={(event) => {
+        if (isReadOnly) return;
+        event.dataTransfer.setData('text/task-id', String(task.id));
+        event.dataTransfer.effectAllowed = 'move';
+      }}
+      onClick={() => onSelectTask(task)}
+      className={`group cursor-pointer rounded-xl border-l-2 px-2.5 py-1.5 transition ${
+        selected
+          ? 'border-l-blue-500 bg-blue-50/70'
+          : 'border-l-transparent bg-slate-50/70 hover:border-l-blue-300 hover:bg-blue-50/50'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          checked={isCompleted}
+          disabled={isDeleted || isReadOnly}
+          onChange={(e) => {
+            e.stopPropagation();
+            onToggleStatus(task, isCompleted ? 'pending' : 'completed');
+          }}
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-600 cursor-pointer"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className={`truncate text-[13px] font-medium ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+              {task.title}
+            </h3>
+            <div className="hidden shrink-0 items-center gap-2 sm:flex">
+              {isReadOnly && (
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">CalDAV</span>
+              )}
+              {isDeleted && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleStatus(task, 'pending');
+                  }}
+                  disabled={isReadOnly}
+                  className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                  title={labels.markPending}
+                >
+                  ↺
+                </button>
+              )}
+              <span className="text-[10px] text-slate-400">
+                {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
+              </span>
+            </div>
+          </div>
+
+          {task.description && (
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">{task.description}</p>
+          )}
+
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+            <span className="text-slate-400 sm:hidden">
+              {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
+            </span>
+            {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
+            {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
+            <span className={`${priority.class}`}>{priority.text}</span>
+            {task.categories?.slice(0, 2).map((cat) => (
+              <span
+                key={cat.id}
+                className="inline-flex max-w-[10rem] items-center gap-1 rounded px-1.5 py-0.5"
+                style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
+              >
+                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
+                <span className="truncate">{cat.name}</span>
+              </span>
+            ))}
+            {task.categories?.length > 2 && (
+              <span className="text-slate-400">+{task.categories.length - 2}</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}, (prev, next) => (
+  prev.task === next.task &&
+  prev.selected === next.selected &&
+  prev.timezone === next.timezone &&
+  prev.labels === next.labels
+));
+
 function TaskList({ forcedView = '' }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -169,6 +281,7 @@ function TaskList({ forcedView = '' }) {
   const listToolbarPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
+  const draftSyncTimerRef = useRef(0);
 
   const params = new URLSearchParams(location.search);
   const isSearchPath = location.pathname === '/search';
@@ -255,6 +368,15 @@ function TaskList({ forcedView = '' }) {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [listToolbarPanel]);
+
+  useEffect(() => () => {
+    if (draftSyncTimerRef.current) {
+      window.clearTimeout(draftSyncTimerRef.current);
+      draftSyncTimerRef.current = 0;
+      // Flush deferred outbox sync on unmount to avoid pending local-only edits.
+      scheduleSync();
+    }
+  }, []);
 
   const loading = tasksLoading && tasks.length === 0;
   const setTasksCache = (updater) => {
@@ -553,17 +675,6 @@ function TaskList({ forcedView = '' }) {
     return JSON.stringify(current) !== JSON.stringify(original);
   }, [draft, selectedTask]);
 
-  const getPriorityLabel = (priority) => {
-    switch (priority) {
-      case 1:
-        return { text: t('task.priorityHigh'), class: 'text-rose-600' };
-      case -1:
-        return { text: t('task.priorityLow'), class: 'text-emerald-600' };
-      default:
-        return { text: t('task.priorityMedium'), class: 'text-sky-600' };
-    }
-  };
-
   const getPriorityBadge = (priorityValue) => {
     const value = Number.parseInt(priorityValue, 10) || 0;
     if (value === 1) return { text: t('task.priorityHigh'), className: 'text-rose-600 bg-rose-50 border-rose-200' };
@@ -571,7 +682,7 @@ function TaskList({ forcedView = '' }) {
     return { text: t('task.priorityMedium'), className: 'text-sky-600 bg-sky-50 border-sky-200' };
   };
 
-  const handleStatusChange = async (task, newStatus) => {
+  const handleStatusChange = useCallback(async (task, newStatus) => {
     if (task.read_only) return;
     try {
       if (task.recurrence_rule) {
@@ -585,7 +696,7 @@ function TaskList({ forcedView = '' }) {
     } catch (err) {
       console.error('Failed to update task status:', err);
     }
-  };
+  }, [queryClient, timezone]);
 
   const handleQuickCreate = async () => {
     const title = quickTitle.trim();
@@ -721,26 +832,34 @@ function TaskList({ forcedView = '' }) {
 
     setSavingDraft(true);
     try {
+      const originalDraft = buildDraftFromTask(selectedTask);
+      const timeChanged =
+        !!draft.all_day !== !!originalDraft?.all_day ||
+        String(draft.start_time || '') !== String(originalDraft?.start_time || '') ||
+        String(draft.end_time || '') !== String(originalDraft?.end_time || '');
+
       const payload = {
         title,
         description: draft.description || '',
         priority: Number.parseInt(draft.priority, 10) || 0,
         status: draft.status || selectedTask.status || 'pending',
-        all_day: !!draft.all_day,
         client_timezone: timezone,
         category_ids: (draft.category_ids || []).map((id) => Number.parseInt(id, 10)).filter((id) => !Number.isNaN(id)),
       };
 
-      if (payload.all_day) {
-        payload.start_time = draft.start_time ? toISOString(`${draft.start_time} 00:00:00`) : null;
-        payload.end_time = draft.end_time ? toISOString(`${draft.end_time} 23:59:59`) : null;
-      } else {
-        payload.start_time = draft.start_time ? toISOString(draft.start_time) : null;
-        payload.end_time = draft.end_time ? toISOString(draft.end_time) : null;
-      }
+      if (timeChanged) {
+        payload.all_day = !!draft.all_day;
+        if (payload.all_day) {
+          payload.start_time = draft.start_time ? toISOString(`${draft.start_time} 00:00:00`) : null;
+          payload.end_time = draft.end_time ? toISOString(`${draft.end_time} 23:59:59`) : null;
+        } else {
+          payload.start_time = draft.start_time ? toISOString(draft.start_time) : null;
+          payload.end_time = draft.end_time ? toISOString(draft.end_time) : null;
+        }
 
-      if (draft.start_time) payload.start_time_local = draft.start_time;
-      if (draft.end_time) payload.end_time_local = draft.end_time;
+        if (draft.start_time) payload.start_time_local = draft.start_time;
+        if (draft.end_time) payload.end_time_local = draft.end_time;
+      }
 
       if (draft.recurrence_enabled) {
         const rule = {
@@ -755,7 +874,18 @@ function TaskList({ forcedView = '' }) {
         payload.recurrence_rule = null;
       }
 
-      await updateTaskLocal(queryClient, selectedTask.id, payload);
+      const savedTask = await updateTaskLocal(queryClient, selectedTask.id, payload, { scheduleSync: false });
+      draftTouchedRef.current = false;
+      if (savedTask) {
+        setDraft(buildDraftFromTask(savedTask));
+      }
+      if (draftSyncTimerRef.current) {
+        window.clearTimeout(draftSyncTimerRef.current);
+      }
+      draftSyncTimerRef.current = window.setTimeout(() => {
+        scheduleSync();
+        draftSyncTimerRef.current = 0;
+      }, 4000);
       setLastSavedAt(dayjs().format('HH:mm:ss'));
     } catch (err) {
       console.error('Failed to save task details:', err);
@@ -781,12 +911,6 @@ function TaskList({ forcedView = '' }) {
     }
   };
 
-  const handleResetDraft = () => {
-    if (!selectedTask) return;
-    draftTouchedRef.current = false;
-    setDraft(buildDraftFromTask(selectedTask));
-  };
-
   useEffect(() => {
     if (!selectedTask || !draft || !isDraftDirty || savingDraft) return;
     if (!draftTouchedRef.current) return;
@@ -805,11 +929,11 @@ function TaskList({ forcedView = '' }) {
     }
   }, [isDraftDirty]);
 
-  const openAdvancedModal = (task = null) => {
+  const openAdvancedModal = useCallback((task = null) => {
     if (task?.read_only) return;
     setModalTask(task);
     setModalOpen(true);
-  };
+  }, []);
 
   const handleModalClose = () => {
     setModalOpen(false);
@@ -830,104 +954,20 @@ function TaskList({ forcedView = '' }) {
     }
   };
 
-  const renderTaskRow = (task) => {
-    const selected = selectedTaskID === task.id;
-    const isCompleted = task.status === 'completed';
-    const isDeleted = task.status === 'cancelled';
-    const isReadOnly = !!task.read_only;
-    const priority = getPriorityLabel(task.priority);
+  const listLabels = useMemo(() => ({
+    priorityHigh: t('task.priorityHigh'),
+    priorityMedium: t('task.priorityMedium'),
+    priorityLow: t('task.priorityLow'),
+    statusCancelled: t('task.statusCancelled'),
+    markPending: t('task.markPending'),
+  }), [t]);
 
-    return (
-      <div
-        key={task.id}
-        draggable={!isReadOnly}
-        onDragStart={(event) => {
-          if (isReadOnly) return;
-          event.dataTransfer.setData('text/task-id', String(task.id));
-          event.dataTransfer.effectAllowed = 'move';
-        }}
-        onClick={() => {
-          setSelectedTaskID(task.id);
-          if (isMobileViewport) {
-            openAdvancedModal(task);
-          }
-        }}
-        className={`group cursor-pointer rounded-xl border px-2.5 py-1.5 transition ${
-          selected
-            ? 'border-blue-300 bg-blue-50/70'
-            : 'border-transparent bg-white hover:border-slate-200 hover:bg-slate-50'
-        }`}
-      >
-        <div className="flex items-start gap-2">
-          <input
-            type="checkbox"
-            checked={isCompleted}
-            disabled={isDeleted || isReadOnly}
-            onChange={(e) => {
-              e.stopPropagation();
-              handleStatusChange(task, isCompleted ? 'pending' : 'completed');
-            }}
-            className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-600 cursor-pointer"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className={`truncate text-[13px] font-medium ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                {task.title}
-              </h3>
-              <div className="hidden shrink-0 items-center gap-2 sm:flex">
-                {isReadOnly && (
-                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">CalDAV</span>
-                )}
-                {isDeleted && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleStatusChange(task, 'pending');
-                    }}
-                    disabled={isReadOnly}
-                    className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50"
-                    title={t('task.markPending')}
-                  >
-                    ↺
-                  </button>
-                )}
-                <span className="text-[10px] text-slate-400">
-                  {getTaskPrimaryTime(task) ? formatDateTime(getTaskPrimaryTime(task), 'MM/DD HH:mm') : ''}
-                </span>
-              </div>
-            </div>
-
-            {task.description && (
-              <p className="mt-0.5 truncate text-[11px] text-slate-500">{task.description}</p>
-            )}
-
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-              <span className="text-slate-400 sm:hidden">
-                {getTaskPrimaryTime(task) ? formatDateTime(getTaskPrimaryTime(task), 'MM/DD HH:mm') : ''}
-              </span>
-              {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{t('task.statusCancelled')}</span>}
-              {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
-              <span className={`${priority.class}`}>{priority.text}</span>
-              {task.categories?.slice(0, 2).map((cat) => (
-                <span
-                  key={cat.id}
-                  className="inline-flex max-w-[10rem] items-center gap-1 rounded px-1.5 py-0.5"
-                  style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
-                  <span className="truncate">{cat.name}</span>
-                </span>
-              ))}
-              {task.categories?.length > 2 && (
-                <span className="text-slate-400">+{task.categories.length - 2}</span>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  const handleSelectTask = useCallback((task) => {
+    setSelectedTaskID(task.id);
+    if (isMobileViewport) {
+      openAdvancedModal(task);
+    }
+  }, [isMobileViewport, openAdvancedModal]);
 
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
@@ -948,11 +988,11 @@ function TaskList({ forcedView = '' }) {
   const showListHeader = !isCompactMobile || showMobileSearchBar;
 
   return (
-    <div className="h-full bg-slate-100 p-1.5 md:p-2">
+    <div className="md-page h-full p-1.5 md:p-2">
       <div className="grid h-full grid-cols-1 gap-2.5 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
-        <section className="flex h-full min-h-0 flex-col border border-slate-200 bg-white">
+        <section className="md-pane flex h-full min-h-0 flex-col">
           {showListHeader && (
-            <div className="border-b border-slate-200 px-3 py-2.5">
+            <div className="border-b border-blue-100 px-3 py-2.5">
               <div className="flex items-center justify-end gap-2 md:gap-3">
                 <div className="hidden min-w-0 md:block md:flex-none">
                   <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
@@ -960,7 +1000,7 @@ function TaskList({ forcedView = '' }) {
                 </div>
                 <div className="flex min-w-0 items-center gap-2 md:flex-1">
                   {view === 'search' && (
-                    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm ring-1 ring-transparent focus-within:border-slate-400 focus-within:ring-slate-200">
+                    <div className="md-input-row flex-1">
                       <IconSearch className="h-4 w-4 text-slate-400" />
                       <input
                         value={searchKeyword}
@@ -971,7 +1011,7 @@ function TaskList({ forcedView = '' }) {
                     </div>
                   )}
                   {canQuickCreate && (
-                    <div className="hidden min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm ring-1 ring-transparent focus-within:border-slate-400 focus-within:ring-slate-200 md:flex">
+                    <div className="md-input-row hidden flex-1 md:flex">
                       <IconSearch className="h-4 w-4 text-slate-400" />
                       <input
                         value={quickTitle}
@@ -992,10 +1032,10 @@ function TaskList({ forcedView = '' }) {
                       <button
                         type="button"
                         onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
-                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                        className={`md-icon-btn text-sm ${
                           listToolbarPanel === 'sort'
                             ? 'bg-sky-50 text-sky-700'
-                            : 'text-slate-500 hover:bg-slate-100'
+                            : 'text-slate-500'
                         }`}
                         title={t('common.filter')}
                       >
@@ -1004,10 +1044,10 @@ function TaskList({ forcedView = '' }) {
                       <button
                         type="button"
                         onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
-                        className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                        className={`md-icon-btn text-sm ${
                           listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
                             ? 'bg-indigo-50 text-indigo-700'
-                            : 'text-slate-500 hover:bg-slate-100'
+                            : 'text-slate-500'
                         }`}
                         title={t('task.groupNone')}
                       >
@@ -1015,7 +1055,7 @@ function TaskList({ forcedView = '' }) {
                       </button>
 
                       {listToolbarPanel === 'sort' && (
-                        <div className="absolute right-0 top-10 z-20 w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                        <div className="md-popover absolute right-0 top-10 z-20 w-52">
                           <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                             {t('common.filter')}
                           </div>
@@ -1042,7 +1082,7 @@ function TaskList({ forcedView = '' }) {
                       )}
 
                       {listToolbarPanel === 'group' && (
-                        <div className="absolute right-0 top-10 z-20 w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                        <div className="md-popover absolute right-0 top-10 z-20 w-52">
                           <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                             {t('task.groupNone')}
                           </div>
@@ -1078,7 +1118,7 @@ function TaskList({ forcedView = '' }) {
                       }
                       openAdvancedModal(null);
                     }}
-                    className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-base text-white hover:bg-blue-700 md:inline-flex"
+                    className="btn-primary hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg px-0 py-0 text-base md:inline-flex"
                     title={t('task.newTask')}
                   >
                     +
@@ -1105,7 +1145,19 @@ function TaskList({ forcedView = '' }) {
                         {group.title} · {group.tasks.length}
                       </div>
                     ) : null}
-                    <div className="space-y-1">{group.tasks.map(renderTaskRow)}</div>
+                    <div className="space-y-1">
+                      {group.tasks.map((task) => (
+                        <TaskRow
+                          key={task.id}
+                          task={task}
+                          selected={selectedTaskID === task.id}
+                          timezone={timezone}
+                          labels={listLabels}
+                          onSelectTask={handleSelectTask}
+                          onToggleStatus={handleStatusChange}
+                        />
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1115,7 +1167,7 @@ function TaskList({ forcedView = '' }) {
           {isCompactMobile && (
             <div ref={listToolbarPanelRef} className="fixed bottom-20 right-3 z-30 flex flex-col items-end gap-2 md:hidden">
               {listToolbarPanel === 'sort' && (
-                <div className="w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                <div className="md-popover w-52">
                   <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                     {t('common.filter')}
                   </div>
@@ -1142,7 +1194,7 @@ function TaskList({ forcedView = '' }) {
               )}
 
               {listToolbarPanel === 'group' && (
-                <div className="w-52 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                <div className="md-popover w-52">
                   <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                     {t('task.groupNone')}
                   </div>
@@ -1173,7 +1225,7 @@ function TaskList({ forcedView = '' }) {
                   <button
                     type="button"
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
-                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white shadow-md ${
+                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-blue-100 bg-white shadow-sm ${
                       listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
                         ? 'text-indigo-700 ring-2 ring-indigo-100'
                         : 'text-slate-600'
@@ -1185,7 +1237,7 @@ function TaskList({ forcedView = '' }) {
                   <button
                     type="button"
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
-                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white shadow-md ${
+                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-blue-100 bg-white shadow-sm ${
                       listToolbarPanel === 'sort'
                         ? 'text-sky-700 ring-2 ring-sky-100'
                         : 'text-slate-600'
@@ -1199,7 +1251,7 @@ function TaskList({ forcedView = '' }) {
               <button
                 type="button"
                 onClick={() => openAdvancedModal(null)}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-blue-600 text-lg text-white shadow-md"
+                className="btn-primary inline-flex h-11 w-11 items-center justify-center rounded-full px-0 py-0 text-lg shadow-sm"
                 title={t('task.newTask')}
               >
                 +
@@ -1208,14 +1260,14 @@ function TaskList({ forcedView = '' }) {
           )}
         </section>
 
-        <section className="hidden h-full min-h-0 flex-col border border-slate-200 bg-white lg:flex">
+        <section className="md-pane hidden h-full min-h-0 flex-col lg:flex">
           {!selectedTask || !draft ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-400">
               {t('task.selectTaskHint')}
             </div>
           ) : (
             <>
-              <div className="border-b border-slate-200 px-4 py-3">
+              <div className="border-b border-blue-100 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs">
                     {selectedTask.read_only && (
@@ -1279,24 +1331,8 @@ function TaskList({ forcedView = '' }) {
                     >
                       <IconRepeat className="h-4 w-4" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleResetDraft}
-                      disabled={!isDraftDirty || savingDraft || selectedTask.read_only}
-                      className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
-                    >
-                      {t('task.resetChanges')}
-                    </button>
-                    <button
-                      onClick={() => openAdvancedModal(selectedTask)}
-                      disabled={selectedTask.read_only}
-                      className="rounded-md px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
-                    >
-                      {t('task.advancedEdit')}
-                    </button>
-
                     {detailPanel === 'priority' && (
-                      <div className="absolute right-0 top-10 z-20 w-[22rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <div className="md-popover absolute right-0 top-10 z-20 w-[22rem] p-3">
                         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
                         <div className="flex flex-wrap gap-2">
                           {[
@@ -1325,7 +1361,7 @@ function TaskList({ forcedView = '' }) {
                     )}
 
                     {detailPanel === 'time' && (
-                      <div className="absolute right-0 top-10 z-20 w-[30rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <div className="md-popover absolute right-0 top-10 z-20 w-[30rem] p-3">
                         <div className="mb-2 flex items-center justify-between">
                           <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.startTime')}</div>
                           <button
@@ -1406,7 +1442,7 @@ function TaskList({ forcedView = '' }) {
                     )}
 
                     {detailPanel === 'category' && (
-                      <div className="absolute right-0 top-10 z-20 w-[26rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <div className="md-popover absolute right-0 top-10 z-20 w-[26rem] p-3">
                         <label className="form-label">{t('task.categories')}</label>
                         <div className="flex flex-wrap gap-2">
                           {categories.map((cat) => {
@@ -1434,7 +1470,7 @@ function TaskList({ forcedView = '' }) {
                     )}
 
                     {detailPanel === 'recurrence' && (
-                      <div className="absolute right-0 top-10 z-20 w-[24rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <div className="md-popover absolute right-0 top-10 z-20 w-[24rem] p-3">
                         <div className="mb-2 flex items-center justify-between">
                           <label className="text-sm font-medium text-slate-700">{t('task.repeat')}</label>
                           <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
@@ -1557,7 +1593,7 @@ function TaskList({ forcedView = '' }) {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="px-1 py-1">
                   <input
                     value={draft.title}
                     onChange={(e) => handleDraftFieldChange('title', e.target.value)}
@@ -1578,14 +1614,14 @@ function TaskList({ forcedView = '' }) {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
+              <div className="flex items-center justify-between border-t border-blue-100 px-4 py-3">
                 <button onClick={handleDeleteSelected} className="btn-danger text-sm">
                   {t('common.delete')}
                 </button>
                 <button
                   onClick={handleSaveDraft}
                   disabled={savingDraft || !isDraftDirty}
-                  className="btn-primary text-sm disabled:opacity-50"
+                  className="btn-primary text-sm"
                 >
                   {savingDraft ? t('common.loading') : t('common.save')}
                 </button>

@@ -116,21 +116,27 @@ function nowISO() {
 async function patchTaskSyncState(taskID, patch) {
   if (!queryClientRef || !taskID) return;
   let nextTask = null;
+  let changed = false;
 
   queryClientRef.setQueryData(queryKeys.tasks.all, (prev) => {
     if (!Array.isArray(prev)) return prev;
     return prev.map((task) => {
       if (task.id !== taskID) return task;
+      const hasDiff = Object.keys(patch || {}).some((key) => task?.[key] !== patch?.[key]);
+      if (!hasDiff) {
+        nextTask = task;
+        return task;
+      }
+      changed = true;
       nextTask = {
         ...task,
         ...patch,
-        client_updated_at: nowISO(),
       };
       return nextTask;
     });
   });
 
-  if (nextTask) {
+  if (changed && nextTask) {
     await upsertTask(nextTask);
   }
 }
@@ -372,12 +378,20 @@ async function pullServerData() {
       byID.set(taskID, normalized);
     });
 
-    mergedTasks = Array.from(byID.values()).sort((a, b) => getTaskTimestamp(b) - getTaskTimestamp(a));
+    // Keep list order stable to avoid UI flicker while background sync updates sync_state.
+    mergedTasks = Array.from(byID.values());
     nextCursor = String(payload.next_since || nextCursor || '');
     hasMore = Boolean(payload.has_more);
   }
 
-  queryClientRef.setQueryData(queryKeys.tasks.all, mergedTasks);
+  queryClientRef.setQueryData(queryKeys.tasks.all, (prev) => {
+    if (!Array.isArray(prev)) return mergedTasks;
+    if (prev.length !== mergedTasks.length) return mergedTasks;
+    for (let i = 0; i < prev.length; i += 1) {
+      if (prev[i] !== mergedTasks[i]) return mergedTasks;
+    }
+    return prev;
+  });
   queryClientRef.setQueryData(queryKeys.categories.all, categories);
 
   await Promise.all([
@@ -479,7 +493,8 @@ export function scheduleSync() {
   runSyncCycle({ silent: true });
 }
 
-export async function enqueueTaskOperation(op) {
+export async function enqueueTaskOperation(op, options = {}) {
+  const { schedule = true } = options;
   const now = Date.now();
   const normalized = {
     ...op,
@@ -500,7 +515,9 @@ export async function enqueueTaskOperation(op) {
       entity_id: normalized.entity_id,
       op_type: normalized.op_type,
     });
-    scheduleSync();
+    if (schedule) {
+      scheduleSync();
+    }
     return;
   }
 
@@ -513,7 +530,9 @@ export async function enqueueTaskOperation(op) {
     });
   }
   if (plan.mode === 'drop_entity_ops' && !plan.normalized) {
-    scheduleSync();
+    if (schedule) {
+      scheduleSync();
+    }
     return;
   }
 
@@ -524,7 +543,9 @@ export async function enqueueTaskOperation(op) {
     op_type: finalOp.op_type,
     entity_id: finalOp.entity_id,
   });
-  scheduleSync();
+  if (schedule) {
+    scheduleSync();
+  }
 }
 
 export async function forceManualSync() {

@@ -546,64 +546,64 @@ function Settings() {
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="settings-page md-page flex h-full flex-col">
       {saveToast && (
         <div className="fixed right-4 top-4 z-[70]">
           <div
-            className={`rounded-lg border px-4 py-2 text-sm shadow-lg ${
+            className={`md-toast ${
               saveToast.type === 'error'
-                ? 'border-rose-200 bg-rose-50 text-rose-700'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                ? 'md-toast-error'
+                : 'md-toast-success'
             }`}
           >
             {saveToast.message}
           </div>
         </div>
       )}
-      <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
+      <div className="hidden border-b border-blue-100 bg-white/90 p-4 md:block">
         <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-3xl mx-auto">
           {/* Tab Navigation */}
-          <div className="flex border-b border-gray-200 mb-6">
+          <div className="settings-tabs">
             <button
               onClick={() => setActiveTab('general')}
-              className={`px-4 py-2 font-medium ${
+              className={`settings-tab-btn ${
                 activeTab === 'general'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
+                  ? 'settings-tab-btn-active'
+                  : 'settings-tab-btn-idle'
               }`}
             >
               {t('settings.title')}
             </button>
             <button
               onClick={() => setActiveTab('notifications')}
-              className={`px-4 py-2 font-medium ${
+              className={`settings-tab-btn ${
                 activeTab === 'notifications'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
+                  ? 'settings-tab-btn-active'
+                  : 'settings-tab-btn-idle'
               }`}
             >
               {t('settings.notifications')}
             </button>
             <button
               onClick={() => setActiveTab('sync')}
-              className={`px-4 py-2 font-medium ${
+              className={`settings-tab-btn ${
                 activeTab === 'sync'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
+                  ? 'settings-tab-btn-active'
+                  : 'settings-tab-btn-idle'
               }`}
             >
               {t('settings.syncSettings')}
             </button>
             <button
               onClick={() => setActiveTab('caldav')}
-              className={`px-4 py-2 font-medium ${
+              className={`settings-tab-btn ${
                 activeTab === 'caldav'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
+                  ? 'settings-tab-btn-active'
+                  : 'settings-tab-btn-idle'
               }`}
             >
               CalDAV
@@ -612,7 +612,7 @@ function Settings() {
 
           {/* General Settings */}
           {activeTab === 'general' && (
-            <div className="bg-white border border-gray-200 p-6">
+            <div className="md-card p-6">
               <h3 className="text-lg font-medium mb-4">{t('settings.title')}</h3>
 
               <div className="space-y-6">
@@ -626,7 +626,7 @@ function Settings() {
                   <select
                     value={language}
                     onChange={(e) => handleLanguageChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-select"
                   >
                     <option value="zh-CN">简体中文</option>
                     <option value="en-US">English</option>
@@ -641,7 +641,7 @@ function Settings() {
                   <select
                     value={timezone}
                     onChange={(e) => handleTimezoneChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-select"
                   >
                     {TIMEZONES.map((tz) => (
                       <option key={tz.value} value={tz.value}>
@@ -661,7 +661,7 @@ function Settings() {
                   <select
                     value={calendarDefaultView}
                     onChange={(e) => handleCalendarDefaultViewChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-select"
                   >
                     <option value="dayGridMonth">{t('settings.calendarViewMonth')}</option>
                     <option value="timeGridWeek">{t('settings.calendarViewWeek')}</option>
@@ -687,7 +687,7 @@ function Settings() {
                   <select
                     value={defaultReminderMinutes}
                     onChange={(e) => handleDefaultReminderMinutesChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-input"
                   >
                     {defaultReminderOptions.map((minutes) => (
                       <option key={minutes} value={minutes}>
@@ -706,7 +706,7 @@ function Settings() {
                     value={defaultTaskStartTime}
                     onChange={(e) => setDefaultTaskStartTime(e.target.value)}
                     onBlur={handleDefaultTaskStartTimeBlur}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-select"
                   />
                 </div>
 
@@ -727,7 +727,7 @@ function Settings() {
                   </select>
                 </div>
 
-                <div className="rounded-md border border-gray-200 p-3">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
                   <p className="mb-3 text-sm font-medium text-gray-700">{t('settings.naturalTimeDefaults')}</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
@@ -737,7 +737,7 @@ function Settings() {
                         value={defaultMorningTime}
                         onChange={(e) => setDefaultMorningTime(e.target.value)}
                         onBlur={() => handleNaturalTimeBlur('default_morning_time', defaultMorningTime, setDefaultMorningTime, '09:00')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="form-input"
                       />
                     </div>
                     <div>
@@ -747,7 +747,7 @@ function Settings() {
                         value={defaultNoonTime}
                         onChange={(e) => setDefaultNoonTime(e.target.value)}
                         onBlur={() => handleNaturalTimeBlur('default_noon_time', defaultNoonTime, setDefaultNoonTime, '12:00')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="form-input"
                       />
                     </div>
                     <div>
@@ -757,7 +757,7 @@ function Settings() {
                         value={defaultAfternoonTime}
                         onChange={(e) => setDefaultAfternoonTime(e.target.value)}
                         onBlur={() => handleNaturalTimeBlur('default_afternoon_time', defaultAfternoonTime, setDefaultAfternoonTime, '15:00')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="form-input"
                       />
                     </div>
                     <div>
@@ -767,7 +767,7 @@ function Settings() {
                         value={defaultEveningTime}
                         onChange={(e) => setDefaultEveningTime(e.target.value)}
                         onBlur={() => handleNaturalTimeBlur('default_evening_time', defaultEveningTime, setDefaultEveningTime, '20:00')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="form-input"
                       />
                     </div>
                   </div>
@@ -784,7 +784,7 @@ function Settings() {
                   </label>
                 </div>
 
-                <div className="rounded-md border border-gray-200 p-3">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
                   <p className="mb-3 text-sm font-medium text-gray-700">{t('settings.mobileNavigation')}</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
@@ -792,7 +792,7 @@ function Settings() {
                       <select
                         value={mobileDefaultTab}
                         onChange={(e) => handleMobileDefaultTabChange(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="form-select"
                       >
                         <option value="tasks">{t('settings.mobileTabTasks')}</option>
                         <option value="calendar">{t('settings.mobileTabCalendar')}</option>
@@ -804,7 +804,7 @@ function Settings() {
                       <select
                         value={mobileTabPreset}
                         onChange={(e) => handleMobileTabPresetChange(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="form-select"
                       >
                         <option value="tasks_calendar_settings">{t('settings.mobilePresetBasic')}</option>
                         <option value="tasks_calendar_categories_settings">{t('settings.mobilePresetWithCategories')}</option>
@@ -822,13 +822,13 @@ function Settings() {
 
           {/* Sync Settings */}
           {activeTab === 'sync' && (
-            <div className="bg-white border border-gray-200 p-6 space-y-6">
+            <div className="md-card space-y-6 p-6">
               <div>
                 <h3 className="text-lg font-medium text-gray-900">{t('settings.syncSettings')}</h3>
                 <p className="mt-1 text-sm text-gray-500">{t('settings.syncSettingsHint')}</p>
               </div>
 
-              <div className="rounded-md border border-gray-200 p-4">
+              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
                 <p className="text-sm text-gray-700">
                   {t('settings.syncPendingCount')}: <span className="font-medium">{syncStatus.pendingCount}</span>
                 </p>
@@ -837,13 +837,13 @@ function Settings() {
                 </p>
               </div>
 
-              <div className="rounded-md border border-gray-200 p-4">
+              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
                 <p className="text-sm font-medium text-gray-700">Auto sync interval</p>
                 <p className="mt-1 text-sm text-gray-500">Longer interval avoids overlapping slow calendar/task pulls.</p>
                 <select
                   value={String(syncIntervalSeconds)}
                   onChange={(e) => handleSyncIntervalChange(e.target.value)}
-                  className="mt-3 w-full max-w-xs rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="form-select mt-3 max-w-xs"
                 >
                   <option value="0">Disabled (manual only)</option>
                   <option value="30">30 seconds</option>
@@ -861,7 +861,7 @@ function Settings() {
                   type="button"
                   onClick={handleManualSync}
                   disabled={syncBusy}
-                  className="mt-3 inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:bg-blue-700"
+                  className="btn-primary mt-3 inline-flex items-center disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {syncBusy ? t('settings.syncRunning') : t('settings.syncNow')}
                 </button>
@@ -874,7 +874,7 @@ function Settings() {
                   type="button"
                   onClick={handleRebuildSync}
                   disabled={syncBusy}
-                  className="mt-3 inline-flex items-center rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:bg-rose-700"
+                  className="btn-danger mt-3 inline-flex items-center disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {syncBusy ? t('settings.syncRunning') : t('settings.syncRebuild')}
                 </button>
@@ -883,7 +883,7 @@ function Settings() {
           )}
 
           {activeTab === 'caldav' && (
-            <div className="bg-white border border-gray-200 p-6 space-y-4">
+            <div className="md-card space-y-4 p-6">
               <div>
                 <h3 className="text-lg font-medium text-gray-900">CalDAV Subscriptions</h3>
                 <p className="mt-1 text-sm text-gray-500">Read-only events are synced into Tasks and Calendar views.</p>
@@ -894,26 +894,26 @@ function Settings() {
                   value={caldavForm.name}
                   onChange={(e) => setCaldavForm((prev) => ({ ...prev, name: e.target.value }))}
                   placeholder="Display name"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  className="form-input"
                 />
                 <input
                   value={caldavForm.baseURL}
                   onChange={(e) => setCaldavForm((prev) => ({ ...prev, baseURL: e.target.value }))}
                   placeholder="Server URL"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  className="form-input"
                 />
                 <input
                   value={caldavForm.username}
                   onChange={(e) => setCaldavForm((prev) => ({ ...prev, username: e.target.value }))}
                   placeholder="Username"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  className="form-input"
                 />
                 <input
                   type="password"
                   value={caldavForm.password}
                   onChange={(e) => setCaldavForm((prev) => ({ ...prev, password: e.target.value }))}
                   placeholder="App password"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  className="form-input"
                 />
               </div>
 
@@ -922,7 +922,7 @@ function Settings() {
                   type="button"
                   disabled={caldavBusy}
                   onClick={handleCaldavDiscover}
-                  className="inline-flex items-center rounded-md bg-slate-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                  className="btn-secondary inline-flex items-center disabled:opacity-60"
                 >
                   Discover Calendars
                 </button>
@@ -930,14 +930,14 @@ function Settings() {
                   type="button"
                   disabled={caldavBusy || caldavCalendars.length === 0}
                   onClick={handleCaldavCreate}
-                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                  className="btn-primary inline-flex items-center disabled:opacity-60"
                 >
                   Save Source
                 </button>
               </div>
 
               {caldavCalendars.length > 0 && (
-                <div className="rounded-md border border-gray-200 p-3">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
                   <p className="mb-2 text-sm font-medium text-gray-700">Select calendars to sync</p>
                   <div className="space-y-2">
                     {caldavCalendars.map((item, idx) => (
@@ -959,14 +959,14 @@ function Settings() {
                 </div>
               )}
 
-              <div className="rounded-md border border-gray-200 p-3">
+              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
                 <p className="mb-2 text-sm font-medium text-gray-700">Configured sources</p>
                 {caldavSources.length === 0 ? (
                   <p className="text-sm text-gray-500">No CalDAV source yet.</p>
                 ) : (
                   <div className="space-y-2">
                     {caldavSources.map((source) => (
-                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-gray-200 px-3 py-2">
+                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-blue-100 bg-white px-3 py-2">
                         <div>
                           <div className="text-sm font-medium text-gray-900">{source.name}</div>
                           <div className="text-xs text-gray-500">{source.base_url}</div>
@@ -982,7 +982,7 @@ function Settings() {
                             type="button"
                             disabled={caldavBusy}
                             onClick={() => handleCaldavSync(source.id)}
-                            className="rounded bg-blue-600 px-2 py-1 text-xs text-white disabled:opacity-60"
+                            className="btn-primary px-2 py-1 text-xs disabled:opacity-60"
                           >
                             Sync now
                           </button>
@@ -990,7 +990,7 @@ function Settings() {
                             type="button"
                             disabled={caldavBusy}
                             onClick={() => handleCaldavDelete(source.id)}
-                            className="rounded bg-rose-600 px-2 py-1 text-xs text-white disabled:opacity-60"
+                            className="btn-danger px-2 py-1 text-xs disabled:opacity-60"
                           >
                             Delete
                           </button>

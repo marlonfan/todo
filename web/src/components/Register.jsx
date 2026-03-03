@@ -41,15 +41,15 @@ function Register({ setUser }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow-md">
+    <div className="min-h-screen flex items-center justify-center bg-[#eaf2ff] px-4">
+      <div className="md-card w-full max-w-md space-y-7 p-8">
         <div>
-          <h2 className="text-3xl font-bold text-center text-gray-900">{t('app.name')}</h2>
-          <p className="mt-2 text-center text-gray-600">{t('auth.registerTitle')}</p>
+          <h2 className="text-3xl font-bold text-center text-slate-900">{t('app.name')}</h2>
+          <p className="mt-2 text-center text-slate-600">{t('auth.registerTitle')}</p>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
             {error}
           </div>
         )}
@@ -110,7 +110,7 @@ function Register({ setUser }) {
         </form>
 
         <div className="text-center">
-          <p className="text-gray-600">
+          <p className="text-slate-600">
             {t('auth.hasAccount')}{' '}
             <Link to="/login" className="text-blue-600 hover:text-blue-800">
               {t('auth.login')}

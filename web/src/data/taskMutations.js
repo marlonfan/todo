@@ -35,10 +35,13 @@ function setTasksCache(queryClient, updater) {
   });
 }
 
-async function invalidateCalendarCaches(queryClient, taskID = null) {
-  await queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] });
+async function invalidateCalendarCaches(queryClient, taskID = null, options = {}) {
+  const { revalidateQuery = false } = options;
   if (taskID) {
     await invalidateCalendarRangesByTask(taskID);
+  }
+  if (revalidateQuery) {
+    await queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] });
   }
 }
 
@@ -111,12 +114,13 @@ export async function createTaskLocal(queryClient, payload) {
     op_type: 'create',
     payload,
   });
-  await invalidateCalendarCaches(queryClient);
+  await invalidateCalendarCaches(queryClient, null, { revalidateQuery: false });
 
   return optimisticTask;
 }
 
-export async function updateTaskLocal(queryClient, taskID, payload) {
+export async function updateTaskLocal(queryClient, taskID, payload, options = {}) {
+  const { scheduleSync: shouldScheduleSync = true } = options;
   let nextTask = null;
   let baseRevision = 0;
   setTasksCache(queryClient, (prev) => prev.map((task) => {
@@ -137,8 +141,8 @@ export async function updateTaskLocal(queryClient, taskID, payload) {
     op_type: 'update',
     payload,
     if_match_revision: baseRevision || undefined,
-  });
-  await invalidateCalendarCaches(queryClient, taskID);
+  }, { schedule: shouldScheduleSync });
+  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: false });
 
   return nextTask;
 }
@@ -182,7 +186,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
     payload,
     if_match_revision: shouldPatchBaseTask ? (baseRevision || undefined) : undefined,
   });
-  await invalidateCalendarCaches(queryClient, taskID);
+  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: false });
 
   return nextTask;
 }
@@ -219,7 +223,7 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload) {
     payload,
     if_match_revision: baseRevision || undefined,
   });
-  await invalidateCalendarCaches(queryClient, taskID);
+  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: false });
 
   return nextTask;
 }
@@ -257,5 +261,5 @@ export async function deleteTaskLocal(queryClient, taskID) {
     });
   }
 
-  await invalidateCalendarCaches(queryClient, numericID);
+  await invalidateCalendarCaches(queryClient, numericID, { revalidateQuery: false });
 }

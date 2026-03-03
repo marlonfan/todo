@@ -112,20 +112,20 @@ function CategoryManager() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="hidden border-b border-gray-200 bg-white p-4 md:block">
+      <div className="hidden border-b border-blue-100 bg-white/90 p-4 md:block">
         <h2 className="text-xl font-semibold">{t('nav.categories')}</h2>
       </div>
 
-      <div className="flex-1 p-6 overflow-auto">
+      <div className="flex-1 overflow-auto p-6">
         <div className="max-w-2xl">
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
               {error}
             </div>
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit(onSubmit)} className="bg-white p-4 border border-gray-200 mb-6">
+          <form onSubmit={handleSubmit(onSubmit)} className="md-card mb-6 p-5">
             <h3 className="text-lg font-medium mb-4">
               {editingCategory ? t('category.editCategory') : t('category.newCategory')}
             </h3>
@@ -156,7 +156,7 @@ function CategoryManager() {
                   {...register('color')}
                   type="color"
                   defaultValue="#3788d8"
-                  className="w-12 h-10 rounded cursor-pointer"
+                  className="h-10 w-12 cursor-pointer rounded-xl border border-blue-100 bg-white"
                 />
               </div>
               <div className="flex gap-2">
@@ -181,18 +181,18 @@ function CategoryManager() {
           </form>
 
           {/* Categories List */}
-          <div className="bg-white border border-gray-200">
+          <div className="md-card overflow-hidden">
             {isLoading && (
-              <div className="p-4 text-sm text-gray-500">{t('common.loading')}</div>
+              <div className="p-4 text-sm text-slate-500">{t('common.loading')}</div>
             )}
             {categories.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">
+              <div className="p-8 text-center text-slate-500">
                 {t('category.noCategories')}
               </div>
             ) : (
-              <ul className="divide-y divide-gray-200">
+              <ul className="divide-y divide-blue-100">
                 {categories.map((category) => (
-                  <li key={category.id} className="p-4 flex items-center justify-between hover:bg-gray-50">
+                  <li key={category.id} className="flex items-center justify-between p-4 transition-colors hover:bg-blue-50/60">
                     <div className="flex items-center gap-3">
                       <span className="text-xl leading-none">{category.emoji || '📁'}</span>
                       <span
@@ -204,13 +204,13 @@ function CategoryManager() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEdit(category)}
-                        className="text-blue-600 hover:text-blue-800 text-sm"
+                        className="rounded-full px-3 py-1 text-sm text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-800"
                       >
                         {t('common.edit')}
                       </button>
                       <button
                         onClick={() => handleDelete(category.id)}
-                        className="text-red-600 hover:text-red-800 text-sm"
+                        className="rounded-full px-3 py-1 text-sm text-red-600 transition-colors hover:bg-red-50 hover:text-red-800"
                       >
                         {t('common.delete')}
                       </button>

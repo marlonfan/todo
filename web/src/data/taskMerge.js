@@ -76,7 +76,5 @@ export function mergeServerAndLocalTasks(serverTasks, localTasks, options = {}) 
     }
   });
 
-  merged.sort((a, b) => getTaskTimestamp(b) - getTaskTimestamp(a));
   return merged;
 }
-

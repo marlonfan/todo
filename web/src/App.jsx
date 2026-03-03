@@ -42,8 +42,8 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-[#eaf2ff]">
+        <div className="md-card px-6 py-4 text-base font-medium text-slate-700">Loading...</div>
       </div>
     );
   }

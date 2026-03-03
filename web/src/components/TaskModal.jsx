@@ -9,7 +9,7 @@ import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery } from '../query/hooks';
-import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal } from '../data/taskMutations';
+import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 
@@ -369,6 +369,22 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       requestClose();
     } catch (err) {
       setError(err.response?.data?.error || t('task.deleteFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleCompleted = async () => {
+    if (!isEditing || !task) return;
+    setLoading(true);
+    setError('');
+    try {
+      const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
+      const savedTask = await updateTaskStatusLocal(queryClient, task.id, nextStatus);
+      onSaved(savedTask || { ...task, status: nextStatus });
+      requestClose();
+    } catch (err) {
+      setError(err.response?.data?.error || t('task.saveFailed'));
     } finally {
       setLoading(false);
     }
@@ -857,14 +873,24 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             <div className="sticky bottom-0 z-20 flex items-center justify-between border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">
               <div>
                 {isEditing && (
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    disabled={loading}
-                    className="btn-danger"
-                  >
-                    {t('common.delete')}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleToggleCompleted}
+                      disabled={loading}
+                      className="btn-secondary"
+                    >
+                      {task?.status === 'completed' ? t('task.statusPending') : t('task.statusCompleted')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDelete}
+                      disabled={loading}
+                      className="btn-danger"
+                    >
+                      {t('common.delete')}
+                    </button>
+                  </div>
                 )}
               </div>
               <div className="space-x-2">
