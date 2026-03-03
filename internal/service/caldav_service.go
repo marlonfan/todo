@@ -477,6 +477,7 @@ func (s *CaldavService) syncCalendarIncremental(
 		}
 
 		itemSet := make([]models.CaldavEventCache, 0, 4)
+		hasCalendarData := false
 		for _, propStat := range response.PropStat {
 			statusCode := parseHTTPStatusCode(propStat.Status)
 			if statusCode == http.StatusNotFound {
@@ -492,30 +493,48 @@ func (s *CaldavService) syncCalendarIncremental(
 				needMultiGet = append(needMultiGet, href)
 				continue
 			}
+			hasCalendarData = true
 			itemSet = append(itemSet, parseICSDataToEvents(source, calendar.ID, href, data, propStat.Prop.GetEtag, propStat.Prop.LastModified)...)
 		}
-		if itemSet != nil {
+		if itemSet != nil && hasCalendarData {
 			changed[href] = dedupeEventCacheItems(itemSet)
 		}
 	}
 
 	if len(needMultiGet) > 0 {
-		if mgParsed, mgErr := s.calendarMultiGet(ctx, source.Username, password, calendar.CalendarURL, needMultiGet); mgErr == nil && mgParsed != nil {
+		pending := dedupeStrings(needMultiGet)
+		resolved := make(map[string]struct{}, len(pending))
+		if mgParsed, mgErr := s.calendarMultiGet(ctx, source.Username, password, calendar.CalendarURL, pending); mgErr == nil && mgParsed != nil {
 			for _, response := range mgParsed.Responses {
 				href := strings.TrimSpace(response.Href)
 				if href == "" {
 					continue
 				}
 				itemSet := make([]models.CaldavEventCache, 0, 4)
+				hasCalendarData := false
 				for _, propStat := range response.PropStat {
 					data := strings.TrimSpace(propStat.Prop.CalendarData)
 					if data == "" {
 						continue
 					}
+					hasCalendarData = true
 					itemSet = append(itemSet, parseICSDataToEvents(source, calendar.ID, href, data, propStat.Prop.GetEtag, propStat.Prop.LastModified)...)
 				}
-				changed[href] = dedupeEventCacheItems(itemSet)
+				if hasCalendarData {
+					changed[href] = dedupeEventCacheItems(itemSet)
+					resolved[href] = struct{}{}
+				}
 			}
+		}
+		unresolved := 0
+		for _, href := range pending {
+			if _, ok := resolved[href]; ok {
+				continue
+			}
+			unresolved += 1
+		}
+		if unresolved > 0 {
+			return nil, nil, "", fmt.Errorf("sync-collection incomplete payload: %d resources unresolved", unresolved)
 		}
 	}
 
@@ -552,6 +571,9 @@ func isSyncTokenRecoverableError(err error) bool {
 	}
 	raw := strings.ToLower(err.Error())
 	if strings.Contains(raw, "410") || strings.Contains(raw, "invalid sync") || strings.Contains(raw, "token") {
+		return true
+	}
+	if strings.Contains(raw, "incomplete payload") {
 		return true
 	}
 	return strings.Contains(raw, "sync-collection failed")
