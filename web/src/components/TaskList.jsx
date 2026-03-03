@@ -16,7 +16,7 @@ import {
 } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
-import { useCaldavTasksQuery, useCategoriesQuery, useTasksQuery } from '../query/hooks';
+import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import {
   cancelTaskLocal,
@@ -120,24 +120,7 @@ function TaskList({ forcedView = '' }) {
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const timeInputStepSeconds = timeGranularity * 60;
-  const { data: localTasks = [], isLoading: tasksLoading } = useTasksQuery();
-  const caldavRangeStart = useMemo(() => dayjs().subtract(7, 'day').startOf('day').toISOString(), []);
-  const caldavRangeEnd = useMemo(() => dayjs().add(3, 'month').endOf('day').toISOString(), []);
-  const { data: caldavTasks = [] } = useCaldavTasksQuery(caldavRangeStart, caldavRangeEnd);
-  const tasks = useMemo(() => {
-    const local = Array.isArray(localTasks) ? localTasks : [];
-    const external = Array.isArray(caldavTasks) ? caldavTasks : [];
-    const byID = new Map();
-    external.forEach((task) => {
-      if (!task || typeof task.id === 'undefined' || task.id === null) return;
-      byID.set(task.id, task);
-    });
-    local.forEach((task) => {
-      if (!task || typeof task.id === 'undefined' || task.id === null) return;
-      byID.set(task.id, task);
-    });
-    return Array.from(byID.values());
-  }, [caldavTasks, localTasks]);
+  const { data: tasks = [], isLoading: tasksLoading } = useTasksQuery();
   const { data: categories = [] } = useCategoriesQuery();
 
   const [modalOpen, setModalOpen] = useState(false);
