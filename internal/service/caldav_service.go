@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"todo-app/internal/models"
@@ -348,6 +349,39 @@ func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) (
 }
 
 func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.CaldavSource, password string, calendar *models.CaldavCalendar) error {
+	if token := strings.TrimSpace(calendar.SyncToken); token != "" {
+		changed, removed, nextToken, err := s.syncCalendarIncremental(ctx, source, password, calendar, token)
+		if err == nil {
+			if len(removed) > 0 {
+				if delErr := s.repo.DeleteEventsByHrefs(source.UserID, source.ID, calendar.ID, removed); delErr != nil {
+					return delErr
+				}
+			}
+			for href, events := range changed {
+				if err := s.repo.DeleteEventsByHref(source.UserID, source.ID, calendar.ID, href); err != nil {
+					return err
+				}
+				for i := range events {
+					event := events[i]
+					event.UserID = source.UserID
+					event.SourceID = source.ID
+					event.CalendarID = calendar.ID
+					event.RawHref = href
+					if err := s.repo.UpsertEvent(&event); err != nil {
+						return err
+					}
+				}
+			}
+			if nextToken != "" {
+				calendar.SyncToken = nextToken
+			}
+			return nil
+		}
+		if !isSyncTokenRecoverableError(err) {
+			return err
+		}
+	}
+
 	remoteCTag, remoteSyncToken, stateErr := s.fetchCalendarState(ctx, source, password, calendar.CalendarURL)
 	if stateErr == nil && remoteCTag != "" && remoteCTag == strings.TrimSpace(calendar.CTag) {
 		calendar.SyncToken = remoteSyncToken
@@ -384,6 +418,110 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 	return nil
 }
 
+func (s *CaldavService) syncCalendarIncremental(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+	syncToken string,
+) (map[string][]models.CaldavEventCache, []string, string, error) {
+	reportBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<d:sync-collection xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:sync-token>%s</d:sync-token>
+  <d:sync-level>1</d:sync-level>
+  <d:prop>
+    <d:getetag/>
+    <d:getlastmodified/>
+    <c:calendar-data/>
+  </d:prop>
+</d:sync-collection>`, xmlEscape(syncToken))
+
+	req, err := http.NewRequestWithContext(ctx, "REPORT", calendar.CalendarURL, strings.NewReader(reportBody))
+	if err != nil {
+		return nil, nil, "", err
+	}
+	req.SetBasicAuth(source.Username, password)
+	req.Header.Set("Depth", "1")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, nil, "", fmt.Errorf("sync-collection failed: %s (%s)", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	var parsed multistatus
+	if err := xml.Unmarshal(raw, &parsed); err != nil {
+		return nil, nil, "", err
+	}
+
+	changed := make(map[string][]models.CaldavEventCache)
+	removed := make([]string, 0)
+	needMultiGet := make([]string, 0)
+
+	for _, response := range parsed.Responses {
+		href := strings.TrimSpace(response.Href)
+		if href == "" {
+			continue
+		}
+		if parseHTTPStatusCode(response.Status) == http.StatusNotFound {
+			removed = append(removed, href)
+			continue
+		}
+
+		itemSet := make([]models.CaldavEventCache, 0, 4)
+		for _, propStat := range response.PropStat {
+			statusCode := parseHTTPStatusCode(propStat.Status)
+			if statusCode == http.StatusNotFound {
+				removed = append(removed, href)
+				itemSet = nil
+				break
+			}
+			if statusCode != 0 && statusCode >= 300 {
+				continue
+			}
+			data := strings.TrimSpace(propStat.Prop.CalendarData)
+			if data == "" {
+				needMultiGet = append(needMultiGet, href)
+				continue
+			}
+			itemSet = append(itemSet, parseICSDataToEvents(source, calendar.ID, href, data, propStat.Prop.GetEtag, propStat.Prop.LastModified)...)
+		}
+		if itemSet != nil {
+			changed[href] = dedupeEventCacheItems(itemSet)
+		}
+	}
+
+	if len(needMultiGet) > 0 {
+		if mgParsed, mgErr := s.calendarMultiGet(ctx, source.Username, password, calendar.CalendarURL, needMultiGet); mgErr == nil && mgParsed != nil {
+			for _, response := range mgParsed.Responses {
+				href := strings.TrimSpace(response.Href)
+				if href == "" {
+					continue
+				}
+				itemSet := make([]models.CaldavEventCache, 0, 4)
+				for _, propStat := range response.PropStat {
+					data := strings.TrimSpace(propStat.Prop.CalendarData)
+					if data == "" {
+						continue
+					}
+					itemSet = append(itemSet, parseICSDataToEvents(source, calendar.ID, href, data, propStat.Prop.GetEtag, propStat.Prop.LastModified)...)
+				}
+				changed[href] = dedupeEventCacheItems(itemSet)
+			}
+		}
+	}
+
+	return changed, dedupeStrings(removed), strings.TrimSpace(parsed.SyncToken), nil
+}
+
 func (s *CaldavService) fetchCalendarState(ctx context.Context, source *models.CaldavSource, password, calendarURL string) (string, string, error) {
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">
@@ -408,6 +546,95 @@ func (s *CaldavService) fetchCalendarState(ctx context.Context, source *models.C
 	return "", "", errors.New("missing ctag and sync-token")
 }
 
+func isSyncTokenRecoverableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	raw := strings.ToLower(err.Error())
+	if strings.Contains(raw, "410") || strings.Contains(raw, "invalid sync") || strings.Contains(raw, "token") {
+		return true
+	}
+	return strings.Contains(raw, "sync-collection failed")
+}
+
+func parseICSDataToEvents(source *models.CaldavSource, calendarID int64, href, calendarData, etag, lastModified string) []models.CaldavEventCache {
+	parsedEvents := parseICSCalendarData(calendarData)
+	out := make([]models.CaldavEventCache, 0, len(parsedEvents))
+	for _, item := range expandParsedEvents(parsedEvents, time.Time{}, time.Time{}, false) {
+		if item.UID == "" || item.Start.IsZero() {
+			continue
+		}
+		event := models.CaldavEventCache{
+			UserID:       source.UserID,
+			SourceID:     source.ID,
+			CalendarID:   calendarID,
+			EventUID:     item.UID,
+			RecurrenceID: strings.TrimSpace(item.RecurrenceID),
+			Title:        item.Summary,
+			Description:  item.Description,
+			Location:     item.Location,
+			Organizer:    item.Organizer,
+			Attendees:    strings.Join(item.Attendees, "\n"),
+			MeetingLink:  extractMeetingURL(item.URL, item.Description),
+			StartTime:    item.Start.UTC(),
+			AllDay:       item.AllDay,
+			Status:       item.Status,
+			Etag:         strings.TrimSpace(etag),
+			RawHref:      href,
+		}
+		if !item.End.IsZero() {
+			endUTC := item.End.UTC()
+			event.EndTime = &endUTC
+		}
+		if lm := parseHTTPTime(lastModified); lm != nil {
+			event.LastModified = lm
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+func dedupeEventCacheItems(input []models.CaldavEventCache) []models.CaldavEventCache {
+	if len(input) == 0 {
+		return input
+	}
+	type key struct {
+		uid string
+		rid string
+	}
+	seen := make(map[key]int, len(input))
+	out := make([]models.CaldavEventCache, 0, len(input))
+	for _, item := range input {
+		k := key{uid: strings.TrimSpace(item.EventUID), rid: strings.TrimSpace(item.RecurrenceID)}
+		if k.uid == "" {
+			continue
+		}
+		if idx, ok := seen[k]; ok {
+			out[idx] = item
+			continue
+		}
+		seen[k] = len(out)
+		out = append(out, item)
+	}
+	return out
+}
+
+func parseHTTPStatusCode(statusLine string) int {
+	raw := strings.TrimSpace(statusLine)
+	if raw == "" {
+		return 0
+	}
+	parts := strings.Fields(raw)
+	if len(parts) < 2 {
+		return 0
+	}
+	code, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0
+	}
+	return code
+}
+
 type discoveredCalendar struct {
 	Href        string
 	DisplayName string
@@ -415,16 +642,19 @@ type discoveredCalendar struct {
 }
 
 type multistatus struct {
+	SyncToken string        `xml:"sync-token"`
 	Responses []responseXML `xml:"response"`
 }
 
 type responseXML struct {
+	Status   string    `xml:"status"`
 	Href     string    `xml:"href"`
 	PropStat []propXML `xml:"propstat"`
 }
 
 type propXML struct {
-	Prop propBody `xml:"prop"`
+	Status string   `xml:"status"`
+	Prop   propBody `xml:"prop"`
 }
 
 type propBody struct {

@@ -137,6 +137,24 @@ func (r *CaldavRepository) DeleteEventsNotInSet(userID, sourceID, calendarID int
 	return query.Where("(event_uid || '|' || recurrence_id) NOT IN ?", keepKeys).Delete(&models.CaldavEventCache{}).Error
 }
 
+func (r *CaldavRepository) DeleteEventsByHrefs(userID, sourceID, calendarID int64, hrefs []string) error {
+	if len(hrefs) == 0 {
+		return nil
+	}
+	return r.db.
+		Where("user_id = ? AND source_id = ? AND calendar_id = ? AND raw_href IN ?", userID, sourceID, calendarID, hrefs).
+		Delete(&models.CaldavEventCache{}).Error
+}
+
+func (r *CaldavRepository) DeleteEventsByHref(userID, sourceID, calendarID int64, href string) error {
+	if href == "" {
+		return nil
+	}
+	return r.db.
+		Where("user_id = ? AND source_id = ? AND calendar_id = ? AND raw_href = ?", userID, sourceID, calendarID, href).
+		Delete(&models.CaldavEventCache{}).Error
+}
+
 func (r *CaldavRepository) ListEventsInRange(userID int64, start, end time.Time) ([]models.CaldavEventCache, error) {
 	var events []models.CaldavEventCache
 	err := r.db.Where("user_id = ?", userID).
