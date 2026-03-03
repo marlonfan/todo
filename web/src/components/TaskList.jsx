@@ -75,6 +75,29 @@ function getTaskPrimaryTime(task) {
   return task.start_time || task.due_date || '';
 }
 
+function compareTasksStable(a, b) {
+  const aNum = Number(a?.id);
+  const bNum = Number(b?.id);
+  const aNumValid = Number.isFinite(aNum);
+  const bNumValid = Number.isFinite(bNum);
+  if (aNumValid && bNumValid && aNum !== bNum) return aNum - bNum;
+
+  const aID = String(a?.id ?? '');
+  const bID = String(b?.id ?? '');
+  if (aID !== bID) return aID.localeCompare(bID, 'en', { numeric: true, sensitivity: 'base' });
+
+  const aCreated = dayjs(a?.created_at || a?.createdAt || '').valueOf();
+  const bCreated = dayjs(b?.created_at || b?.createdAt || '').valueOf();
+  const aCreatedValid = Number.isFinite(aCreated);
+  const bCreatedValid = Number.isFinite(bCreated);
+  if (aCreatedValid && bCreatedValid && aCreated !== bCreated) return aCreated - bCreated;
+
+  const aTitle = String(a?.title || '');
+  const bTitle = String(b?.title || '');
+  if (aTitle !== bTitle) return aTitle.localeCompare(bTitle, 'zh-Hans-CN');
+  return 0;
+}
+
 function sortTasksByOption(inputTasks, sortBy, timezone) {
   const cloned = [...inputTasks];
   cloned.sort((a, b) => {
@@ -91,7 +114,7 @@ function sortTasksByOption(inputTasks, sortBy, timezone) {
     if (va !== vb) {
       return sortBy === 'due_desc' ? vb - va : va - vb;
     }
-    return a.id - b.id;
+    return compareTasksStable(a, b);
   });
   return cloned;
 }

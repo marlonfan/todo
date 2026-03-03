@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { IconSearch } from './icons/TaskIcons';
@@ -7,6 +7,9 @@ function SearchDialog({ open, initialQuery, onClose }) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const [keyword, setKeyword] = useState(initialQuery || '');
+  const requestClose = useCallback(() => {
+    onClose?.();
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -17,12 +20,14 @@ function SearchDialog({ open, initialQuery, onClose }) {
     if (!open) return undefined;
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
-        onClose?.();
+        event.preventDefault();
+        event.stopPropagation();
+        requestClose();
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose, open]);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [open, requestClose]);
 
   if (!open) return null;
 
@@ -30,11 +35,11 @@ function SearchDialog({ open, initialQuery, onClose }) {
     const query = keyword.trim();
     if (!query) return;
     navigate(`/search?q=${encodeURIComponent(query)}`);
-    onClose?.();
+    requestClose();
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-start justify-center bg-slate-900/40 p-3 pt-14 md:p-4 md:pt-20" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex items-start justify-center bg-slate-900/40 p-3 pt-14 md:p-4 md:pt-20" onClick={requestClose}>
       <div className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="border-b border-slate-200 px-3 py-2.5 md:px-4 md:py-3">
           <h3 className="text-sm font-semibold text-slate-800 md:text-base">{t('task.searchTasks')}</h3>
@@ -47,6 +52,12 @@ function SearchDialog({ open, initialQuery, onClose }) {
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  requestClose();
+                  return;
+                }
                 if (e.key === 'Enter') submit();
               }}
               placeholder={t('task.searchPlaceholder')}
@@ -57,7 +68,7 @@ function SearchDialog({ open, initialQuery, onClose }) {
           <div className="flex items-center justify-end gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               className="h-9 rounded-md border border-slate-300 px-3 text-sm text-slate-700 hover:bg-slate-100"
             >
               {t('common.cancel')}

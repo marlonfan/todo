@@ -149,6 +149,7 @@ function emitCalendarTrace(detail = {}) {
 
 const CALENDAR_CACHE_SCHEMA_VERSION = 2;
 const CALENDAR_CACHE_REFRESH_MS = 10 * 60 * 1000;
+const CALENDAR_AUTO_REVALIDATE_MS = 2 * 60 * 1000;
 
 function isCurrentCalendarCache(entry) {
   return Number(entry?.cache_version || 0) === CALENDAR_CACHE_SCHEMA_VERSION;
@@ -178,6 +179,7 @@ function CalendarView() {
   const desktopMoveRafRef = useRef(0);
   const readonlyModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const moreEventsModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
+  const lastCalendarRevalidateAtRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -513,6 +515,39 @@ function CalendarView() {
       }
     },
   });
+
+  const revalidateVisibleCalendar = useCallback((reason = 'interval') => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (!calendarPool.start || !calendarPool.end) return;
+    const now = Date.now();
+    if (now - lastCalendarRevalidateAtRef.current < 25 * 1000) return;
+    lastCalendarRevalidateAtRef.current = now;
+    fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
+      console.error(`Failed to revalidate calendar (${reason}):`, error);
+    });
+  }, [calendarPool.end, calendarPool.start, fetchCalendarRangeFromServer]);
+
+  useEffect(() => {
+    if (!calendarPool.start || !calendarPool.end) return undefined;
+    if (typeof window === 'undefined') return undefined;
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      revalidateVisibleCalendar('visibility');
+    };
+    const onFocus = () => {
+      revalidateVisibleCalendar('focus');
+    };
+    const timer = window.setInterval(() => {
+      revalidateVisibleCalendar('interval');
+    }, CALENDAR_AUTO_REVALIDATE_MS);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [calendarPool.end, calendarPool.start, revalidateVisibleCalendar]);
 
   useEffect(() => {
     if (!calendarPool.start || !calendarPool.end) return;
