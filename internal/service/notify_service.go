@@ -310,10 +310,7 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 			Description: n.Task.Description,
 			NotifyAt:    &n.NotifyAt,
 			UserID:      n.Task.UserID,
-			Timezone:    "UTC",
-		}
-		if n.Task.User != nil && n.Task.User.Timezone != "" {
-			msg.Timezone = n.Task.User.Timezone
+			Timezone:    s.resolveUserTimezone(n.Task.UserID, n.Task.User),
 		}
 
 		if n.Task.DueDate != nil {
@@ -341,6 +338,16 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 	}
 
 	return nil
+}
+
+func (s *NotifyService) resolveUserTimezone(userID int64, taskUser *models.User) string {
+	if taskUser != nil && taskUser.Timezone != "" {
+		return taskUser.Timezone
+	}
+	if user, err := s.userRepo.GetByID(userID); err == nil && user != nil && user.Timezone != "" {
+		return user.Timezone
+	}
+	return "UTC"
 }
 
 func (s *NotifyService) ListChannels() []string {

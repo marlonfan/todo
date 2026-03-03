@@ -49,6 +49,8 @@ func (w *WebhookNotifier) Send(ctx context.Context, userID int64, config map[str
 		method = "POST"
 	}
 
+	loc := resolveLocation(msg.Timezone)
+
 	// Build payload
 	payload := map[string]interface{}{
 		"task_id":     msg.TaskID,
@@ -56,10 +58,16 @@ func (w *WebhookNotifier) Send(ctx context.Context, userID int64, config map[str
 		"description": msg.Description,
 		"user_id":     msg.UserID,
 		"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		"timezone":    loc.String(),
 	}
 
+	if msg.NotifyAt != nil {
+		payload["notify_at"] = msg.NotifyAt.UTC().Format(time.RFC3339)
+		payload["notify_at_local"] = msg.NotifyAt.In(loc).Format(time.RFC3339)
+	}
 	if msg.DueDate != nil {
-		payload["due_date"] = msg.DueDate.Format(time.RFC3339)
+		payload["due_date"] = msg.DueDate.UTC().Format(time.RFC3339)
+		payload["due_date_local"] = msg.DueDate.In(loc).Format(time.RFC3339)
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -99,4 +107,15 @@ func (w *WebhookNotifier) Send(ctx context.Context, userID int64, config map[str
 	}
 
 	return nil
+}
+
+func resolveLocation(timezone string) *time.Location {
+	if timezone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }

@@ -65,8 +65,12 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 
 	// Build message
 	message := msg.Description
+	loc := resolveLocation(msg.Timezone)
+	if msg.NotifyAt != nil {
+		message += fmt.Sprintf("\n\nReminder: %s", msg.NotifyAt.In(loc).Format("2006-01-02 15:04:05"))
+	}
 	if msg.DueDate != nil {
-		message += fmt.Sprintf("\n\nDue: %s", msg.DueDate.Format("2006-01-02 15:04"))
+		message += fmt.Sprintf("\n\nDue: %s", msg.DueDate.In(loc).Format("2006-01-02 15:04:05"))
 	}
 
 	if strings.TrimSpace(message) == "" {
@@ -103,4 +107,15 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 	}
 
 	return nil
+}
+
+func resolveLocation(timezone string) *time.Location {
+	if timezone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
