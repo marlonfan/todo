@@ -310,12 +310,22 @@ func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) (
 	if err != nil {
 		return nil, err
 	}
+	sourceProviders := make(map[int64]string)
+	if sources, listErr := s.repo.ListSourcesByUser(userID); listErr == nil {
+		for _, source := range sources {
+			sourceProviders[source.ID] = detectCaldavProvider(source.BaseURL)
+		}
+	}
 	out := make([]models.CalendarEvent, 0, len(events))
 	for _, ev := range events {
 		id := externalVirtualID(ev.SourceID, ev.CalendarID, ev.EventUID, ev.RecurrenceID)
 		taskStatus := models.TaskStatusPending
 		if strings.EqualFold(ev.Status, "cancelled") {
 			taskStatus = models.TaskStatusCancelled
+		}
+		provider := sourceProviders[ev.SourceID]
+		if provider == "" {
+			provider = "caldav"
 		}
 		item := models.CalendarEvent{
 			ID:       fmt.Sprintf("caldav-%d", id),
@@ -331,6 +341,7 @@ func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) (
 				IsRecurring: false,
 				ReadOnly:    true,
 				Source:      caldavSourceName,
+				Provider:    provider,
 				ExternalID:  fmt.Sprintf("%d:%d:%s:%s", ev.SourceID, ev.CalendarID, ev.EventUID, ev.RecurrenceID),
 				Location:    strings.TrimSpace(ev.Location),
 				Organizer:   strings.TrimSpace(ev.Organizer),
@@ -388,7 +399,7 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 		return nil
 	}
 
-	items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, time.Time{}, time.Time{}, false)
+	items, err := s.fetchCalendarRemoteEventsWindowed(ctx, source, password, calendar)
 	if err != nil {
 		return err
 	}
@@ -416,6 +427,29 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 		calendar.SyncToken = remoteSyncToken
 	}
 	return nil
+}
+
+func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+) ([]models.CaldavEventCache, error) {
+	windowStart, windowEnd := defaultCaldavExpansionWindow()
+	windows := buildCaldavSyncWindows(windowStart, windowEnd, 90)
+	if len(windows) == 0 {
+		windows = append(windows, [2]time.Time{windowStart, windowEnd})
+	}
+
+	merged := make([]models.CaldavEventCache, 0, 1024)
+	for _, segment := range windows {
+		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, segment[0], segment[1], true)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, items...)
+	}
+	return dedupeCaldavEvents(merged), nil
 }
 
 func (s *CaldavService) syncCalendarIncremental(
@@ -642,6 +676,31 @@ func dedupeEventCacheItems(input []models.CaldavEventCache) []models.CaldavEvent
 	return out
 }
 
+func dedupeCaldavEvents(input []models.CaldavEventCache) []models.CaldavEventCache {
+	if len(input) == 0 {
+		return input
+	}
+	type key struct {
+		uid string
+		rid string
+	}
+	seen := make(map[key]int, len(input))
+	out := make([]models.CaldavEventCache, 0, len(input))
+	for _, item := range input {
+		k := key{uid: strings.TrimSpace(item.EventUID), rid: strings.TrimSpace(item.RecurrenceID)}
+		if k.uid == "" {
+			continue
+		}
+		if idx, ok := seen[k]; ok {
+			out[idx] = item
+			continue
+		}
+		seen[k] = len(out)
+		out = append(out, item)
+	}
+	return out
+}
+
 func parseHTTPStatusCode(statusLine string) int {
 	raw := strings.TrimSpace(statusLine)
 	if raw == "" {
@@ -661,6 +720,45 @@ func parseHTTPStatusCode(statusLine string) int {
 func defaultCaldavExpansionWindow() (time.Time, time.Time) {
 	now := time.Now().UTC()
 	return now.AddDate(-1, 0, 0), now.AddDate(2, 0, 0)
+}
+
+func buildCaldavSyncWindows(start, end time.Time, spanDays int) [][2]time.Time {
+	if !end.After(start) {
+		return nil
+	}
+	if spanDays <= 0 {
+		spanDays = 90
+	}
+	span := time.Duration(spanDays) * 24 * time.Hour
+	out := make([][2]time.Time, 0, 16)
+	cursor := start.UTC()
+	limit := end.UTC()
+	for cursor.Before(limit) {
+		next := cursor.Add(span)
+		if next.After(limit) {
+			next = limit
+		}
+		out = append(out, [2]time.Time{cursor, next})
+		cursor = next
+	}
+	return out
+}
+
+func detectCaldavProvider(baseURL string) string {
+	raw := strings.ToLower(strings.TrimSpace(baseURL))
+	if raw == "" {
+		return "caldav"
+	}
+	if parsed, err := url.Parse(raw); err == nil {
+		host := strings.ToLower(parsed.Hostname())
+		if strings.Contains(host, "feishu") || strings.Contains(host, "lark") {
+			return "feishu"
+		}
+	}
+	if strings.Contains(raw, "feishu") || strings.Contains(raw, "lark") {
+		return "feishu"
+	}
+	return "caldav"
 }
 
 type discoveredCalendar struct {

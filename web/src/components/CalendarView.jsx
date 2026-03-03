@@ -168,7 +168,6 @@ function CalendarView() {
   const [moreEvents, setMoreEvents] = useState([]);
   const [readonlyEventOpen, setReadonlyEventOpen] = useState(false);
   const [readonlyEventDetail, setReadonlyEventDetail] = useState(null);
-  const [readonlyCopyHint, setReadonlyCopyHint] = useState('');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [calendarPool, setCalendarPool] = useState({ start: '', end: '' });
   const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
@@ -765,13 +764,16 @@ function CalendarView() {
       endText: formatReadonlyEventDateTime(eventLike?.end, allDay),
       description: String(ext?.description || '').trim(),
       source: String(ext?.source || 'caldav'),
-      externalId: String(ext?.externalId || '').trim(),
+      provider: String(ext?.provider || 'caldav'),
+      location: String(ext?.location || '').trim(),
+      organizer: String(ext?.organizer || '').trim(),
+      attendees: Array.isArray(ext?.attendees) ? ext.attendees.filter(Boolean) : [],
+      meetingLink: String(ext?.meetingLink || '').trim(),
       taskId: Number(ext?.taskId || 0),
     };
   }, [formatReadonlyEventDateTime]);
 
   const openReadonlyEventModal = useCallback((eventLike) => {
-    setReadonlyCopyHint('');
     setReadonlyEventDetail(buildReadonlyEventDetail(eventLike));
     setReadonlyEventOpen(true);
   }, [buildReadonlyEventDetail]);
@@ -779,34 +781,20 @@ function CalendarView() {
   const closeReadonlyEventModal = useCallback(() => {
     setReadonlyEventOpen(false);
     setReadonlyEventDetail(null);
-    setReadonlyCopyHint('');
   }, []);
 
-  const isExternalLink = useCallback((value) => /^https?:\/\//i.test(String(value || '').trim()), []);
-
-  const handleCopyReadonlyExternalID = useCallback(async () => {
-    const raw = readonlyEventDetail?.externalId || '';
-    if (!raw) return;
-    try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(raw);
-      } else {
-        const textarea = document.createElement('textarea');
-        textarea.value = raw;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
+  useEffect(() => {
+    if (!readonlyEventOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        closeReadonlyEventModal();
       }
-      setReadonlyCopyHint('ID copied');
-      window.setTimeout(() => setReadonlyCopyHint(''), 1800);
-    } catch {
-      setReadonlyCopyHint('Copy failed');
-      window.setTimeout(() => setReadonlyCopyHint(''), 1800);
-    }
-  }, [readonlyEventDetail?.externalId]);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [closeReadonlyEventModal, readonlyEventOpen]);
+
+  const isHttpLink = useCallback((value) => /^https?:\/\//i.test(String(value || '').trim()), []);
 
   const handleEventClick = async (info) => {
     if (info?.event?.extendedProps?.readOnly) {
@@ -1345,16 +1333,45 @@ function CalendarView() {
                 <p className="text-xs uppercase tracking-wide text-slate-500">All day</p>
                 <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.allDay ? 'Yes' : 'No'}</p>
               </div>
-              {readonlyEventDetail.description && (
+              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.location && (
                 <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Description</p>
-                  <p className="mt-1 whitespace-pre-wrap text-slate-700">{readonlyEventDetail.description}</p>
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Location</p>
+                  <p className="mt-1 break-words text-slate-700">{readonlyEventDetail.location}</p>
                 </div>
               )}
-              {readonlyEventDetail.externalId && (
+              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.organizer && (
                 <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">External</p>
-                  <p className="mt-1 break-all text-slate-700">{readonlyEventDetail.externalId}</p>
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Organizer</p>
+                  <p className="mt-1 break-words text-slate-700">{readonlyEventDetail.organizer}</p>
+                </div>
+              )}
+              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.attendees.length > 0 && (
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Attendees</p>
+                  <div className="mt-1 max-h-28 space-y-1 overflow-y-auto pr-1">
+                    {readonlyEventDetail.attendees.map((item) => (
+                      <p key={item} className="break-words text-slate-700">{item}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.meetingLink && isHttpLink(readonlyEventDetail.meetingLink) && (
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Meeting link</p>
+                  <a
+                    href={readonlyEventDetail.meetingLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 block break-all text-blue-700 hover:underline"
+                  >
+                    {readonlyEventDetail.meetingLink}
+                  </a>
+                </div>
+              )}
+              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.description && (
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Description</p>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-slate-700">{readonlyEventDetail.description}</p>
                 </div>
               )}
               <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
@@ -1362,27 +1379,8 @@ function CalendarView() {
               </p>
             </div>
             <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
-              <div className="text-xs text-slate-500">{readonlyCopyHint || ''}</div>
+              <div className="text-xs text-slate-500" />
               <div className="flex items-center gap-2">
-                {readonlyEventDetail.externalId && isExternalLink(readonlyEventDetail.externalId) && (
-                  <a
-                    href={readonlyEventDetail.externalId}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Open source event
-                  </a>
-                )}
-                {readonlyEventDetail.externalId && !isExternalLink(readonlyEventDetail.externalId) && (
-                  <button
-                    type="button"
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    onClick={handleCopyReadonlyExternalID}
-                  >
-                    Copy external ID
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={closeReadonlyEventModal}

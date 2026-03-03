@@ -174,11 +174,6 @@ body {
   height: 2.35rem;
 }
 
-.todo-calendar.fc .fc-timegrid-slot-minor {
-  border-top-style: dotted;
-  border-top-color: #e5e7eb;
-}
-
 .todo-calendar.fc .fc-timegrid-now-indicator-line {
   border-color: #ef4444;
   border-width: 2px;
@@ -500,8 +495,33 @@ body {
   background: rgba(219, 234, 254, 0.33) !important;
 }
 
+/* Week/3-day: remove today column background and keep today text in theme blue */
+.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-col.fc-day-today,
+.todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-col.fc-day-today,
+.todo-calendar.fc .fc-timeGridWeek-view .fc-col-header-cell.fc-day-today,
+.todo-calendar.fc .fc-timeGridThreeDay-view .fc-col-header-cell.fc-day-today {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.todo-calendar.fc .fc-timeGridWeek-view .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion,
+.todo-calendar.fc .fc-timeGridThreeDay-view .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion {
+  color: #2563eb !important;
+}
+
+.todo-calendar.fc .fc-timeGridWeek-view,
+.todo-calendar.fc .fc-timeGridThreeDay-view {
+  --fc-today-bg-color: transparent !important;
+}
+
+.todo-calendar.fc .fc-timeGridWeek-view .fc-day-today,
+.todo-calendar.fc .fc-timeGridThreeDay-view .fc-day-today {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
 .todo-calendar.fc .fc-timegrid-slot {
-  height: 2.05rem;
+  height: 2.25rem;
 }
 
 .todo-calendar.fc .fc-timegrid-axis-cushion,
@@ -632,4 +652,59 @@ body {
 .mobile-calendar .fc-timeGridDay-view .fc-timegrid-axis-cushion,
 .mobile-calendar .fc-timeGridDay-view .fc-timegrid-slot-label-cushion {
   font-size: 12px !important;
+}
+
+/* Hide only the "current time" indicator line/arrow; keep all grid lines intact. */
+.todo-calendar.fc .fc-timegrid-now-indicator-line,
+.todo-calendar.fc .fc-timegrid-now-indicator-arrow {
+  display: none !important;
+  border: 0 !important;
+}
+
+/* Keep major grid lines, hide only minor dotted separators. */
+.todo-calendar.fc .fc-timegrid-slot-minor {
+  border-top-style: none !important;
+  border-top-width: 0 !important;
+}
+
+/* Global fallback for FullCalendar minor-slot dotted line. */
+.fc .fc-timegrid-slot-minor,
+.fc-theme-standard .fc-timegrid-slot-minor {
+  border-top-style: none !important;
+  border-top-width: 0 !important;
+  border-top-color: transparent !important;
+}
+
+/* Final fallback: remove today background highlight everywhere in calendar views. */
+.todo-calendar.fc .fc-day-today,
+.fc .fc-day-today {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Final override: today date text uses theme blue in header/date cells */
+.todo-calendar.fc .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion,
+.todo-calendar.fc .fc-timegrid-col.fc-day-today .fc-col-header-cell-cushion,
+.todo-calendar.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number,
+.fc .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion,
+.fc .fc-timegrid-col.fc-day-today .fc-col-header-cell-cushion,
+.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+  color: #2563eb !important;
+}
+
+/* Final desktop row-height override: ~10% taller hour slots */
+@media (min-width: 768px) {
+  .fc .fc-timegrid-slots table {
+    height: auto !important;
+  }
+
+  .fc .fc-timegrid-slots tr {
+    height: 2.1rem !important;
+  }
+
+  .fc .fc-timegrid-slot,
+  .fc .fc-timegrid-slot.fc-timegrid-slot-lane {
+    height: 2.1rem !important;
+    min-height: 2.1rem !important;
+  }
 }
