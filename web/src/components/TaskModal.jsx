@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -73,7 +73,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [basicPanel, setBasicPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const basicPanelRef = useRef(null);
-  const swipeStartRef = useRef(null);
+  const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const timeGranularity = getUserTimeGranularity();
   const timeInputStepSeconds = timeGranularity * 60;
 
@@ -366,7 +366,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         await cancelTaskLocal(queryClient, task.id);
       }
       onSaved(null);
-      onClose();
+      requestClose();
     } catch (err) {
       setError(err.response?.data?.error || t('task.deleteFailed'));
     } finally {
@@ -392,59 +392,62 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const workDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR'];
   const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
+  const requestClose = useCallback(() => {
+    const state = modalHistoryRef.current;
+    if (typeof window !== 'undefined' && state.hasEntry) {
+      state.ignoreNextPop = true;
+      state.hasEntry = false;
+      window.history.back();
+    }
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const baseState = window.history.state && typeof window.history.state === 'object'
+      ? window.history.state
+      : {};
+    window.history.pushState({ ...baseState, __todoModal: 'task-modal' }, '');
+    modalHistoryRef.current.hasEntry = true;
+    modalHistoryRef.current.ignoreNextPop = false;
+
+    const handlePopState = () => {
+      const state = modalHistoryRef.current;
+      if (state.ignoreNextPop) {
+        state.ignoreNextPop = false;
+        return;
+      }
+      if (!state.hasEntry) return;
+      state.hasEntry = false;
+      onClose();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      modalHistoryRef.current.ignoreNextPop = false;
+      modalHistoryRef.current.hasEntry = false;
+    };
+  }, [onClose]);
+
   useEffect(() => {
     const handleKeyDown = (event) => {
       const isEscape = event.key === 'Escape' || event.key === 'Esc' || event.code === 'Escape' || event.keyCode === 27;
       if (isEscape && !loading) {
         event.preventDefault();
         event.stopPropagation();
-        onClose();
+        requestClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [loading, onClose]);
-
-  const handleModalTouchStart = (event) => {
-    if (!event.touches || event.touches.length !== 1) {
-      swipeStartRef.current = null;
-      return;
-    }
-    const touch = event.touches[0];
-    swipeStartRef.current = {
-      x: touch.clientX,
-      y: touch.clientY,
-      at: Date.now(),
-    };
-  };
-
-  const handleModalTouchEnd = (event) => {
-    const start = swipeStartRef.current;
-    swipeStartRef.current = null;
-    if (!start || !event.changedTouches || event.changedTouches.length === 0) return;
-
-    const touch = event.changedTouches[0];
-    const deltaX = touch.clientX - start.x;
-    const deltaY = Math.abs(touch.clientY - start.y);
-    const elapsed = Date.now() - start.at;
-
-    if (deltaX > 100 && deltaY < 70 && elapsed < 800 && deltaX > deltaY * 1.5) {
-      onClose();
-    }
-  };
-
-  const handleModalTouchCancel = () => {
-    swipeStartRef.current = null;
-  };
+  }, [loading, requestClose]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={requestClose}>
       <div
         className="modal-content task-modal-shell"
         onClick={e => e.stopPropagation()}
-        onTouchStart={handleModalTouchStart}
-        onTouchEnd={handleModalTouchEnd}
-        onTouchCancel={handleModalTouchCancel}
       >
         <div className="flex h-[86vh] flex-col">
           <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4">
@@ -457,7 +460,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   {isEditing ? t('task.advancedEditHint') : t('task.quickCreateHint')}
                 </p>
               </div>
-              <button onClick={onClose} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700">
+              <button onClick={requestClose} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700">
                 ✕
               </button>
             </div>
@@ -867,7 +870,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               <div className="space-x-2">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={requestClose}
                   className="btn-secondary"
                 >
                   {t('common.cancel')}

@@ -56,6 +56,13 @@ function getWeekStripStart(dateValue) {
   return current.subtract(current.day(), 'day').format('YYYY-MM-DD');
 }
 
+function getMobileStripStart(dateValue, viewValue) {
+  const current = dayjs(dateValue).format('YYYY-MM-DD');
+  if (viewValue === 'timeGridThreeDay') return dayjs(current).subtract(1, 'day').format('YYYY-MM-DD');
+  if (viewValue === 'timeGridDay') return dayjs(current).subtract(3, 'day').format('YYYY-MM-DD');
+  return getWeekStripStart(current);
+}
+
 function annotateOverlapCount(events, defaultDurationMinutes = 30) {
   if (!Array.isArray(events) || events.length <= 1) return events || [];
   const counts = new Array(events.length).fill(1);
@@ -159,6 +166,18 @@ function CalendarView() {
   const pendingFocusDateRef = useRef('');
   const touchDraggingEventRef = useRef(false);
   const calendarFetchInFlightRef = useRef(new Map());
+  const wheelGestureRef = useRef({ sumX: 0, sumY: 0, lastAt: 0 });
+  const wheelNavLockUntilRef = useRef(0);
+  const desktopSwipeRef = useRef({ active: false, startX: 0, startY: 0, allow: false });
+  const mobileContentSwipeRef = useRef({ active: false, startX: 0, startY: 0, lastX: 0, lastY: 0, allow: false, pointerId: null, lockedAxis: '' });
+  const mobileNavAnimatingRef = useRef(false);
+  const mobileClickSuppressUntilRef = useRef(0);
+  const desktopViewportRef = useRef(null);
+  const desktopNavAnimatingRef = useRef(false);
+  const desktopMotionLayerRef = useRef(null);
+  const desktopMoveRafRef = useRef(0);
+  const readonlyModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
+  const moreEventsModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -208,7 +227,16 @@ function CalendarView() {
     return () => window.clearInterval(timer);
   }, [timezone]);
 
+  useEffect(() => () => {
+    if (desktopMoveRafRef.current) {
+      cancelAnimationFrame(desktopMoveRafRef.current);
+      desktopMoveRafRef.current = 0;
+    }
+  }, []);
+
   const activeCalendarView = isCompactMobile ? normalizeMobileView(mobileView) : calendarDefaultView;
+  const mobileStripDays = activeCalendarView === 'timeGridThreeDay' ? 3 : 7;
+  const mobileStripStepDays = activeCalendarView === 'timeGridThreeDay' ? 3 : 7;
   const mobileWeekdayShort = i18n.language === 'zh-CN' ? ZH_WEEKDAY_SHORT : EN_WEEKDAY_SHORT;
 
   const desktopViewOptions = useMemo(
@@ -232,8 +260,8 @@ function CalendarView() {
 
   const mobileDateStrip = useMemo(() => {
     const start = dayjs(mobileStripStartDate);
-    return Array.from({ length: 7 }, (_, index) => start.add(index, 'day'));
-  }, [mobileStripStartDate]);
+    return Array.from({ length: mobileStripDays }, (_, index) => start.add(index, 'day'));
+  }, [mobileStripDays, mobileStripStartDate]);
 
   const todayDateString = useMemo(() => dayjs().tz(timezone).format('YYYY-MM-DD'), [timezone]);
 
@@ -260,23 +288,56 @@ function CalendarView() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
-    if (!moreEventsOpen) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setMoreEventsOpen(false);
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [moreEventsOpen]);
+  const requestCloseMoreEventsModal = useCallback(() => {
+    const state = moreEventsModalHistoryRef.current;
+    if (typeof window !== 'undefined' && state.hasEntry) {
+      state.ignoreNextPop = true;
+      state.hasEntry = false;
+      window.history.back();
+    }
+    setMoreEventsOpen(false);
+  }, []);
 
   useEffect(() => {
-    const expectedStart = getWeekStripStart(mobileCurrentDate);
+    if (!moreEventsOpen || typeof window === 'undefined') return undefined;
+    const baseState = window.history.state && typeof window.history.state === 'object'
+      ? window.history.state
+      : {};
+    window.history.pushState({ ...baseState, __todoModal: 'calendar-more-events' }, '');
+    moreEventsModalHistoryRef.current.hasEntry = true;
+    moreEventsModalHistoryRef.current.ignoreNextPop = false;
+
+    const handlePopState = () => {
+      const state = moreEventsModalHistoryRef.current;
+      if (state.ignoreNextPop) {
+        state.ignoreNextPop = false;
+        return;
+      }
+      if (!state.hasEntry) return;
+      state.hasEntry = false;
+      setMoreEventsOpen(false);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') requestCloseMoreEventsModal();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      document.removeEventListener('keydown', handleKeyDown);
+      moreEventsModalHistoryRef.current.ignoreNextPop = false;
+      moreEventsModalHistoryRef.current.hasEntry = false;
+    };
+  }, [moreEventsOpen, requestCloseMoreEventsModal]);
+
+  useEffect(() => {
+    const expectedStart = getMobileStripStart(mobileCurrentDate, activeCalendarView);
     if (expectedStart !== mobileStripStartDate && stripAnimationRef.current.phase === 'idle') {
       setMobileStripStartDate(expectedStart);
     }
-  }, [mobileCurrentDate, mobileStripStartDate]);
+  }, [activeCalendarView, mobileCurrentDate, mobileStripStartDate]);
 
   const currentCalendarQueryKey = useMemo(
     () => queryKeys.calendar.events(calendarPool.start || '', calendarPool.end || '', timezone),
@@ -536,12 +597,15 @@ function CalendarView() {
     });
 
     if (isCompactMobile) {
+      const normalizedView = normalizeMobileView(dateInfo.view.type);
       const focusedDate = pendingFocusDateRef.current
         ? dayjs(pendingFocusDateRef.current).format('YYYY-MM-DD')
-        : dayjs(calendarRef.current?.getApi()?.getDate() || dateInfo.start).format('YYYY-MM-DD');
+        : normalizedView === 'timeGridThreeDay'
+          ? dayjs(dateInfo.start).add(1, 'day').format('YYYY-MM-DD')
+          : dayjs(calendarRef.current?.getApi()?.getDate() || dateInfo.start).format('YYYY-MM-DD');
       setMobileCurrentDate(focusedDate);
+      setMobileStripStartDate(getMobileStripStart(focusedDate, normalizedView));
       pendingFocusDateRef.current = '';
-      const normalizedView = normalizeMobileView(dateInfo.view.type);
       if (normalizedView !== mobileView) {
         setMobileView(normalizedView);
       }
@@ -549,6 +613,7 @@ function CalendarView() {
   };
 
   const handleDateClick = (info) => {
+    if (Date.now() < mobileClickSuppressUntilRef.current) return;
     const start = dayjs(info.date).utc();
     const end = info.allDay ? start.endOf('day') : start.add(timeGranularity, 'minute');
 
@@ -562,6 +627,7 @@ function CalendarView() {
   };
 
   const handleSelect = (info) => {
+    if (Date.now() < mobileClickSuppressUntilRef.current) return;
     const start = dayjs(info.start).utc();
     let end = dayjs(info.end).utc();
 
@@ -592,7 +658,7 @@ function CalendarView() {
     const today = dayjs().tz(timezone).format('YYYY-MM-DD');
     pendingFocusDateRef.current = today;
     setMobileCurrentDate(today);
-    setMobileStripStartDate(getWeekStripStart(today));
+    setMobileStripStartDate(getMobileStripStart(today, activeCalendarView));
     stripAnimationRef.current = { phase: 'idle', direction: 0, width: 0 };
     setStripTransitionMs(0);
     setStripTranslateX(0);
@@ -667,8 +733,8 @@ function CalendarView() {
   const handleStripTransitionEnd = () => {
     const animation = stripAnimationRef.current;
     if (animation.phase === 'out') {
-      const nextStart = dayjs(mobileStripStartDate).add(animation.direction * 7, 'day').format('YYYY-MM-DD');
-      const nextCurrent = dayjs(mobileCurrentDate).add(animation.direction * 7, 'day').format('YYYY-MM-DD');
+      const nextStart = dayjs(mobileStripStartDate).add(animation.direction * mobileStripStepDays, 'day').format('YYYY-MM-DD');
+      const nextCurrent = dayjs(mobileCurrentDate).add(animation.direction * mobileStripStepDays, 'day').format('YYYY-MM-DD');
 
       pendingFocusDateRef.current = nextCurrent;
       setMobileStripStartDate(nextStart);
@@ -728,12 +794,271 @@ function CalendarView() {
     }
   }, []);
 
-  const handleNavigatePeriod = (direction) => {
+  const applyDesktopMotion = useCallback((x, y, duration = 0) => {
+    const layer = desktopMotionLayerRef.current;
+    if (!layer) return;
+    layer.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    layer.style.transition = duration > 0
+      ? `transform ${duration}ms cubic-bezier(0.22, 0.61, 0.36, 1)`
+      : 'none';
+  }, []);
+
+  const setDesktopAnimatingClass = useCallback((active) => {
+    const viewport = desktopViewportRef.current;
+    if (!viewport) return;
+    viewport.classList.toggle('calendar-animating', Boolean(active));
+  }, []);
+
+  const runDesktopNavigateAnimation = useCallback((direction, axis = 'x') => {
+    if (isCompactMobile) return false;
+    if (desktopNavAnimatingRef.current) return false;
     const api = calendarRef.current?.getApi();
-    if (!api) return;
-    if (direction < 0) api.prev();
-    else api.next();
+    if (!api) return false;
+
+    const width = desktopViewportRef.current?.clientWidth || 0;
+    const height = desktopViewportRef.current?.clientHeight || 0;
+    // Keep previous frame visible to avoid "white flash" during navigation.
+    const baseDistance = Math.max(96, axis === 'y' ? height : width);
+    const distance = Math.round(baseDistance * 0.22);
+    const outOffset = direction > 0 ? -distance : distance;
+
+    desktopNavAnimatingRef.current = true;
+    setDesktopAnimatingClass(true);
+    applyDesktopMotion(axis === 'x' ? outOffset : 0, axis === 'y' ? outOffset : 0, 180);
+
+    window.setTimeout(() => {
+      if (direction > 0) api.next();
+      else api.prev();
+
+      const inOffset = -outOffset;
+      applyDesktopMotion(axis === 'x' ? inOffset : 0, axis === 'y' ? inOffset : 0, 0);
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          applyDesktopMotion(0, 0, 220);
+          window.setTimeout(() => {
+            desktopNavAnimatingRef.current = false;
+            setDesktopAnimatingClass(false);
+          }, 280);
+        });
+      });
+    }, 180);
+
+    return true;
+  }, [applyDesktopMotion, isCompactMobile, setDesktopAnimatingClass]);
+
+  const runMobileNavigateAnimation = useCallback((direction) => {
+    if (!isCompactMobile) return false;
+    if (mobileNavAnimatingRef.current) return false;
+    const api = calendarRef.current?.getApi();
+    if (!api) return false;
+
+    const width = desktopViewportRef.current?.clientWidth || 0;
+    const distance = Math.round(Math.max(64, width * 0.12));
+    const outOffset = direction > 0 ? -distance : distance;
+
+    mobileNavAnimatingRef.current = true;
+    setDesktopAnimatingClass(true);
+    applyDesktopMotion(outOffset, 0, 140);
+
+    window.setTimeout(() => {
+      if (direction > 0) api.next();
+      else api.prev();
+      applyDesktopMotion(-outOffset, 0, 0);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          applyDesktopMotion(0, 0, 180);
+          window.setTimeout(() => {
+            mobileNavAnimatingRef.current = false;
+            setDesktopAnimatingClass(false);
+          }, 220);
+        });
+      });
+    }, 140);
+
+    return true;
+  }, [applyDesktopMotion, isCompactMobile, setDesktopAnimatingClass]);
+
+  const handleNavigatePeriod = (direction) => {
+    if (isCompactMobile) {
+      const api = calendarRef.current?.getApi();
+      if (!api) return;
+      if (direction < 0) api.prev();
+      else api.next();
+      return;
+    }
+    const axis = activeCalendarView === 'dayGridMonth' ? 'y' : 'x';
+    runDesktopNavigateAnimation(direction > 0 ? 1 : -1, axis);
   };
+
+  const isReadOnlyInteractionTarget = useCallback((target) => {
+    if (!target || typeof target.closest !== 'function') return false;
+    return Boolean(
+      target.closest('.fc-popover') ||
+      target.closest('.modal-content')
+    );
+  }, []);
+
+  const handleDesktopCalendarWheel = useCallback((event) => {
+    if (isCompactMobile) return;
+    if (!event) return;
+    if (desktopNavAnimatingRef.current) return;
+
+    const now = Date.now();
+    if (now < wheelNavLockUntilRef.current) return;
+
+    const gesture = wheelGestureRef.current;
+    if (now - gesture.lastAt > 220) {
+      gesture.sumX = 0;
+      gesture.sumY = 0;
+    }
+    gesture.lastAt = now;
+    gesture.sumX += event.deltaX;
+    gesture.sumY += event.deltaY;
+
+    const isMonthView = activeCalendarView === 'dayGridMonth';
+    const threshold = 70;
+    let direction = 0;
+
+    if (isMonthView) {
+      if (Math.abs(gesture.sumY) >= threshold && Math.abs(gesture.sumY) >= Math.abs(gesture.sumX) * 0.8) {
+        direction = gesture.sumY > 0 ? 1 : -1;
+      }
+    } else {
+      const horizontalDominant = Math.abs(gesture.sumX) >= Math.max(threshold, Math.abs(gesture.sumY) * 1.1);
+      const shiftVertical = event.shiftKey && Math.abs(gesture.sumY) >= threshold;
+      if (horizontalDominant) {
+        direction = gesture.sumX > 0 ? 1 : -1;
+      } else if (shiftVertical) {
+        direction = gesture.sumY > 0 ? 1 : -1;
+      }
+    }
+
+    if (!direction) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    gesture.sumX = 0;
+    gesture.sumY = 0;
+    wheelNavLockUntilRef.current = now + (isMonthView ? 430 : 320);
+    runDesktopNavigateAnimation(direction, isMonthView ? 'y' : 'x');
+  }, [activeCalendarView, isCompactMobile, runDesktopNavigateAnimation]);
+
+  const handleDesktopSwipeStart = useCallback((event) => {
+    if (isCompactMobile) return;
+    if (!event?.isPrimary) return;
+    if (activeCalendarView === 'dayGridMonth') return;
+    if (isReadOnlyInteractionTarget(event.target)) return;
+    if (desktopNavAnimatingRef.current) return;
+    desktopSwipeRef.current = {
+      active: true,
+      startX: event.clientX,
+      startY: event.clientY,
+      allow: true,
+    };
+  }, [activeCalendarView, isCompactMobile]);
+
+  const handleDesktopSwipeMove = useCallback((event) => {
+    const swipe = desktopSwipeRef.current;
+    if (!swipe.active || !swipe.allow) return;
+    const dx = event.clientX - swipe.startX;
+    const dy = event.clientY - swipe.startY;
+    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+      event.preventDefault();
+      if (desktopMoveRafRef.current) return;
+      desktopMoveRafRef.current = requestAnimationFrame(() => {
+        desktopMoveRafRef.current = 0;
+        applyDesktopMotion(dx * 0.92, 0, 0);
+      });
+    }
+  }, [applyDesktopMotion]);
+
+  const handleDesktopSwipeEnd = useCallback((event) => {
+    const swipe = desktopSwipeRef.current;
+    if (!swipe.active || !swipe.allow) return;
+    desktopSwipeRef.current.active = false;
+
+    const dx = event.clientX - swipe.startX;
+    const dy = event.clientY - swipe.startY;
+    const horizontal = Math.abs(dx) > Math.abs(dy) * 1.15;
+    if (!horizontal || Math.abs(dx) < 64) {
+      applyDesktopMotion(0, 0, 220);
+      return;
+    }
+    runDesktopNavigateAnimation(dx < 0 ? 1 : -1, 'x');
+  }, [applyDesktopMotion, runDesktopNavigateAnimation]);
+
+  useEffect(() => {
+    if (!isCompactMobile) return undefined;
+    const root = desktopViewportRef.current;
+    if (!root) return undefined;
+    const state = mobileContentSwipeRef.current;
+
+    const onTouchStart = (event) => {
+      if (activeCalendarView === 'dayGridMonth') return;
+      const touch = event.touches?.[0];
+      if (!touch) return;
+      if (isReadOnlyInteractionTarget(event.target)) return;
+      state.active = true;
+      state.startX = touch.clientX;
+      state.startY = touch.clientY;
+      state.lastX = touch.clientX;
+      state.lastY = touch.clientY;
+      state.allow = true;
+      state.pointerId = null;
+      state.lockedAxis = '';
+    };
+
+    const onTouchMove = (event) => {
+      if (!state.active || !state.allow) return;
+      const touch = event.touches?.[0];
+      if (!touch) return;
+      state.lastX = touch.clientX;
+      state.lastY = touch.clientY;
+      const dx = touch.clientX - state.startX;
+      const dy = touch.clientY - state.startY;
+      if (!state.lockedAxis) {
+        if (Math.abs(dx) >= 8 || Math.abs(dy) >= 8) {
+          state.lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.05 ? 'x' : 'y';
+        }
+      }
+      if (state.lockedAxis === 'x') {
+        mobileClickSuppressUntilRef.current = Date.now() + 450;
+        applyDesktopMotion(dx * 0.42, 0, 0);
+      }
+      if (state.lockedAxis === 'x' && event.cancelable) {
+        event.preventDefault();
+      }
+    };
+
+    const onTouchEndLike = (event) => {
+      if (!state.active || !state.allow) return;
+      state.active = false;
+      const touch = event.changedTouches?.[0];
+      const endX = touch?.clientX ?? state.lastX;
+      const endY = touch?.clientY ?? state.lastY;
+      const dx = endX - state.startX;
+      const dy = endY - state.startY;
+      const horizontal = Math.abs(dx) > Math.abs(dy) * 1.15;
+      if (!horizontal || Math.abs(dx) < 36) {
+        applyDesktopMotion(0, 0, 160);
+        return;
+      }
+      mobileClickSuppressUntilRef.current = Date.now() + 500;
+      runMobileNavigateAnimation(dx < 0 ? 1 : -1);
+    };
+
+    root.addEventListener('touchstart', onTouchStart, { passive: true });
+    root.addEventListener('touchmove', onTouchMove, { passive: false });
+    root.addEventListener('touchend', onTouchEndLike, { passive: true });
+    root.addEventListener('touchcancel', onTouchEndLike, { passive: true });
+    return () => {
+      root.removeEventListener('touchstart', onTouchStart);
+      root.removeEventListener('touchmove', onTouchMove);
+      root.removeEventListener('touchend', onTouchEndLike);
+      root.removeEventListener('touchcancel', onTouchEndLike);
+    };
+  }, [activeCalendarView, applyDesktopMotion, isCompactMobile, isReadOnlyInteractionTarget, runMobileNavigateAnimation]);
 
   const handleChangeView = (nextView) => {
     const api = calendarRef.current?.getApi();
@@ -783,20 +1108,55 @@ function CalendarView() {
     setReadonlyEventDetail(null);
   }, []);
 
+  const requestCloseReadonlyEventModal = useCallback(() => {
+    const state = readonlyModalHistoryRef.current;
+    if (typeof window !== 'undefined' && state.hasEntry) {
+      state.ignoreNextPop = true;
+      state.hasEntry = false;
+      window.history.back();
+    }
+    closeReadonlyEventModal();
+  }, [closeReadonlyEventModal]);
+
   useEffect(() => {
-    if (!readonlyEventOpen) return undefined;
+    if (!readonlyEventOpen || typeof window === 'undefined') return undefined;
+    const baseState = window.history.state && typeof window.history.state === 'object'
+      ? window.history.state
+      : {};
+    window.history.pushState({ ...baseState, __todoModal: 'calendar-readonly-event' }, '');
+    readonlyModalHistoryRef.current.hasEntry = true;
+    readonlyModalHistoryRef.current.ignoreNextPop = false;
+
+    const handlePopState = () => {
+      const state = readonlyModalHistoryRef.current;
+      if (state.ignoreNextPop) {
+        state.ignoreNextPop = false;
+        return;
+      }
+      if (!state.hasEntry) return;
+      state.hasEntry = false;
+      closeReadonlyEventModal();
+    };
+
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
-        closeReadonlyEventModal();
+        requestCloseReadonlyEventModal();
       }
     };
+    window.addEventListener('popstate', handlePopState);
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [closeReadonlyEventModal, readonlyEventOpen]);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      document.removeEventListener('keydown', handleKeyDown);
+      readonlyModalHistoryRef.current.ignoreNextPop = false;
+      readonlyModalHistoryRef.current.hasEntry = false;
+    };
+  }, [closeReadonlyEventModal, readonlyEventOpen, requestCloseReadonlyEventModal]);
 
   const isHttpLink = useCallback((value) => /^https?:\/\//i.test(String(value || '').trim()), []);
 
   const handleEventClick = async (info) => {
+    if (Date.now() < mobileClickSuppressUntilRef.current) return;
     if (info?.event?.extendedProps?.readOnly) {
       openReadonlyEventModal({
         id: info.event.id,
@@ -1023,6 +1383,8 @@ function CalendarView() {
 
   const renderEventContent = (arg) => {
     const completed = arg.event.extendedProps.status === 'completed';
+    const readOnly = !!arg.event.extendedProps?.readOnly;
+    const isReadonlyExternal = readOnly;
     const isMonthView = activeCalendarView === 'dayGridMonth';
     const hideTimeForView = activeCalendarView === 'timeGridDay' || activeCalendarView === 'timeGridWeek' || activeCalendarView === 'timeGridThreeDay';
     const hasTimeText = Boolean(arg.timeText) && !arg.event.allDay && !hideTimeForView;
@@ -1039,7 +1401,7 @@ function CalendarView() {
     }
     return (
       <div
-        className={`flex min-w-0 items-center gap-1 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`}
+        className={`flex min-w-0 items-center ${isReadonlyExternal && isCompactMobile ? 'gap-0.5 py-[1px] px-[1px] text-[9px]' : `gap-1 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`}`}
         title={arg.event.title}
       >
         {hasTimeText && (
@@ -1057,6 +1419,17 @@ function CalendarView() {
       </div>
     );
   };
+
+  const getEventClassNames = useCallback((arg) => {
+    const ext = arg?.event?.extendedProps || {};
+    const source = String(ext.source || '');
+    const readOnly = !!ext.readOnly;
+    const list = [];
+    if (readOnly) {
+      list.push('event-readonly');
+    }
+    return list;
+  }, []);
 
   return (
     <div className="calendar-shell relative h-full flex flex-col bg-slate-100">
@@ -1152,8 +1525,9 @@ function CalendarView() {
               onPointerCancel={handleStripPointerEnd}
             >
               <div
-                className="grid w-full grid-cols-7 gap-1"
+                className="grid w-full gap-1"
                 style={{
+                  gridTemplateColumns: `repeat(${mobileStripDays}, minmax(0, 1fr))`,
                   transform: `translate3d(${stripTranslateX}px, 0, 0)`,
                   transition: stripTransitionMs > 0
                     ? `transform ${stripTransitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`
@@ -1196,77 +1570,94 @@ function CalendarView() {
       )}
 
       <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'px-1 pt-1 pb-8' : 'overflow-auto p-3 md:p-4'}`}>
-        <div className="h-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_40px_-28px_rgba(15,23,42,0.55)]">
-          <FullCalendar
-            key={`${activeCalendarView}-${timezone}-${calendarLocale}-${isCompactMobile ? 'mobile' : 'desktop'}`}
-            ref={calendarRef}
-            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-            initialView={activeCalendarView}
-            initialDate={initialDate}
-            locale={calendarLocale}
-            timeZone="UTC"
-            headerToolbar={false}
-            views={{
-              timeGridThreeDay: {
-                type: 'timeGrid',
-                duration: { days: 3 },
-              },
-            }}
-            buttonText={{
-              today: t('calendar.today'),
-              month: t('calendar.month'),
-              week: t('calendar.week'),
-              day: t('calendar.day'),
-            }}
-            editable={true}
-            selectable={true}
-            selectMirror={true}
-            dayMaxEvents={activeCalendarView === 'dayGridMonth'}
-            dayMaxEventRows={activeCalendarView === 'dayGridMonth'}
-            eventMaxStack={activeCalendarView === 'dayGridMonth' ? undefined : 99}
-            fixedWeekCount={false}
-            weekends={true}
-            events={events}
-            eventContent={renderEventContent}
-            dateClick={handleDateClick}
-            select={handleSelect}
-            eventClick={handleEventClick}
-            moreLinkClick={handleMoreLinkClick}
-            eventDragStart={(info) => {
-              const nativeEvent = info?.jsEvent;
-              const pointerType = nativeEvent?.pointerType || '';
-              const coarsePointer = typeof window !== 'undefined' &&
-                window.matchMedia &&
-                window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-              const isTouch = pointerType === 'touch' || coarsePointer;
-              if (!isTouch) return;
-              touchDraggingEventRef.current = true;
-              const root = calendarRef.current?.elRef?.current;
-              if (root) {
-                root.classList.add('is-touch-dragging');
-              }
-            }}
-            eventDragStop={() => {
-              clearTouchDragUIState();
-            }}
-            eventDrop={handleEventDrop}
-            eventResize={handleEventResize}
-            datesSet={handleDatesSet}
-            height="100%"
-            nowIndicator={true}
-            now={calendarNow}
-            scrollTime={initialScrollTime}
-            eventTimeFormat={{
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false,
-            }}
-            slotDuration={slotDuration}
-            snapDuration={slotDuration}
-            displayEventEnd={true}
-            slotEventOverlap={true}
-            className={`todo-calendar ${isCompactMobile ? 'mobile-calendar' : 'desktop-calendar'}`}
-          />
+        <div
+          ref={desktopViewportRef}
+          className="h-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_40px_-28px_rgba(15,23,42,0.55)]"
+          onWheel={handleDesktopCalendarWheel}
+          onPointerDown={handleDesktopSwipeStart}
+          onPointerMove={handleDesktopSwipeMove}
+          onPointerUp={handleDesktopSwipeEnd}
+          onPointerCancel={handleDesktopSwipeEnd}
+          onPointerLeave={handleDesktopSwipeEnd}
+          style={{ touchAction: isCompactMobile ? 'auto' : (activeCalendarView === 'dayGridMonth' ? 'pan-y' : 'pan-x pan-y') }}
+        >
+          <div
+            className="h-full"
+            ref={desktopMotionLayerRef}
+            style={{ willChange: 'transform', transform: 'translate3d(0, 0, 0)' }}
+          >
+            <FullCalendar
+              key={`${activeCalendarView}-${timezone}-${calendarLocale}-${isCompactMobile ? 'mobile' : 'desktop'}`}
+              ref={calendarRef}
+              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+              initialView={activeCalendarView}
+              initialDate={initialDate}
+              locale={calendarLocale}
+              timeZone="UTC"
+              headerToolbar={false}
+              views={{
+                timeGridThreeDay: {
+                  type: 'timeGrid',
+                  duration: { days: 3 },
+                },
+              }}
+              buttonText={{
+                today: t('calendar.today'),
+                month: t('calendar.month'),
+                week: t('calendar.week'),
+                day: t('calendar.day'),
+              }}
+              editable={true}
+              selectable={true}
+              selectMirror={true}
+              dayMaxEvents={activeCalendarView === 'dayGridMonth'}
+              dayMaxEventRows={activeCalendarView === 'dayGridMonth'}
+              eventMaxStack={activeCalendarView === 'dayGridMonth' ? undefined : 99}
+              fixedWeekCount={false}
+              weekends={true}
+              events={events}
+              eventContent={renderEventContent}
+              eventClassNames={getEventClassNames}
+              dateClick={handleDateClick}
+              select={handleSelect}
+              eventClick={handleEventClick}
+              moreLinkClick={handleMoreLinkClick}
+              eventDragStart={(info) => {
+                const nativeEvent = info?.jsEvent;
+                const pointerType = nativeEvent?.pointerType || '';
+                const coarsePointer = typeof window !== 'undefined' &&
+                  window.matchMedia &&
+                  window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+                const isTouch = pointerType === 'touch' || coarsePointer;
+                if (!isTouch) return;
+                touchDraggingEventRef.current = true;
+                const root = calendarRef.current?.elRef?.current;
+                if (root) {
+                  root.classList.add('is-touch-dragging');
+                }
+              }}
+              eventDragStop={() => {
+                clearTouchDragUIState();
+              }}
+              eventDrop={handleEventDrop}
+              eventResize={handleEventResize}
+              datesSet={handleDatesSet}
+              height="100%"
+              nowIndicator={true}
+              now={calendarNow}
+              scrollTime={initialScrollTime}
+              eventTimeFormat={{
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              }}
+              slotDuration={slotDuration}
+              snapDuration={slotDuration}
+              displayEventEnd={true}
+              slotEventOverlap={true}
+              className={`todo-calendar ${isCompactMobile ? 'mobile-calendar' : 'desktop-calendar'}`}
+            />
+          </div>
         </div>
       </div>
 
@@ -1300,55 +1691,59 @@ function CalendarView() {
       )}
 
       {readonlyEventOpen && readonlyEventDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeReadonlyEventModal}>
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h3 className="text-sm font-semibold text-slate-800">
-                {readonlyEventDetail.title || 'Untitled event'}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={requestCloseReadonlyEventModal}>
+          <div
+            className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2.5">
+              <h3 className="flex min-w-0 items-center gap-1.5 pr-2 text-sm font-semibold text-slate-800">
+                <span className="truncate">{readonlyEventDetail.title || 'Untitled event'}</span>
+                {readonlyEventDetail.allDay && (
+                  <span
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-blue-50 text-[10px] text-blue-700"
+                    title="All day"
+                    aria-label="All day"
+                  >
+                    ☀
+                  </span>
+                )}
               </h3>
               <button
                 type="button"
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
-                onClick={closeReadonlyEventModal}
+                onClick={requestCloseReadonlyEventModal}
               >
                 ✕
               </button>
             </div>
-            <div className="space-y-3 px-4 py-3 text-sm text-slate-700">
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Source</p>
-                <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.source || 'caldav'}</p>
+            <div className="space-y-1.5 px-3 py-2.5 text-sm text-slate-700">
+              <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                <span className="font-medium text-slate-500">Source</span>
+                <span className="font-medium text-slate-800">{readonlyEventDetail.source || 'caldav'}</span>
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Start</p>
-                  <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.startText || '-'}</p>
-                </div>
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">End</p>
-                  <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.endText || '-'}</p>
-                </div>
-              </div>
-              <div className="rounded-lg border border-slate-200 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">All day</p>
-                <p className="mt-1 font-medium text-slate-800">{readonlyEventDetail.allDay ? 'Yes' : 'No'}</p>
+              <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                <span className="font-medium text-slate-500">Time</span>
+                <span className="font-medium text-slate-800">
+                  {(readonlyEventDetail.startText || '-') + ' - ' + (readonlyEventDetail.endText || '-')}
+                </span>
               </div>
               {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.location && (
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Location</p>
-                  <p className="mt-1 break-words text-slate-700">{readonlyEventDetail.location}</p>
+                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                  <span className="font-medium text-slate-500">Location</span>
+                  <p className="break-words text-slate-700">{readonlyEventDetail.location}</p>
                 </div>
               )}
               {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.organizer && (
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Organizer</p>
-                  <p className="mt-1 break-words text-slate-700">{readonlyEventDetail.organizer}</p>
+                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                  <span className="font-medium text-slate-500">Organizer</span>
+                  <p className="break-words text-slate-700">{readonlyEventDetail.organizer}</p>
                 </div>
               )}
               {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.attendees.length > 0 && (
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Attendees</p>
-                  <div className="mt-1 max-h-28 space-y-1 overflow-y-auto pr-1">
+                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                  <span className="font-medium text-slate-500">Attendees</span>
+                  <div className="max-h-20 space-y-0.5 overflow-y-auto pr-1">
                     {readonlyEventDetail.attendees.map((item) => (
                       <p key={item} className="break-words text-slate-700">{item}</p>
                     ))}
@@ -1356,47 +1751,35 @@ function CalendarView() {
                 </div>
               )}
               {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.meetingLink && isHttpLink(readonlyEventDetail.meetingLink) && (
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Meeting link</p>
+                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                  <span className="font-medium text-slate-500">Meeting</span>
                   <a
                     href={readonlyEventDetail.meetingLink}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-1 block break-all text-blue-700 hover:underline"
+                    className="block break-all text-blue-700 hover:underline"
                   >
                     {readonlyEventDetail.meetingLink}
                   </a>
                 </div>
               )}
               {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.description && (
-                <div className="rounded-lg border border-slate-200 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Description</p>
-                  <p className="mt-1 whitespace-pre-wrap break-words text-slate-700">{readonlyEventDetail.description}</p>
+                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
+                  <span className="font-medium text-slate-500">Description</span>
+                  <p className="whitespace-pre-wrap break-words text-slate-700">{readonlyEventDetail.description}</p>
                 </div>
               )}
-              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                This event comes from CalDAV and is read-only in Todo.
-              </p>
-            </div>
-            <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
-              <div className="text-xs text-slate-500" />
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={closeReadonlyEventModal}
-                  className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-                >
-                  Close
-                </button>
-              </div>
             </div>
           </div>
         </div>
       )}
 
       {moreEventsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setMoreEventsOpen(false)}>
-          <div className="w-full max-w-md border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={requestCloseMoreEventsModal}>
+          <div
+            className="w-full max-w-md border border-slate-200 bg-white shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
               <h3 className="text-sm font-semibold text-slate-800">
                 {moreEventsDateLabel} · {t('task.taskCount', { count: moreEvents.length })}
@@ -1404,7 +1787,7 @@ function CalendarView() {
               <button
                 type="button"
                 className="inline-flex h-7 w-7 items-center justify-center text-slate-500 hover:bg-slate-100"
-                onClick={() => setMoreEventsOpen(false)}
+                onClick={requestCloseMoreEventsModal}
               >
                 ✕
               </button>
@@ -1418,7 +1801,7 @@ function CalendarView() {
                       type="button"
                       className="mb-1 block w-full border border-slate-200 px-2 py-1.5 text-left hover:bg-slate-50"
                       onClick={() => {
-                        setMoreEventsOpen(false);
+                        requestCloseMoreEventsModal();
                         openTaskFromCalendarEvent(event);
                       }}
                       title={event.title}
@@ -1436,7 +1819,7 @@ function CalendarView() {
                     type="button"
                     className="mb-1 block w-full border border-slate-200 px-2 py-1.5 text-left hover:bg-slate-50"
                     onClick={() => {
-                      setMoreEventsOpen(false);
+                      requestCloseMoreEventsModal();
                       openTaskFromCalendarEvent(event);
                     }}
                     title={event.title}

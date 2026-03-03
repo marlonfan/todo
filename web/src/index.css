@@ -446,6 +446,35 @@ body {
   white-space: nowrap;
 }
 
+/* Compact read-only external cards on mobile to increase information density. */
+.mobile-calendar .fc-timegrid-event.event-readonly {
+  border-radius: 5px !important;
+  border-left-width: 2px !important;
+  padding: 0 !important;
+}
+
+.mobile-calendar .fc-timegrid-event.event-readonly .fc-event-main,
+.mobile-calendar .fc-timegrid-event.event-readonly .fc-event-main-frame {
+  min-height: 16px !important;
+  line-height: 1.15 !important;
+}
+
+.mobile-calendar .fc-timegrid-event.event-readonly .fc-event-title {
+  font-size: 9px !important;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-event.event-readonly,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-event.event-readonly,
+.mobile-calendar .fc-timeGridThreeDay-view .fc-timegrid-event.event-readonly {
+  min-height: 16px !important;
+}
+
+.mobile-calendar .fc-timeGridDay-view .fc-timegrid-event.event-readonly .fc-event-main-frame,
+.mobile-calendar .fc-timeGridWeek-view .fc-timegrid-event.event-readonly .fc-event-main-frame,
+.mobile-calendar .fc-timeGridThreeDay-view .fc-timegrid-event.event-readonly .fc-event-main-frame {
+  min-height: 16px !important;
+}
+
 /* Calendar redesign: Apple-first, dense layout */
 .calendar-shell {
   background:
@@ -454,6 +483,16 @@ body {
 
 .calendar-topbar {
   box-shadow: 0 1px 0 rgba(148, 163, 184, 0.24);
+}
+
+/* Reduce paint pressure while calendar pages are transitioning. */
+.calendar-animating {
+  box-shadow: none !important;
+}
+
+.calendar-animating .fc .fc-timegrid-event,
+.calendar-animating .fc .fc-daygrid-event {
+  box-shadow: none !important;
 }
 
 .todo-calendar.fc {
@@ -486,40 +525,6 @@ body {
   padding: 0.25rem 0.4rem;
 }
 
-.todo-calendar.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number,
-.todo-calendar.fc .fc-timegrid-col.fc-day-today .fc-col-header-cell-cushion {
-  color: #1d4ed8;
-}
-
-.todo-calendar.fc .fc-day-today {
-  background: rgba(219, 234, 254, 0.33) !important;
-}
-
-/* Week/3-day: remove today column background and keep today text in theme blue */
-.todo-calendar.fc .fc-timeGridWeek-view .fc-timegrid-col.fc-day-today,
-.todo-calendar.fc .fc-timeGridThreeDay-view .fc-timegrid-col.fc-day-today,
-.todo-calendar.fc .fc-timeGridWeek-view .fc-col-header-cell.fc-day-today,
-.todo-calendar.fc .fc-timeGridThreeDay-view .fc-col-header-cell.fc-day-today {
-  background: transparent !important;
-  background-color: transparent !important;
-}
-
-.todo-calendar.fc .fc-timeGridWeek-view .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion,
-.todo-calendar.fc .fc-timeGridThreeDay-view .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion {
-  color: #2563eb !important;
-}
-
-.todo-calendar.fc .fc-timeGridWeek-view,
-.todo-calendar.fc .fc-timeGridThreeDay-view {
-  --fc-today-bg-color: transparent !important;
-}
-
-.todo-calendar.fc .fc-timeGridWeek-view .fc-day-today,
-.todo-calendar.fc .fc-timeGridThreeDay-view .fc-day-today {
-  background: transparent !important;
-  background-color: transparent !important;
-}
-
 .todo-calendar.fc .fc-timegrid-slot {
   height: 2.25rem;
 }
@@ -528,10 +533,6 @@ body {
 .todo-calendar.fc .fc-timegrid-slot-label-cushion {
   font-size: 10px;
   color: #94a3b8;
-}
-
-.todo-calendar.fc .fc-timegrid-now-indicator-line {
-  border-width: 1.5px;
 }
 
 .todo-calendar.fc .fc-timegrid-event {
