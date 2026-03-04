@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { calendarAPI } from '../api/client';
 import TaskModal from './TaskModal';
+import InfiniteCalendarCanvas from './InfiniteCalendarCanvas';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { toServerRangeBoundary } from '../utils/syncTime';
@@ -187,6 +188,7 @@ function CalendarView() {
   const [moreEventsOpen, setMoreEventsOpen] = useState(false);
   const [moreEventsDateLabel, setMoreEventsDateLabel] = useState('');
   const [moreEvents, setMoreEvents] = useState([]);
+  const [todayJumpToken, setTodayJumpToken] = useState(0);
   const [readonlyEventOpen, setReadonlyEventOpen] = useState(false);
   const [readonlyEventDetail, setReadonlyEventDetail] = useState(null);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -204,6 +206,8 @@ function CalendarView() {
   const [calendarNow, setCalendarNow] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DDTHH:mm:ss[Z]'));
   const [currentViewTitle, setCurrentViewTitle] = useState('');
   const [hasCalendarDataLoaded, setHasCalendarDataLoaded] = useState(false);
+  const [canvasAnchorDate, setCanvasAnchorDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
+  const [canvasNudgeDirection, setCanvasNudgeDirection] = useState(0);
 
   const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
@@ -357,13 +361,8 @@ function CalendarView() {
 
   const toCalendarISO = useCallback((isoString) => {
     if (!isoString) return null;
-
-    if (timezone === 'UTC') {
-      return dayjs(isoString).utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
-    }
-
-    return dayjs(isoString).tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]');
-  }, [timezone]);
+    return dayjs(isoString).utc().toISOString();
+  }, []);
 
   const fetchCalendarRangeFromServer = useCallback(async (rangeStart, rangeEnd, options = {}) => {
     if (!rangeStart || !rangeEnd) return [];
@@ -444,10 +443,11 @@ function CalendarView() {
   const {
     data: pooledEvents = [],
     isFetching: loading,
+    dataUpdatedAt: calendarDataUpdatedAt = 0,
   } = useQuery({
     queryKey: currentCalendarQueryKey,
     enabled: Boolean(calendarPool.start && calendarPool.end),
-    staleTime: 60 * 1000,
+    staleTime: CALENDAR_CACHE_REFRESH_MS,
     placeholderData: (previousData) => previousData ?? [],
     queryFn: async () => {
       const projectedRangeStart = toServerISO(calendarPool.start) || calendarPool.start;
@@ -521,12 +521,13 @@ function CalendarView() {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     if (!calendarPool.start || !calendarPool.end) return;
     const now = Date.now();
+    if (calendarDataUpdatedAt > 0 && now - calendarDataUpdatedAt < CALENDAR_CACHE_REFRESH_MS) return;
     if (now - lastCalendarRevalidateAtRef.current < 25 * 1000) return;
     lastCalendarRevalidateAtRef.current = now;
     fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
       console.error(`Failed to revalidate calendar (${reason}):`, error);
     });
-  }, [calendarPool.end, calendarPool.start, fetchCalendarRangeFromServer]);
+  }, [calendarDataUpdatedAt, calendarPool.end, calendarPool.start, fetchCalendarRangeFromServer]);
 
   useEffect(() => {
     if (!calendarPool.start || !calendarPool.end) return undefined;
@@ -677,61 +678,38 @@ function CalendarView() {
     }
   };
 
-  const handleDateClick = (info) => {
-    if (Date.now() < mobileClickSuppressUntilRef.current) return;
-    const start = dayjs(info.date).utc();
-    const end = info.allDay ? start.endOf('day') : start.add(timeGranularity, 'minute');
-
+  const openCreateRange = useCallback((range) => {
+    if (!range?.start) return;
+    const start = dayjs(range.start).tz(timezone);
+    const end = range.end ? dayjs(range.end).tz(timezone) : start.add(timeGranularity, 'minute');
+    const allDay = !!range.allDay;
     setSelectedTask(null);
     setSelectedRange({
-      allDay: !!info.allDay,
-      start: start.format(info.allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
-      end: end ? end.format(info.allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm') : '',
+      allDay,
+      start: start.format(allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
+      end: end.format(allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
     });
     setModalOpen(true);
-  };
-
-  const handleSelect = (info) => {
-    if (Date.now() < mobileClickSuppressUntilRef.current) return;
-    const start = dayjs(info.start).utc();
-    let end = dayjs(info.end).utc();
-
-    if (info.allDay) {
-      end = end.subtract(1, 'day');
-    }
-
-    setSelectedTask(null);
-    setSelectedRange({
-      allDay: !!info.allDay,
-      start: start.format(info.allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
-      end: end.format(info.allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm'),
-    });
-    setModalOpen(true);
-  };
+  }, [timeGranularity, timezone]);
 
   const jumpToMobileDate = (dateValue) => {
     const targetDate = dayjs(dateValue).format('YYYY-MM-DD');
-    pendingFocusDateRef.current = targetDate;
     setMobileCurrentDate(targetDate);
-    const api = calendarRef.current?.getApi();
-    if (!api) return;
-    api.changeView(mobileView);
-    api.gotoDate(targetDate);
+    setCanvasAnchorDate(targetDate);
+    setCanvasNudgeDirection(0);
   };
 
   const handleGoToday = () => {
     const today = dayjs().tz(timezone).format('YYYY-MM-DD');
-    pendingFocusDateRef.current = today;
     setMobileCurrentDate(today);
+    setCanvasAnchorDate(today);
+    setCanvasNudgeDirection(0);
+    setTodayJumpToken((prev) => prev + 1);
     setMobileStripStartDate(getMobileStripStart(today, activeCalendarView));
     stripAnimationRef.current = { phase: 'idle', direction: 0, width: 0 };
     setStripTransitionMs(0);
     setStripTranslateX(0);
 
-    const api = calendarRef.current?.getApi();
-    if (!api) return;
-    api.changeView(isCompactMobile ? mobileView : calendarDefaultView);
-    api.gotoDate(today);
   };
 
   const startStripSlide = (direction) => {
@@ -859,6 +837,8 @@ function CalendarView() {
     }
   }, []);
 
+  const canvasOffsetRef = useRef({ x: 0, y: 0 });
+
   const applyDesktopMotion = useCallback((x, y, duration = 0) => {
     const layer = desktopMotionLayerRef.current;
     if (!layer) return;
@@ -868,263 +848,178 @@ function CalendarView() {
       : 'none';
   }, []);
 
-  const setDesktopAnimatingClass = useCallback((active) => {
+  const getCanvasAxis = useCallback(() => (
+    activeCalendarView === 'dayGridMonth' ? 'y' : 'x'
+  ), [activeCalendarView]);
+
+  const getCanvasStepPx = useCallback(() => {
     const viewport = desktopViewportRef.current;
-    if (!viewport) return;
-    viewport.classList.toggle('calendar-animating', Boolean(active));
-  }, []);
+    if (!viewport) return 80;
+    if (activeCalendarView === 'dayGridMonth') {
+      const weekRow = viewport.querySelector('.fc-daygrid-body tr');
+      const h = weekRow?.getBoundingClientRect?.().height || (viewport.clientHeight / 6);
+      return Math.max(16, h || 80);
+    }
+    if (activeCalendarView === 'timeGridWeek') {
+      const dayCol = viewport.querySelector('.fc-timegrid-col');
+      const w = dayCol?.getBoundingClientRect?.().width || (viewport.clientWidth / 7);
+      return Math.max(20, w || 80);
+    }
+    if (activeCalendarView === 'timeGridThreeDay') {
+      const dayCol = viewport.querySelector('.fc-timegrid-col');
+      const w = dayCol?.getBoundingClientRect?.().width || (viewport.clientWidth / 3);
+      return Math.max(20, w || 80);
+    }
+    return Math.max(24, viewport.clientWidth || 80);
+  }, [activeCalendarView]);
 
-  const runDesktopNavigateAnimation = useCallback((direction, axis = 'x') => {
-    if (isCompactMobile) return false;
-    if (desktopNavAnimatingRef.current) return false;
+  const shiftCalendarBySteps = useCallback((steps) => {
+    if (!steps) return;
     const api = calendarRef.current?.getApi();
-    if (!api) return false;
-
-    const width = desktopViewportRef.current?.clientWidth || 0;
-    const height = desktopViewportRef.current?.clientHeight || 0;
-    // Keep previous frame visible to avoid "white flash" during navigation.
-    const baseDistance = Math.max(72, axis === 'y' ? height : width);
-    const distance = Math.round(baseDistance * 0.1);
-    const outOffset = direction > 0 ? -distance : distance;
-
-    desktopNavAnimatingRef.current = true;
-    setDesktopAnimatingClass(true);
-    applyDesktopMotion(axis === 'x' ? outOffset : 0, axis === 'y' ? outOffset : 0, 95);
-
-    window.setTimeout(() => {
-      if (direction > 0) api.next();
-      else api.prev();
-
-      const inOffset = Math.round(-outOffset * 0.45);
-      applyDesktopMotion(axis === 'x' ? inOffset : 0, axis === 'y' ? inOffset : 0, 0);
-
-      requestAnimationFrame(() => {
-        applyDesktopMotion(0, 0, 190);
-        window.setTimeout(() => {
-          desktopNavAnimatingRef.current = false;
-          setDesktopAnimatingClass(false);
-        }, 220);
-      });
-    }, 95);
-
-    return true;
-  }, [applyDesktopMotion, isCompactMobile, setDesktopAnimatingClass]);
-
-  const runMobileNavigateAnimation = useCallback((direction) => {
-    if (!isCompactMobile) return false;
-    if (mobileNavAnimatingRef.current) return false;
-    const api = calendarRef.current?.getApi();
-    if (!api) return false;
-
-    const width = desktopViewportRef.current?.clientWidth || 0;
-    const distance = Math.round(Math.max(48, width * 0.08));
-    const outOffset = direction > 0 ? -distance : distance;
-
-    mobileNavAnimatingRef.current = true;
-    setDesktopAnimatingClass(true);
-    applyDesktopMotion(outOffset, 0, 85);
-
-    window.setTimeout(() => {
-      if (direction > 0) api.next();
-      else api.prev();
-      applyDesktopMotion(Math.round(-outOffset * 0.45), 0, 0);
-      requestAnimationFrame(() => {
-        applyDesktopMotion(0, 0, 165);
-        window.setTimeout(() => {
-          mobileNavAnimatingRef.current = false;
-          setDesktopAnimatingClass(false);
-        }, 190);
-      });
-    }, 85);
-
-    return true;
-  }, [applyDesktopMotion, isCompactMobile, setDesktopAnimatingClass]);
-
-  const handleNavigatePeriod = (direction) => {
-    if (isCompactMobile) {
-      const api = calendarRef.current?.getApi();
-      if (!api) return;
-      if (direction < 0) api.prev();
-      else api.next();
+    if (!api) return;
+    const direction = steps > 0 ? 1 : -1;
+    const amount = Math.abs(steps);
+    if (activeCalendarView === 'dayGridMonth') {
+      api.incrementDate({ weeks: direction * amount });
       return;
     }
-    const axis = activeCalendarView === 'dayGridMonth' ? 'y' : 'x';
-    runDesktopNavigateAnimation(direction > 0 ? 1 : -1, axis);
+    api.incrementDate({ days: direction * amount });
+  }, [activeCalendarView]);
+
+  const applyCanvasDelta = useCallback((deltaPx, axisOverride = '') => {
+    const axis = axisOverride || getCanvasAxis();
+    const step = getCanvasStepPx();
+    if (!Number.isFinite(deltaPx) || Math.abs(deltaPx) < 0.1 || step <= 0) return;
+
+    if (axis === 'x') {
+      canvasOffsetRef.current.x += deltaPx;
+      let steps = 0;
+      while (canvasOffsetRef.current.x <= -step) {
+        canvasOffsetRef.current.x += step;
+        steps += 1;
+      }
+      while (canvasOffsetRef.current.x >= step) {
+        canvasOffsetRef.current.x -= step;
+        steps -= 1;
+      }
+      if (steps !== 0) {
+        shiftCalendarBySteps(steps);
+      }
+    } else {
+      canvasOffsetRef.current.y += deltaPx;
+      let steps = 0;
+      while (canvasOffsetRef.current.y <= -step) {
+        canvasOffsetRef.current.y += step;
+        steps += 1;
+      }
+      while (canvasOffsetRef.current.y >= step) {
+        canvasOffsetRef.current.y -= step;
+        steps -= 1;
+      }
+      if (steps !== 0) {
+        shiftCalendarBySteps(steps);
+      }
+    }
+
+    applyDesktopMotion(canvasOffsetRef.current.x, canvasOffsetRef.current.y, 0);
+  }, [applyDesktopMotion, getCanvasAxis, getCanvasStepPx, shiftCalendarBySteps]);
+
+  const handleNavigatePeriod = (direction) => {
+    if (!direction) return;
+    const step = direction > 0 ? 1 : -1;
+    const base = dayjs(canvasAnchorDate || dayjs().tz(timezone).format('YYYY-MM-DD'));
+    let next = base;
+    if (activeCalendarView === 'dayGridMonth') {
+      next = base.add(step, 'month');
+    } else if (activeCalendarView === 'timeGridWeek') {
+      next = base.add(step * 7, 'day');
+    } else if (activeCalendarView === 'timeGridThreeDay') {
+      next = base.add(step * 3, 'day');
+    } else {
+      next = base.add(step, 'day');
+    }
+    const nextDate = next.format('YYYY-MM-DD');
+    setCanvasAnchorDate(nextDate);
+    setCanvasNudgeDirection(0);
+    if (isCompactMobile) {
+      setMobileCurrentDate(nextDate);
+      setMobileStripStartDate(getMobileStripStart(nextDate, activeCalendarView));
+    }
   };
 
   const isReadOnlyInteractionTarget = useCallback((target) => {
     if (!target || typeof target.closest !== 'function') return false;
     return Boolean(
       target.closest('.fc-popover') ||
-      target.closest('.modal-content')
+      target.closest('.modal-content') ||
+      target.closest('.fc-event') ||
+      target.closest('input,textarea,button,select,a')
     );
   }, []);
 
   const handleDesktopCalendarWheel = useCallback((event) => {
-    if (isCompactMobile) return;
     if (!event) return;
-    if (desktopNavAnimatingRef.current) return;
-
-    const now = Date.now();
-    if (now < wheelNavLockUntilRef.current) return;
-
-    const gesture = wheelGestureRef.current;
-    if (now - gesture.lastAt > 220) {
-      gesture.sumX = 0;
-      gesture.sumY = 0;
-    }
-    gesture.lastAt = now;
-    gesture.sumX += event.deltaX;
-    gesture.sumY += event.deltaY;
-
-    const isMonthView = activeCalendarView === 'dayGridMonth';
-    const threshold = 70;
-    let direction = 0;
-
-    if (isMonthView) {
-      if (Math.abs(gesture.sumY) >= threshold && Math.abs(gesture.sumY) >= Math.abs(gesture.sumX) * 0.8) {
-        direction = gesture.sumY > 0 ? 1 : -1;
-      }
-    } else {
-      const horizontalDominant = Math.abs(gesture.sumX) >= Math.max(threshold, Math.abs(gesture.sumY) * 1.1);
-      const shiftVertical = event.shiftKey && Math.abs(gesture.sumY) >= threshold;
-      if (horizontalDominant) {
-        direction = gesture.sumX > 0 ? 1 : -1;
-      } else if (shiftVertical) {
-        direction = gesture.sumY > 0 ? 1 : -1;
-      }
-    }
-
-    if (!direction) return;
-
+    if (isReadOnlyInteractionTarget(event.target)) return;
+    const axis = getCanvasAxis();
+    if (!isCompactMobile && axis === 'x' && !event.shiftKey) return;
+    const primaryDelta = axis === 'y'
+      ? event.deltaY
+      : (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY);
+    if (!Number.isFinite(primaryDelta) || Math.abs(primaryDelta) < 0.3) return;
     event.preventDefault();
     event.stopPropagation();
-    gesture.sumX = 0;
-    gesture.sumY = 0;
-    wheelNavLockUntilRef.current = now + (isMonthView ? 430 : 320);
-    runDesktopNavigateAnimation(direction, isMonthView ? 'y' : 'x');
-  }, [activeCalendarView, isCompactMobile, runDesktopNavigateAnimation]);
+    wheelGestureRef.current.lastAt = Date.now();
+    applyCanvasDelta(-primaryDelta, axis);
+  }, [applyCanvasDelta, getCanvasAxis, isCompactMobile, isReadOnlyInteractionTarget]);
 
   const handleDesktopSwipeStart = useCallback((event) => {
-    if (isCompactMobile) return;
     if (!event?.isPrimary) return;
-    if (activeCalendarView === 'dayGridMonth') return;
     if (isReadOnlyInteractionTarget(event.target)) return;
-    if (desktopNavAnimatingRef.current) return;
     desktopSwipeRef.current = {
       active: true,
       startX: event.clientX,
       startY: event.clientY,
       allow: true,
+      axis: getCanvasAxis(),
     };
-  }, [activeCalendarView, isCompactMobile]);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }, [getCanvasAxis, isReadOnlyInteractionTarget]);
 
   const handleDesktopSwipeMove = useCallback((event) => {
     const swipe = desktopSwipeRef.current;
     if (!swipe.active || !swipe.allow) return;
     const dx = event.clientX - swipe.startX;
     const dy = event.clientY - swipe.startY;
-    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.15) {
-      event.preventDefault();
-      if (desktopMoveRafRef.current) return;
-      desktopMoveRafRef.current = requestAnimationFrame(() => {
-        desktopMoveRafRef.current = 0;
-        applyDesktopMotion(dx * 0.92, 0, 0);
-      });
+    const axis = swipe.axis || 'x';
+    if (axis === 'x') {
+      if (Math.abs(dx) <= Math.abs(dy) * 0.9) return;
+      if (event.cancelable) event.preventDefault();
+      applyCanvasDelta(dx - (swipe.lastDX || 0), 'x');
+      swipe.lastDX = dx;
+    } else {
+      if (Math.abs(dy) <= Math.abs(dx) * 0.9) return;
+      if (event.cancelable) event.preventDefault();
+      applyCanvasDelta(dy - (swipe.lastDY || 0), 'y');
+      swipe.lastDY = dy;
     }
-  }, [applyDesktopMotion]);
+    mobileClickSuppressUntilRef.current = Date.now() + 350;
+  }, [applyCanvasDelta]);
 
   const handleDesktopSwipeEnd = useCallback((event) => {
     const swipe = desktopSwipeRef.current;
     if (!swipe.active || !swipe.allow) return;
     desktopSwipeRef.current.active = false;
-
-    const dx = event.clientX - swipe.startX;
-    const dy = event.clientY - swipe.startY;
-    const horizontal = Math.abs(dx) > Math.abs(dy) * 1.15;
-    if (!horizontal || Math.abs(dx) < 64) {
-      applyDesktopMotion(0, 0, 220);
-      return;
+    swipe.lastDX = 0;
+    swipe.lastDY = 0;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    runDesktopNavigateAnimation(dx < 0 ? 1 : -1, 'x');
-  }, [applyDesktopMotion, runDesktopNavigateAnimation]);
-
-  useEffect(() => {
-    if (!isCompactMobile) return undefined;
-    const root = desktopViewportRef.current;
-    if (!root) return undefined;
-    const state = mobileContentSwipeRef.current;
-
-    const onTouchStart = (event) => {
-      if (activeCalendarView === 'dayGridMonth') return;
-      const touch = event.touches?.[0];
-      if (!touch) return;
-      if (isReadOnlyInteractionTarget(event.target)) return;
-      state.active = true;
-      state.startX = touch.clientX;
-      state.startY = touch.clientY;
-      state.lastX = touch.clientX;
-      state.lastY = touch.clientY;
-      state.allow = true;
-      state.pointerId = null;
-      state.lockedAxis = '';
-    };
-
-    const onTouchMove = (event) => {
-      if (!state.active || !state.allow) return;
-      const touch = event.touches?.[0];
-      if (!touch) return;
-      state.lastX = touch.clientX;
-      state.lastY = touch.clientY;
-      const dx = touch.clientX - state.startX;
-      const dy = touch.clientY - state.startY;
-      if (!state.lockedAxis) {
-        if (Math.abs(dx) >= 8 || Math.abs(dy) >= 8) {
-          state.lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.05 ? 'x' : 'y';
-        }
-      }
-      if (state.lockedAxis === 'x') {
-        mobileClickSuppressUntilRef.current = Date.now() + 450;
-        applyDesktopMotion(dx * 0.42, 0, 0);
-      }
-      if (state.lockedAxis === 'x' && event.cancelable) {
-        event.preventDefault();
-      }
-    };
-
-    const onTouchEndLike = (event) => {
-      if (!state.active || !state.allow) return;
-      state.active = false;
-      const touch = event.changedTouches?.[0];
-      const endX = touch?.clientX ?? state.lastX;
-      const endY = touch?.clientY ?? state.lastY;
-      const dx = endX - state.startX;
-      const dy = endY - state.startY;
-      const horizontal = Math.abs(dx) > Math.abs(dy) * 1.15;
-      if (!horizontal || Math.abs(dx) < 36) {
-        applyDesktopMotion(0, 0, 160);
-        return;
-      }
-      mobileClickSuppressUntilRef.current = Date.now() + 500;
-      runMobileNavigateAnimation(dx < 0 ? 1 : -1);
-    };
-
-    root.addEventListener('touchstart', onTouchStart, { passive: true });
-    root.addEventListener('touchmove', onTouchMove, { passive: false });
-    root.addEventListener('touchend', onTouchEndLike, { passive: true });
-    root.addEventListener('touchcancel', onTouchEndLike, { passive: true });
-    return () => {
-      root.removeEventListener('touchstart', onTouchStart);
-      root.removeEventListener('touchmove', onTouchMove);
-      root.removeEventListener('touchend', onTouchEndLike);
-      root.removeEventListener('touchcancel', onTouchEndLike);
-    };
-  }, [activeCalendarView, applyDesktopMotion, isCompactMobile, isReadOnlyInteractionTarget, runMobileNavigateAnimation]);
+  }, []);
 
   const handleChangeView = (nextView) => {
-    const api = calendarRef.current?.getApi();
-    if (!api) return;
-    api.changeView(nextView);
+    canvasOffsetRef.current = { x: 0, y: 0 };
+    applyDesktopMotion(0, 0, 0);
+    setCanvasNudgeDirection(0);
     if (isCompactMobile) {
       setMobileView(normalizeMobileView(nextView));
     } else {
@@ -1134,11 +1029,11 @@ function CalendarView() {
 
   const formatReadonlyEventDateTime = useCallback((value, allDay = false) => {
     if (!value) return '';
-    const parsed = dayjs(value);
+    const parsed = dayjs(value).tz(timezone);
     if (!parsed.isValid()) return '';
-    if (allDay) return parsed.utc().format('YYYY-MM-DD');
-    return parsed.utc().format('YYYY-MM-DD HH:mm');
-  }, []);
+    if (allDay) return parsed.format('YYYY-MM-DD');
+    return parsed.format('YYYY-MM-DD HH:mm');
+  }, [timezone]);
 
   const buildReadonlyEventDetail = useCallback((eventLike) => {
     const ext = eventLike?.extendedProps || {};
@@ -1301,6 +1196,21 @@ function CalendarView() {
     return 'none';
   }, [timezone]);
 
+  const handleCanvasMoreOpen = useCallback((payload) => {
+    const list = Array.isArray(payload?.events) ? payload.events : [];
+    const dateValue = payload?.date ? dayjs(payload.date).tz(timezone) : dayjs().tz(timezone);
+    setMoreEventsDateLabel(dateValue.format('YYYY-MM-DD'));
+    setMoreEvents(list.map((event) => ({
+      id: event.id,
+      title: event.title,
+      start: event.start,
+      end: event.end,
+      allDay: event.allDay,
+      extendedProps: event.extendedProps || {},
+    })));
+    setMoreEventsOpen(true);
+  }, [timezone]);
+
   const handleQuickComplete = async (event) => {
     if (event?.extendedProps?.readOnly) return;
     const taskId = event.extendedProps.taskId;
@@ -1417,6 +1327,32 @@ function CalendarView() {
     }
   };
 
+  const handleCanvasEventMove = useCallback(async ({ event, start, end, allDay }) => {
+    if (!event || event?.extendedProps?.readOnly) return;
+    const taskId = Number(event?.extendedProps?.taskId || 0);
+    if (!taskId) return;
+    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
+    const optimisticStart = start ? dayjs(start).utc().toISOString() : event.start;
+    const optimisticEnd = end ? dayjs(end).utc().toISOString() : (event.end || undefined);
+    updateCurrentCalendarEvents((prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.map((item) => (String(item.id) === String(event.id)
+        ? { ...item, start: optimisticStart, end: optimisticEnd }
+        : item));
+    });
+
+    try {
+      await updateTaskScheduleLocal(queryClient, taskId, {
+        start_time: start ? dayjs(start).utc().toISOString() : null,
+        end_time: end ? dayjs(end).utc().toISOString() : null,
+        all_day: !!allDay,
+      });
+    } catch (err) {
+      updateCurrentCalendarEvents(previousEvents);
+      console.error('Failed to move canvas event:', err);
+    }
+  }, [currentCalendarQueryKey, queryClient, updateCurrentCalendarEvents]);
+
   const handleModalClose = () => {
     setModalOpen(false);
     setSelectedTask(null);
@@ -1495,6 +1431,26 @@ function CalendarView() {
     }
     return list;
   }, []);
+
+  const handleCanvasRangeChange = useCallback((startISO, endISO, meta = null) => {
+    setDateRange({ start: startISO, end: endISO });
+    const start = dayjs(meta?.displayStart || startISO);
+    const end = dayjs(meta?.displayEnd || endISO);
+    const mid = start.add(end.diff(start, 'minute') / 2, 'minute');
+    if (activeCalendarView === 'dayGridMonth') {
+      setCurrentViewTitle(mid.format('YYYY年M月'));
+    } else if (activeCalendarView === 'timeGridWeek') {
+      setCurrentViewTitle(`${start.format('YYYY/M/D')} - ${end.subtract(1, 'day').format('M/D')}`);
+    } else {
+      setCurrentViewTitle(mid.format('YYYY/M/D'));
+    }
+  }, [activeCalendarView]);
+
+  const handleCanvasCenterDateChange = useCallback((dateValue) => {
+    if (!dateValue) return;
+    setMobileCurrentDate(dateValue);
+    setMobileStripStartDate(getMobileStripStart(dateValue, activeCalendarView));
+  }, [activeCalendarView]);
 
   return (
     <div className="calendar-shell md-page relative flex h-full flex-col">
@@ -1638,89 +1594,28 @@ function CalendarView() {
         <div
           ref={desktopViewportRef}
           className="h-full overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm"
-          onWheel={handleDesktopCalendarWheel}
-          onPointerDown={handleDesktopSwipeStart}
-          onPointerMove={handleDesktopSwipeMove}
-          onPointerUp={handleDesktopSwipeEnd}
-          onPointerCancel={handleDesktopSwipeEnd}
-          onPointerLeave={handleDesktopSwipeEnd}
-          style={{ touchAction: isCompactMobile ? 'auto' : (activeCalendarView === 'dayGridMonth' ? 'pan-y' : 'pan-x pan-y') }}
+          style={{ touchAction: 'auto' }}
         >
           <div
             className="h-full"
             ref={desktopMotionLayerRef}
             style={{ willChange: 'transform', transform: 'translate3d(0, 0, 0)' }}
           >
-            <FullCalendar
-              key={`${activeCalendarView}-${timezone}-${calendarLocale}-${isCompactMobile ? 'mobile' : 'desktop'}`}
-              ref={calendarRef}
-              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-              initialView={activeCalendarView}
-              initialDate={initialDate}
-              locale={calendarLocale}
-              timeZone="UTC"
-              headerToolbar={false}
-              views={{
-                timeGridThreeDay: {
-                  type: 'timeGrid',
-                  duration: { days: 3 },
-                },
-              }}
-              buttonText={{
-                today: t('calendar.today'),
-                month: t('calendar.month'),
-                week: t('calendar.week'),
-                day: t('calendar.day'),
-              }}
-              editable={true}
-              selectable={true}
-              selectMirror={true}
-              dayMaxEvents={activeCalendarView === 'dayGridMonth'}
-              dayMaxEventRows={activeCalendarView === 'dayGridMonth'}
-              eventMaxStack={activeCalendarView === 'dayGridMonth' ? undefined : 99}
-              fixedWeekCount={false}
-              weekends={true}
+            <InfiniteCalendarCanvas
+              view={activeCalendarView}
+              timezone={timezone}
+              anchorDate={canvasAnchorDate}
+              timeGranularity={timeGranularity}
+              nudgeDirection={canvasNudgeDirection}
+              onNudgeConsumed={() => setCanvasNudgeDirection(0)}
               events={events}
-              eventContent={renderEventContent}
-              eventClassNames={getEventClassNames}
-              dateClick={handleDateClick}
-              select={handleSelect}
-              eventClick={handleEventClick}
-              moreLinkClick={handleMoreLinkClick}
-              eventDragStart={(info) => {
-                const nativeEvent = info?.jsEvent;
-                const pointerType = nativeEvent?.pointerType || '';
-                const coarsePointer = typeof window !== 'undefined' &&
-                  window.matchMedia &&
-                  window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-                const isTouch = pointerType === 'touch' || coarsePointer;
-                if (!isTouch) return;
-                touchDraggingEventRef.current = true;
-                const root = calendarRef.current?.elRef?.current;
-                if (root) {
-                  root.classList.add('is-touch-dragging');
-                }
-              }}
-              eventDragStop={() => {
-                clearTouchDragUIState();
-              }}
-              eventDrop={handleEventDrop}
-              eventResize={handleEventResize}
-              datesSet={handleDatesSet}
-              height="100%"
-              nowIndicator={true}
-              now={calendarNow}
-              scrollTime={initialScrollTime}
-              eventTimeFormat={{
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false,
-              }}
-              slotDuration={slotDuration}
-              snapDuration={slotDuration}
-              displayEventEnd={true}
-              slotEventOverlap={true}
-              className={`todo-calendar ${isCompactMobile ? 'mobile-calendar' : 'desktop-calendar'}`}
+              onRangeChange={handleCanvasRangeChange}
+              onCenterDateChange={handleCanvasCenterDateChange}
+              onCreateRange={openCreateRange}
+              onOpenEvent={(eventLike) => openTaskFromCalendarEvent(eventLike)}
+              onOpenMore={handleCanvasMoreOpen}
+              onMoveEvent={handleCanvasEventMove}
+              todayJumpToken={todayJumpToken}
             />
           </div>
         </div>
