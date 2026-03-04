@@ -280,6 +280,7 @@ function TaskList({ forcedView = '' }) {
   const detailPanelRef = useRef(null);
   const listToolbarPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
+  const draftSourceTaskIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
   const draftSyncTimerRef = useRef(0);
 
@@ -578,6 +579,7 @@ function TaskList({ forcedView = '' }) {
     if (filteredTasks.length === 0) {
       setSelectedTaskID(0);
       setDraft(null);
+      draftSourceTaskIDRef.current = 0;
       return;
     }
 
@@ -619,6 +621,7 @@ function TaskList({ forcedView = '' }) {
     if (!selectedTask) {
       setDraft(null);
       lastSyncedSelectedIDRef.current = 0;
+      draftSourceTaskIDRef.current = 0;
       draftTouchedRef.current = false;
       return;
     }
@@ -626,6 +629,7 @@ function TaskList({ forcedView = '' }) {
     const nextDraft = buildDraftFromTask(selectedTask);
     if (lastSyncedSelectedIDRef.current !== selectedTask.id) {
       lastSyncedSelectedIDRef.current = selectedTask.id;
+      draftSourceTaskIDRef.current = selectedTask.id;
       draftTouchedRef.current = false;
       setDraft(nextDraft);
       setDetailPanel('');
@@ -634,6 +638,7 @@ function TaskList({ forcedView = '' }) {
 
     if (!draft) {
       draftTouchedRef.current = false;
+      draftSourceTaskIDRef.current = selectedTask.id;
       setDraft(nextDraft);
       return;
     }
@@ -644,6 +649,7 @@ function TaskList({ forcedView = '' }) {
       const current = normalizeDraftForCompare(draft);
       const incoming = normalizeDraftForCompare(nextDraft);
       if (JSON.stringify(current) !== JSON.stringify(incoming)) {
+        draftSourceTaskIDRef.current = selectedTask.id;
         setDraft(nextDraft);
       }
     }
@@ -827,9 +833,11 @@ function TaskList({ forcedView = '' }) {
     if (!selectedTask || !draft) return;
     if (selectedTask.read_only) return;
     if (savingDraft) return;
+    if (draftSourceTaskIDRef.current !== selectedTask.id) return;
     const title = (draft.title || '').trim();
     if (!title) return;
 
+    const targetTaskID = selectedTask.id;
     setSavingDraft(true);
     try {
       const originalDraft = buildDraftFromTask(selectedTask);
@@ -874,7 +882,10 @@ function TaskList({ forcedView = '' }) {
         payload.recurrence_rule = null;
       }
 
-      const savedTask = await updateTaskLocal(queryClient, selectedTask.id, payload, { scheduleSync: false });
+      const savedTask = await updateTaskLocal(queryClient, targetTaskID, payload, { scheduleSync: false });
+      if (draftSourceTaskIDRef.current !== targetTaskID) {
+        return;
+      }
       draftTouchedRef.current = false;
       // Do not overwrite draft from saved response here.
       // For controlled editors, forced value resets can clear redo history stack.
@@ -1266,7 +1277,7 @@ function TaskList({ forcedView = '' }) {
               {t('task.selectTaskHint')}
             </div>
           ) : (
-            <>
+            <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-blue-100 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs">
@@ -1604,6 +1615,7 @@ function TaskList({ forcedView = '' }) {
                 <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
+                    key={`task-editor-${selectedTask.id}`}
                     value={draft.description}
                     onChange={(nextValue) => handleDraftFieldChange('description', nextValue)}
                     placeholder={t('task.description')}
@@ -1626,7 +1638,7 @@ function TaskList({ forcedView = '' }) {
                   {savingDraft ? t('common.loading') : t('common.save')}
                 </button>
               </div>
-            </>
+            </div>
           )}
         </section>
       </div>

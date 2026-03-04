@@ -16,6 +16,8 @@ function LiveMarkdownEditor({
   const syncingRef = useRef(false);
   const lastInternalValueRef = useRef(String(value || ''));
   const pendingExternalValueRef = useRef(String(value || ''));
+  const externalVersionRef = useRef(0);
+  const appliedExternalVersionRef = useRef(0);
   const onChangeRef = useRef(onChange);
   const mountIDRef = useRef(`vditor-${Math.random().toString(36).slice(2, 11)}`);
 
@@ -124,6 +126,8 @@ function LiveMarkdownEditor({
 
   useEffect(() => {
     pendingExternalValueRef.current = String(value || '');
+    externalVersionRef.current += 1;
+    const currentExternalVersion = externalVersionRef.current;
     if (!readyRef.current) return;
     const editor = editorRef.current;
     if (!editor || typeof editor.getValue !== 'function' || typeof editor.setValue !== 'function') return;
@@ -137,6 +141,7 @@ function LiveMarkdownEditor({
     try {
       editor.setValue(nextValue, false);
       lastInternalValueRef.current = nextValue;
+      appliedExternalVersionRef.current = currentExternalVersion;
     } finally {
       syncingRef.current = false;
     }
