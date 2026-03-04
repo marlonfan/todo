@@ -5,6 +5,7 @@ const HOUR_HEIGHT = 56;
 const MONTH_WEEK_HEIGHT = 164;
 const HEADER_HEIGHT = 36;
 const TIME_AXIS_WIDTH = 46;
+const COMMIT_IDLE_MS = 120;
 
 function clampDurationMinutes(start, end) {
   const s = dayjs(start);
@@ -56,6 +57,8 @@ export default function InfiniteCalendarCanvas({
   const viewportRef = useRef(null);
   const timeGridScrollRef = useRef(null);
   const userSelectPrevRef = useRef('');
+  const commitTimerRef = useRef(0);
+  const lastCommitRef = useRef({ rangeStart: '', rangeEnd: '', centerDate: '' });
   const dragRef = useRef({
     active: false,
     moved: false,
@@ -102,6 +105,10 @@ export default function InfiniteCalendarCanvas({
 
   useEffect(() => () => {
     unlockTextSelection();
+    if (commitTimerRef.current) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = 0;
+    }
   }, [unlockTextSelection]);
 
   const reference = useMemo(() => {
@@ -156,29 +163,54 @@ export default function InfiniteCalendarCanvas({
     return { start, end, startIndex, endIndex };
   }, [cameraSteps, dayColumns, dayWidth, reference, view, viewportSize.height, viewportSize.width]);
 
-  useEffect(() => {
-    if (!onRangeChange) return;
+  const emitCommittedViewport = useCallback(() => {
     const currentStart = view === 'dayGridMonth'
       ? reference.add(Math.floor(cameraSteps), 'week').startOf('week')
       : reference.add(Math.floor(cameraSteps), 'day').startOf('day');
     const spanDays = view === 'dayGridMonth' ? 42 : dayColumns;
     const currentEnd = currentStart.add(spanDays, 'day').endOf('day');
-    onRangeChange(visibleWindow.start.toISOString(), visibleWindow.end.toISOString(), {
-      displayStart: currentStart.toISOString(),
-      displayEnd: currentEnd.toISOString(),
-    });
-  }, [cameraSteps, dayColumns, onRangeChange, reference, view, visibleWindow.end, visibleWindow.start]);
+    const rangeStart = visibleWindow.start.toISOString();
+    const rangeEnd = visibleWindow.end.toISOString();
+    const centerDate = view === 'dayGridMonth'
+      ? reference.add(cameraSteps, 'week').format('YYYY-MM-DD')
+      : reference.add(cameraSteps, 'day').format('YYYY-MM-DD');
+
+    if (onRangeChange) {
+      const sameRange = lastCommitRef.current.rangeStart === rangeStart && lastCommitRef.current.rangeEnd === rangeEnd;
+      if (!sameRange) {
+        onRangeChange(rangeStart, rangeEnd, {
+          displayStart: currentStart.toISOString(),
+          displayEnd: currentEnd.toISOString(),
+          phase: 'commit',
+        });
+        lastCommitRef.current.rangeStart = rangeStart;
+        lastCommitRef.current.rangeEnd = rangeEnd;
+      }
+    }
+
+    if (onCenterDateChange && lastCommitRef.current.centerDate !== centerDate) {
+      onCenterDateChange(centerDate);
+      lastCommitRef.current.centerDate = centerDate;
+    }
+  }, [cameraSteps, dayColumns, onCenterDateChange, onRangeChange, reference, view, visibleWindow.end, visibleWindow.start]);
 
   useEffect(() => {
-    if (!onCenterDateChange) return;
-    if (view === 'dayGridMonth') {
-      const centerWeek = reference.add(cameraSteps, 'week');
-      onCenterDateChange(centerWeek.format('YYYY-MM-DD'));
-      return;
+    if (!onRangeChange && !onCenterDateChange) return undefined;
+    if (commitTimerRef.current) {
+      window.clearTimeout(commitTimerRef.current);
     }
-    const centerDay = reference.add(cameraSteps, 'day');
-    onCenterDateChange(centerDay.format('YYYY-MM-DD'));
-  }, [cameraSteps, onCenterDateChange, reference, view]);
+    commitTimerRef.current = window.setTimeout(() => {
+      commitTimerRef.current = 0;
+      emitCommittedViewport();
+    }, COMMIT_IDLE_MS);
+
+    return () => {
+      if (commitTimerRef.current) {
+        window.clearTimeout(commitTimerRef.current);
+        commitTimerRef.current = 0;
+      }
+    };
+  }, [cameraSteps, emitCommittedViewport, onCenterDateChange, onRangeChange]);
 
   useEffect(() => {
     if (isMonthView) return;
@@ -384,7 +416,8 @@ export default function InfiniteCalendarCanvas({
         }
       }
     }
-  }, [computeDragRange, events, onMoveEvent, onOpenEvent, openCreateAtPoint, unlockTextSelection]);
+    emitCommittedViewport();
+  }, [computeDragRange, emitCommittedViewport, events, onMoveEvent, onOpenEvent, openCreateAtPoint, unlockTextSelection]);
 
   const handleWheel = useCallback((event) => {
     const axis = isMonthView ? 'y' : 'x';

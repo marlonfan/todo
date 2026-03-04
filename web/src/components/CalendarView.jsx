@@ -1433,24 +1433,31 @@ function CalendarView() {
   }, []);
 
   const handleCanvasRangeChange = useCallback((startISO, endISO, meta = null) => {
-    setDateRange({ start: startISO, end: endISO });
+    if (meta?.phase && meta.phase !== 'commit') return;
+    setDateRange((prev) => {
+      if (prev.start === startISO && prev.end === endISO) return prev;
+      return { start: startISO, end: endISO };
+    });
     const start = dayjs(meta?.displayStart || startISO);
     const end = dayjs(meta?.displayEnd || endISO);
     const mid = start.add(end.diff(start, 'minute') / 2, 'minute');
+    let nextTitle = '';
     if (activeCalendarView === 'dayGridMonth') {
-      setCurrentViewTitle(mid.format('YYYY年M月'));
+      nextTitle = mid.format('YYYY年M月');
     } else if (activeCalendarView === 'timeGridWeek') {
-      setCurrentViewTitle(`${start.format('YYYY/M/D')} - ${end.subtract(1, 'day').format('M/D')}`);
+      nextTitle = `${start.format('YYYY/M/D')} - ${end.subtract(1, 'day').format('M/D')}`;
     } else {
-      setCurrentViewTitle(mid.format('YYYY/M/D'));
+      nextTitle = mid.format('YYYY/M/D');
     }
+    setCurrentViewTitle((prev) => (prev === nextTitle ? prev : nextTitle));
   }, [activeCalendarView]);
 
   const handleCanvasCenterDateChange = useCallback((dateValue) => {
     if (!dateValue) return;
+    if (!isCompactMobile) return;
     setMobileCurrentDate(dateValue);
     setMobileStripStartDate(getMobileStripStart(dateValue, activeCalendarView));
-  }, [activeCalendarView]);
+  }, [activeCalendarView, isCompactMobile]);
 
   return (
     <div className="calendar-shell md-page relative flex h-full flex-col">
