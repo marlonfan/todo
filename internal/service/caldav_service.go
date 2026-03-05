@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"todo-app/internal/models"
 	"todo-app/internal/repository"
@@ -29,6 +30,8 @@ type CaldavService struct {
 	repo       *repository.CaldavRepository
 	httpClient *http.Client
 	secret     string
+	lockMu     sync.Mutex
+	sourceLock map[string]*sync.Mutex
 }
 
 func NewCaldavService(repo *repository.CaldavRepository, secret string) *CaldavService {
@@ -37,17 +40,45 @@ func NewCaldavService(repo *repository.CaldavRepository, secret string) *CaldavS
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		secret: secret,
+		secret:     secret,
+		sourceLock: make(map[string]*sync.Mutex),
 	}
 }
 
-func (s *CaldavService) DiscoverCalendars(ctx context.Context, req *models.CaldavDiscoverRequest) ([]models.CaldavCalendarChoice, error) {
+func (s *CaldavService) DiscoverCalendars(ctx context.Context, userID int64, req *models.CaldavDiscoverRequest) ([]models.CaldavCalendarChoice, error) {
 	baseURL := strings.TrimSpace(req.BaseURL)
+	username := strings.TrimSpace(req.Username)
+	password := strings.TrimSpace(req.Password)
+	if password == "" {
+		if req.SourceID <= 0 {
+			return nil, errors.New("password is required for new source discover")
+		}
+		source, err := s.repo.GetSourceByID(userID, req.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(source.BaseURL)
+		}
+		if username == "" {
+			username = strings.TrimSpace(source.Username)
+		}
+		decrypted, err := decryptSecret(source.PasswordEnc, s.secret)
+		if err != nil {
+			return nil, err
+		}
+		password = strings.TrimSpace(decrypted)
+	}
 	if baseURL == "" {
 		return nil, errors.New("base_url is required")
 	}
-
-	data, err := s.doPropfindCalendars(ctx, baseURL, req.Username, req.Password)
+	if username == "" {
+		return nil, errors.New("username is required")
+	}
+	if password == "" {
+		return nil, errors.New("password is required")
+	}
+	data, err := s.doPropfindCalendars(ctx, baseURL, username, password)
 	if err != nil {
 		return nil, err
 	}
@@ -136,17 +167,19 @@ func (s *CaldavService) UpdateSource(ctx context.Context, userID, sourceID int64
 	baseURL := strings.TrimSpace(req.BaseURL)
 	username := strings.TrimSpace(req.Username)
 	password := strings.TrimSpace(req.Password)
-	if baseURL == "" || username == "" || password == "" {
-		return nil, errors.New("base_url, username, password are required")
-	}
-	cipherText, err := encryptSecret(password, s.secret)
-	if err != nil {
-		return nil, err
+	if baseURL == "" || username == "" {
+		return nil, errors.New("base_url and username are required")
 	}
 	source.Name = strings.TrimSpace(req.Name)
 	source.BaseURL = baseURL
 	source.Username = username
-	source.PasswordEnc = cipherText
+	if password != "" {
+		cipherText, err := encryptSecret(password, s.secret)
+		if err != nil {
+			return nil, err
+		}
+		source.PasswordEnc = cipherText
+	}
 	if req.IsActive != nil {
 		source.IsActive = *req.IsActive
 	}
@@ -179,44 +212,61 @@ func (s *CaldavService) DeleteSource(userID, sourceID int64) error {
 }
 
 func (s *CaldavService) SyncSourceNow(ctx context.Context, userID, sourceID int64) error {
-	source, err := s.repo.GetSourceByID(userID, sourceID)
-	if err != nil {
-		return err
-	}
-	if !source.IsActive {
-		return nil
-	}
-	password, err := decryptSecret(source.PasswordEnc, s.secret)
-	if err != nil {
-		source.LastError = "failed to decrypt credentials"
-		_ = s.repo.UpdateSource(source)
-		return err
-	}
-	calendars, err := s.repo.ListSelectedCalendarsBySource(userID, sourceID)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	var syncErr error
-	for _, cal := range calendars {
-		err := s.syncCalendarCache(ctx, source, password, &cal)
+	return s.withSourceLock(userID, sourceID, func() error {
+		source, err := s.repo.GetSourceByID(userID, sourceID)
 		if err != nil {
-			syncErr = err
-			cal.LastError = err.Error()
-		} else {
-			cal.LastError = ""
-			cal.LastSyncAt = &now
+			return err
 		}
-		_ = s.repo.UpdateCalendar(&cal)
+		if !source.IsActive {
+			return nil
+		}
+		password, err := decryptSecret(source.PasswordEnc, s.secret)
+		if err != nil {
+			source.LastError = "failed to decrypt credentials"
+			_ = s.repo.UpdateSource(source)
+			return err
+		}
+		calendars, err := s.repo.ListSelectedCalendarsBySource(userID, sourceID)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		var syncErr error
+		for _, cal := range calendars {
+			err := s.syncCalendarCache(ctx, source, password, &cal)
+			if err != nil {
+				syncErr = err
+				cal.LastError = err.Error()
+			} else {
+				cal.LastError = ""
+				cal.LastSyncAt = &now
+			}
+			_ = s.repo.UpdateCalendar(&cal)
+		}
+		source.LastSyncAt = &now
+		if syncErr != nil {
+			source.LastError = syncErr.Error()
+		} else {
+			source.LastError = ""
+		}
+		_ = s.repo.UpdateSource(source)
+		return syncErr
+	})
+}
+
+func (s *CaldavService) withSourceLock(userID, sourceID int64, fn func() error) error {
+	key := fmt.Sprintf("%d:%d", userID, sourceID)
+	s.lockMu.Lock()
+	mu, ok := s.sourceLock[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.sourceLock[key] = mu
 	}
-	source.LastSyncAt = &now
-	if syncErr != nil {
-		source.LastError = syncErr.Error()
-	} else {
-		source.LastError = ""
-	}
-	_ = s.repo.UpdateSource(source)
-	return syncErr
+	s.lockMu.Unlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
 }
 
 func (s *CaldavService) SyncAllActiveSources(ctx context.Context) error {
@@ -360,64 +410,57 @@ func (s *CaldavService) ListCalendarEvents(userID int64, start, end time.Time) (
 }
 
 func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.CaldavSource, password string, calendar *models.CaldavCalendar) error {
-	if token := strings.TrimSpace(calendar.SyncToken); token != "" {
-		changed, removed, nextToken, err := s.syncCalendarIncremental(ctx, source, password, calendar, token)
-		if err == nil {
-			if len(removed) > 0 {
-				if delErr := s.repo.DeleteEventsByHrefs(source.UserID, source.ID, calendar.ID, removed); delErr != nil {
-					return delErr
+	forceReplace := false
+	if hasLegacyRecurrence, err := s.repo.HasNonCanonicalRecurrenceIDs(source.UserID, source.ID, calendar.ID); err != nil {
+		return err
+	} else if hasLegacyRecurrence {
+		forceReplace = true
+	}
+
+	if !forceReplace {
+		if token := strings.TrimSpace(calendar.SyncToken); token != "" {
+			changed, removed, nextToken, err := s.syncCalendarIncremental(ctx, source, password, calendar, token)
+			if err == nil {
+				if len(removed) > 0 {
+					if delErr := s.repo.DeleteEventsByHrefs(source.UserID, source.ID, calendar.ID, removed); delErr != nil {
+						return delErr
+					}
 				}
-			}
-			for href, events := range changed {
-				if err := s.repo.DeleteEventsByHref(source.UserID, source.ID, calendar.ID, href); err != nil {
-					return err
-				}
-				for i := range events {
-					event := events[i]
-					event.UserID = source.UserID
-					event.SourceID = source.ID
-					event.CalendarID = calendar.ID
-					event.RawHref = href
-					if err := s.repo.UpsertEvent(&event); err != nil {
+				for href, events := range changed {
+					if err := s.repo.DeleteEventsByHref(source.UserID, source.ID, calendar.ID, href); err != nil {
+						return err
+					}
+					buffer := make([]models.CaldavEventCache, 0, len(events))
+					for i := range events {
+						event := events[i]
+						event.UserID = source.UserID
+						event.SourceID = source.ID
+						event.CalendarID = calendar.ID
+						event.RawHref = href
+						buffer = append(buffer, event)
+					}
+					if err := s.repo.UpsertEvents(buffer); err != nil {
 						return err
 					}
 				}
+				if nextToken != "" {
+					calendar.SyncToken = nextToken
+				}
+				return s.extendCalendarCacheCoverage(ctx, source, password, calendar)
 			}
-			if nextToken != "" {
-				calendar.SyncToken = nextToken
+			if !isSyncTokenRecoverableError(err) {
+				return err
 			}
-			return nil
-		}
-		if !isSyncTokenRecoverableError(err) {
-			return err
 		}
 	}
 
 	remoteCTag, remoteSyncToken, stateErr := s.fetchCalendarState(ctx, source, password, calendar.CalendarURL)
-	if stateErr == nil && remoteCTag != "" && remoteCTag == strings.TrimSpace(calendar.CTag) {
+	if !forceReplace && stateErr == nil && remoteCTag != "" && remoteCTag == strings.TrimSpace(calendar.CTag) {
 		calendar.SyncToken = remoteSyncToken
-		return nil
+		return s.extendCalendarCacheCoverage(ctx, source, password, calendar)
 	}
 
-	items, err := s.fetchCalendarRemoteEventsWindowed(ctx, source, password, calendar)
-	if err != nil {
-		return err
-	}
-	keepKeys := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.EventUID == "" {
-			continue
-		}
-		event := item
-		event.UserID = source.UserID
-		event.SourceID = source.ID
-		event.CalendarID = calendar.ID
-		if err := s.repo.UpsertEvent(&event); err != nil {
-			return err
-		}
-		keepKeys = append(keepKeys, event.EventUID+"|"+strings.TrimSpace(event.RecurrenceID))
-	}
-	if err := s.repo.DeleteEventsNotInSet(source.UserID, source.ID, calendar.ID, keepKeys); err != nil {
+	if err := s.replaceCalendarCacheFromRemote(ctx, source, password, calendar); err != nil {
 		return err
 	}
 	if remoteCTag != "" {
@@ -429,13 +472,157 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 	return nil
 }
 
+func (s *CaldavService) replaceCalendarCacheFromRemote(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+) error {
+	items, err := s.fetchCalendarRemoteEventsWindowed(ctx, source, password, calendar)
+	if err != nil {
+		return err
+	}
+	buffer := make([]models.CaldavEventCache, 0, len(items))
+	for _, item := range items {
+		if item.EventUID == "" {
+			continue
+		}
+		event := item
+		event.UserID = source.UserID
+		event.SourceID = source.ID
+		event.CalendarID = calendar.ID
+		buffer = append(buffer, event)
+	}
+	if err := s.repo.ReplaceEventsForCalendar(source.UserID, source.ID, calendar.ID, buffer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *CaldavService) extendCalendarCacheCoverage(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+) error {
+	targetStart, targetEnd := defaultCaldavExpansionWindow()
+	earliest, latest, found, err := s.repo.GetCalendarEventStartBounds(source.UserID, source.ID, calendar.ID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+
+	const (
+		coverageDrift = 72 * time.Hour
+		mergeOverlap  = 24 * time.Hour
+	)
+
+	if latest.Before(targetEnd.Add(-coverageDrift)) {
+		from := latest.Add(-mergeOverlap)
+		if from.Before(targetStart) {
+			from = targetStart
+		}
+		if targetEnd.After(from) {
+			if err := s.mergeCalendarRemoteRange(ctx, source, password, calendar, from, targetEnd); err != nil {
+				return err
+			}
+		}
+	}
+
+	if earliest.After(targetStart.Add(coverageDrift)) {
+		to := earliest.Add(mergeOverlap)
+		if to.After(targetEnd) {
+			to = targetEnd
+		}
+		if to.After(targetStart) {
+			if err := s.mergeCalendarRemoteRange(ctx, source, password, calendar, targetStart, to); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *CaldavService) mergeCalendarRemoteRange(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+	start time.Time,
+	end time.Time,
+) error {
+	if !end.After(start) {
+		return nil
+	}
+	if detectCaldavProvider(source.BaseURL) == "feishu" {
+		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, time.Time{}, time.Time{}, false)
+		if err != nil {
+			return err
+		}
+		buffer := make([]models.CaldavEventCache, 0, len(items))
+		for _, item := range items {
+			if item.EventUID == "" {
+				continue
+			}
+			event := item
+			event.UserID = source.UserID
+			event.SourceID = source.ID
+			event.CalendarID = calendar.ID
+			buffer = append(buffer, event)
+		}
+		return s.repo.UpsertEvents(buffer)
+	}
+
+	windows := buildCaldavSyncWindows(start.UTC(), end.UTC(), 90)
+	if len(windows) == 0 {
+		windows = append(windows, [2]time.Time{start.UTC(), end.UTC()})
+	}
+	for _, segment := range windows {
+		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, segment[0], segment[1], true)
+		if err != nil {
+			return err
+		}
+		buffer := make([]models.CaldavEventCache, 0, len(items))
+		for _, item := range items {
+			if item.EventUID == "" {
+				continue
+			}
+			event := item
+			event.UserID = source.UserID
+			event.SourceID = source.ID
+			event.CalendarID = calendar.ID
+			buffer = append(buffer, event)
+		}
+		if err := s.repo.UpsertEvents(buffer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
 	ctx context.Context,
 	source *models.CaldavSource,
 	password string,
 	calendar *models.CaldavCalendar,
 ) ([]models.CaldavEventCache, error) {
+	if detectCaldavProvider(source.BaseURL) == "feishu" {
+		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, time.Time{}, time.Time{}, false)
+		if err != nil {
+			return nil, err
+		}
+		return dedupeCaldavEvents(items), nil
+	}
+
 	windowStart, windowEnd := defaultCaldavExpansionWindow()
+	wholeRangeItems, _, wholeRangeErr := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, windowStart, windowEnd, true)
+	if wholeRangeErr == nil && len(wholeRangeItems) > 0 {
+		return dedupeCaldavEvents(wholeRangeItems), nil
+	}
+
 	windows := buildCaldavSyncWindows(windowStart, windowEnd, 90)
 	if len(windows) == 0 {
 		windows = append(windows, [2]time.Time{windowStart, windowEnd})
@@ -445,6 +632,9 @@ func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
 	for _, segment := range windows {
 		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, segment[0], segment[1], true)
 		if err != nil {
+			if wholeRangeErr != nil {
+				return nil, wholeRangeErr
+			}
 			return nil, err
 		}
 		merged = append(merged, items...)
@@ -1505,7 +1695,7 @@ func parseICSCalendarData(raw string) []parsedEvent {
 		case strings.HasPrefix(keyUpper, "UID"):
 			current.UID = strings.TrimSpace(value)
 		case strings.HasPrefix(keyUpper, "RECURRENCE-ID"):
-			current.RecurrenceID = strings.TrimSpace(value)
+			current.RecurrenceID = normalizeRecurrenceID(key, value, defaultLoc)
 		case strings.HasPrefix(keyUpper, "RRULE"):
 			current.RRule = strings.TrimSpace(value)
 		case strings.HasPrefix(keyUpper, "RDATE"):
@@ -1618,6 +1808,18 @@ func parseICSTime(key, value string, defaultLoc *time.Location) (time.Time, bool
 		return time.Time{}, false, false
 	}
 	return t.UTC(), false, true
+}
+
+func normalizeRecurrenceID(key, value string, defaultLoc *time.Location) string {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return ""
+	}
+	t, _, ok := parseICSTime(key, raw, defaultLoc)
+	if !ok {
+		return raw
+	}
+	return t.UTC().Format("20060102T150405Z")
 }
 
 func parseCalendarDefaultLocation(lines []string) *time.Location {

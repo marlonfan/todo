@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,12 +23,13 @@ func NewCaldavHandler(caldavService *service.CaldavService) *CaldavHandler {
 }
 
 func (h *CaldavHandler) Discover(c *gin.Context) {
+	userID := middleware.GetUserID(c)
 	var req models.CaldavDiscoverRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	items, err := h.caldavService.DiscoverCalendars(c.Request.Context(), &req)
+	items, err := h.caldavService.DiscoverCalendars(c.Request.Context(), userID, &req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -100,11 +103,15 @@ func (h *CaldavHandler) SyncSource(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source ID"})
 		return
 	}
-	if err := h.caldavService.SyncSourceNow(c.Request.Context(), userID, sourceID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "sync started"})
+	go func(uid, sid int64) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if runErr := h.caldavService.SyncSourceNow(ctx, uid, sid); runErr != nil {
+			log.Printf("manual caldav sync failed (user=%d source=%d): %v", uid, sid, runErr)
+		}
+	}(userID, sourceID)
+
+	c.JSON(http.StatusAccepted, gin.H{"message": "sync started"})
 }
 
 func (h *CaldavHandler) ListReadOnlyTasks(c *gin.Context) {

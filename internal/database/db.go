@@ -19,7 +19,30 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 
 	switch cfg.Driver {
 	case "sqlite":
-		return gorm.Open(sqlite.Open(cfg.DSN), gormCfg)
+		db, err := gorm.Open(sqlite.Open(cfg.DSN), gormCfg)
+		if err != nil {
+			return nil, err
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			return nil, err
+		}
+		sqlDB.SetMaxOpenConns(8)
+		sqlDB.SetMaxIdleConns(4)
+		sqlDB.SetConnMaxLifetime(0)
+		if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
+			return nil, err
+		}
+		if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
+			return nil, err
+		}
+		if err := db.Exec("PRAGMA busy_timeout=10000;").Error; err != nil {
+			return nil, err
+		}
+		if err := db.Exec("PRAGMA foreign_keys=ON;").Error; err != nil {
+			return nil, err
+		}
+		return db, nil
 	case "postgres":
 		return gorm.Open(postgres.Open(cfg.DSN), gormCfg)
 	default:

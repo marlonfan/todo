@@ -131,6 +131,7 @@ export default function InfiniteCalendarCanvas({
   const [offsetPx, setOffsetPx] = useState(0);
   const [dragVisual, setDragVisual] = useState(null);
   const [eventGestureLocked, setEventGestureLocked] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const dayColumns = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const monthDayCellWidth = useMemo(
     () => Math.max(1, (viewportSize.width || 700) / 7),
@@ -233,6 +234,13 @@ export default function InfiniteCalendarCanvas({
       layer.style.transform = 'translate3d(0, 0, 0)';
     }
   }, [clearLongPressTimer, clearWheelCommitTimer, unlockTextSelection]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 30 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const commitOffsetPx = useCallback((nextOffset) => {
     if (!Number.isFinite(nextOffset)) return;
@@ -1011,6 +1019,17 @@ export default function InfiniteCalendarCanvas({
       );
     }
 
+    const nowLocal = dayjs(nowTick).tz(timezone);
+    const displayStart = reference.add(Math.floor(cameraSteps), 'day').startOf('day');
+    const displayEndExclusive = displayStart.add(dayColumns, 'day');
+    const showNowLine = (nowLocal.isAfter(displayStart) || nowLocal.isSame(displayStart))
+      && nowLocal.isBefore(displayEndExclusive);
+    const nowMinuteOfDay = nowLocal.hour() * 60 + nowLocal.minute() + (nowLocal.second() / 60);
+    const nowLineY = HEADER_HEIGHT + (nowMinuteOfDay / 60) * HOUR_HEIGHT;
+    const nowDayIndex = nowLocal.startOf('day').diff(reference, 'day');
+    const nowDotX = TIME_AXIS_WIDTH + (nowDayIndex - cameraSteps) * dayWidth;
+    const currentTimeLabel = nowLocal.format('HH:mm');
+
     const timedByDay = new Map();
     eventEntries.forEach(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
@@ -1136,6 +1155,27 @@ export default function InfiniteCalendarCanvas({
           className="absolute inset-0 will-change-transform"
         >
           {columns}
+          {showNowLine && (
+            <>
+              <div
+                className="pointer-events-none absolute border-t border-rose-500/85"
+                style={{
+                  left: TIME_AXIS_WIDTH,
+                  right: 0,
+                  top: nowLineY,
+                  boxShadow: '0 0 8px rgba(244,63,94,0.45)',
+                }}
+              />
+              <div
+                className="pointer-events-none absolute h-2.5 w-2.5 rounded-full border border-white bg-rose-500 shadow"
+                style={{
+                  left: nowDotX - 5,
+                  top: nowLineY - 5,
+                  boxShadow: '0 0 0 3px rgba(244,63,94,0.2)',
+                }}
+              />
+            </>
+          )}
           {blocks.map(({ eventKey, event, style, className, titleStyle }) => {
             const isDraggingThis = dragVisual && String(dragVisual.eventKey) === String(eventKey);
             const readonly = isReadonlyEvent(event);
@@ -1172,6 +1212,16 @@ export default function InfiniteCalendarCanvas({
             );
           })}
         </div>
+        {showNowLine && (
+          <div
+            className="pointer-events-none absolute left-0"
+            style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 60 }}
+          >
+            <span className="inline-flex h-5 items-center rounded-r-full bg-rose-500 px-2 text-[10px] font-semibold text-white shadow-sm">
+              {currentTimeLabel}
+            </span>
+          </div>
+        )}
       </>
     );
   };

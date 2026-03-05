@@ -63,16 +63,17 @@ type CaldavCalendarChoice struct {
 }
 
 type CaldavDiscoverRequest struct {
+	SourceID int64  `json:"source_id"`
 	BaseURL  string `json:"base_url" binding:"required,max=500"`
 	Username string `json:"username" binding:"required,max=255"`
-	Password string `json:"password" binding:"required,max=500"`
+	Password string `json:"password" binding:"max=500"`
 }
 
 type CaldavUpsertSourceRequest struct {
 	Name      string                 `json:"name" binding:"required,max=120"`
 	BaseURL   string                 `json:"base_url" binding:"required,max=500"`
 	Username  string                 `json:"username" binding:"required,max=255"`
-	Password  string                 `json:"password" binding:"required,max=500"`
+	Password  string                 `json:"password" binding:"max=500"`
 	Calendars []CaldavCalendarChoice `json:"calendars" binding:"required,min=1,dive"`
 	IsActive  *bool                  `json:"is_active"`
 }
