@@ -36,6 +36,7 @@ export function buildProjectedEventsFromTasks(tasks, options) {
 
   return list
     .filter((task) => (task?.status || 'pending') !== 'cancelled')
+    .filter((task) => !(task?.read_only || String(task?.source || '') === 'caldav'))
     .filter((task) => isTaskInRange(task, rangeStart, rangeEnd))
     .map((task) => {
       const rawStart = task.start_time || task.startTime || task.due_date || task.dueDate;
@@ -84,43 +85,61 @@ export function buildTaskStatusIndex(tasks) {
 export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusIndex = { cancelled: new Set(), present: null }) {
   const base = Array.isArray(serverEvents) ? serverEvents : [];
   const projected = Array.isArray(projectedEvents) ? projectedEvents : [];
-  const byTaskID = new Map();
-  const passthrough = [];
-  const presentSet = taskStatusIndex?.present instanceof Set ? taskStatusIndex.present : null;
-  const canPruneMissingTask = presentSet !== null;
-
-  base.forEach((event) => {
-    const taskID = Number(event?.extendedProps?.taskId || 0);
-    const serverStatus = event?.extendedProps?.status || 'pending';
-    const isReadOnly = !!event?.extendedProps?.readOnly;
-    const eventSource = String(event?.extendedProps?.source || '');
-    if (taskID && (serverStatus === 'cancelled' || taskStatusIndex.cancelled.has(taskID))) {
-      return;
-    }
-    const isRecurring = !!event?.extendedProps?.isRecurring;
-    const shouldKeepExternalReadOnly = isReadOnly || eventSource === 'caldav';
-    if (taskID && !isRecurring && canPruneMissingTask && !shouldKeepExternalReadOnly && !presentSet.has(taskID)) {
-      return;
-    }
-    if (!taskID || isRecurring) {
-      passthrough.push(event);
-      return;
-    }
-    byTaskID.set(taskID, event);
-  });
+  const projectedByTaskID = new Map();
+  const consumedTaskIDs = new Set();
+  const merged = [];
 
   projected.forEach((event) => {
     const taskID = Number(event?.extendedProps?.taskId || 0);
     if (!taskID) return;
-    byTaskID.set(taskID, {
-      ...byTaskID.get(taskID),
+    projectedByTaskID.set(taskID, event);
+  });
+
+  base.forEach((event) => {
+    const taskID = Number(event?.extendedProps?.taskId || 0);
+    const serverStatus = event?.extendedProps?.status || 'pending';
+    if (taskID && serverStatus === 'cancelled') {
+      return;
+    }
+    const isRecurring = !!event?.extendedProps?.isRecurring;
+    if (!taskID || isRecurring) {
+      merged.push(event);
+      return;
+    }
+
+    const projectedEvent = projectedByTaskID.get(taskID);
+    const eventSource = String(event?.extendedProps?.source || '');
+    const isReadOnly = !!event?.extendedProps?.readOnly || eventSource === 'caldav';
+    if (!projectedEvent) {
+      merged.push(event);
+      return;
+    }
+    if (isReadOnly) {
+      consumedTaskIDs.add(taskID);
+      merged.push(event);
+      return;
+    }
+    if (consumedTaskIDs.has(taskID)) {
+      merged.push(event);
+      return;
+    }
+
+    consumedTaskIDs.add(taskID);
+    merged.push({
       ...event,
+      ...projectedEvent,
+      id: event?.id || projectedEvent?.id,
       extendedProps: {
-        ...(byTaskID.get(taskID)?.extendedProps || {}),
-        ...(event.extendedProps || {}),
+        ...(event?.extendedProps || {}),
+        ...(projectedEvent?.extendedProps || {}),
       },
     });
   });
 
-  return [...passthrough, ...Array.from(byTaskID.values())];
+  projectedByTaskID.forEach((event, taskID) => {
+    if (consumedTaskIDs.has(taskID)) return;
+    merged.push(event);
+  });
+
+  return merged;
 }

@@ -51,6 +51,19 @@ function isReadonlyEvent(event) {
   return !!event?.extendedProps?.readOnly || String(event?.extendedProps?.source || '') === 'caldav';
 }
 
+function buildEventInstanceBaseKey(event) {
+  const ext = event?.extendedProps || {};
+  return [
+    String(event?.id || ''),
+    String(event?.start || ''),
+    String(event?.end || ''),
+    event?.allDay ? '1' : '0',
+    String(ext?.instanceId || ''),
+    String(ext?.externalId || ''),
+    String(ext?.segmentDate || ''),
+  ].join('|');
+}
+
 export default function InfiniteCalendarCanvas({
   view,
   timezone,
@@ -74,6 +87,7 @@ export default function InfiniteCalendarCanvas({
   const commitTimerRef = useRef(0);
   const wheelCommitTimerRef = useRef(0);
   const lastCommitRef = useRef({ rangeStart: '', rangeEnd: '', centerDate: '' });
+  const emitCommittedViewportRef = useRef(() => {});
   const wheelSessionRef = useRef({ active: false, startOffset: 0, delta: 0 });
   const offsetPxRef = useRef(0);
   const panLayerRef = useRef(null);
@@ -130,6 +144,24 @@ export default function InfiniteCalendarCanvas({
   const isMonthView = view === 'dayGridMonth';
   const timelineHeight = HEADER_HEIGHT + (24 * HOUR_HEIGHT) + 8;
   const snapMinutes = Math.max(5, Number.parseInt(timeGranularity, 10) || 30);
+  const eventEntries = useMemo(() => {
+    const list = Array.isArray(events) ? events : [];
+    const seen = new Map();
+    return list.map((event) => {
+      const baseKey = buildEventInstanceBaseKey(event);
+      const duplicateIndex = seen.get(baseKey) || 0;
+      seen.set(baseKey, duplicateIndex + 1);
+      const key = duplicateIndex === 0 ? baseKey : `${baseKey}#${duplicateIndex}`;
+      return { key, event };
+    });
+  }, [events]);
+  const eventByKey = useMemo(() => {
+    const index = new Map();
+    eventEntries.forEach((entry) => {
+      index.set(entry.key, entry.event);
+    });
+    return index;
+  }, [eventEntries]);
 
   const lockTextSelection = useCallback(() => {
     const root = document.documentElement;
@@ -287,7 +319,7 @@ export default function InfiniteCalendarCanvas({
         commitOffsetPx(snapshot.startOffset - finalDelta);
       });
       resetPanLayer();
-      emitCommittedViewport();
+      emitCommittedViewportRef.current?.();
       return;
     }
     if (snapshot.mode === 'scroll') {
@@ -295,7 +327,7 @@ export default function InfiniteCalendarCanvas({
       if (scroller) {
         scroller.scrollTop = Math.max(0, snapshot.startScrollTop - snapshot.delta);
       }
-      emitCommittedViewport();
+      emitCommittedViewportRef.current?.();
     }
   }, [cancelInertia, commitOffsetPx, flushPendingPanDelta, resetPanLayer]);
 
@@ -322,7 +354,7 @@ export default function InfiniteCalendarCanvas({
           scroller.scrollTop = Math.max(0, startScrollTop - initialDelta);
         }
       }
-      emitCommittedViewport();
+      emitCommittedViewportRef.current?.();
       return;
     }
 
@@ -464,6 +496,7 @@ export default function InfiniteCalendarCanvas({
       lastCommitRef.current.centerDate = centerDate;
     }
   }, [cameraSteps, dayColumns, onCenterDateChange, onRangeChange, reference, view, visibleWindow.end, visibleWindow.start]);
+  emitCommittedViewportRef.current = emitCommittedViewport;
 
   const finalizeWheelSession = useCallback((commit = true) => {
     clearWheelCommitTimer();
@@ -492,7 +525,7 @@ export default function InfiniteCalendarCanvas({
     }
     commitTimerRef.current = window.setTimeout(() => {
       commitTimerRef.current = 0;
-      emitCommittedViewport();
+      emitCommittedViewportRef.current?.();
     }, COMMIT_IDLE_MS);
 
     return () => {
@@ -587,12 +620,12 @@ export default function InfiniteCalendarCanvas({
       return;
     }
     if (finalizeWheelSession(true)) {
-      emitCommittedViewport();
+      emitCommittedViewportRef.current?.();
     }
     settleInertia(true);
     const eventNode = event.target.closest('.canvas-event');
-    const eventId = eventNode ? eventNode.getAttribute('data-event-id') : null;
-    const targetEvent = eventId ? (events || []).find((item) => String(item.id) === String(eventId)) : null;
+    const eventKey = eventNode ? eventNode.getAttribute('data-event-key') : null;
+    const targetEvent = eventKey ? (eventByKey.get(eventKey) || null) : null;
     const resizeHandle = event.target.closest('.canvas-event-resize');
     const isReadonly = targetEvent ? isReadonlyEvent(targetEvent) : false;
     const dragMode = targetEvent && !isReadonly ? (resizeHandle ? 'resize' : 'event') : 'navigate';
@@ -607,7 +640,7 @@ export default function InfiniteCalendarCanvas({
       axis: isMonthView ? 'y' : 'x',
       pointerId: event.pointerId,
       mode: dragMode,
-      eventCandidate: eventId,
+      eventCandidate: eventKey,
       dragEvent: targetEvent || null,
       lastClientX: event.clientX,
       lastClientY: event.clientY,
@@ -645,7 +678,7 @@ export default function InfiniteCalendarCanvas({
     if (targetEvent && !isReadonly) {
       dragRef.current.ignoreClickTarget = false;
     }
-  }, [clearLongPressTimer, emitCommittedViewport, events, finalizeWheelSession, isMonthView, lockTextSelection, settleInertia]);
+  }, [clearLongPressTimer, eventByKey, finalizeWheelSession, isMonthView, lockTextSelection, settleInertia]);
 
   const handlePointerMove = useCallback((event) => {
     const drag = dragRef.current;
@@ -724,7 +757,7 @@ export default function InfiniteCalendarCanvas({
       if (drag.moved) {
         setEventGestureLocked(true);
         setDragVisual({
-          eventId: drag.dragEvent?.id,
+          eventKey: drag.eventCandidate,
           mode: drag.mode,
           dx,
           dy,
@@ -815,7 +848,7 @@ export default function InfiniteCalendarCanvas({
         return;
       }
       if (eventCandidate) {
-        const targetEvent = (events || []).find((item) => String(item.id) === String(eventCandidate));
+        const targetEvent = eventByKey.get(eventCandidate) || null;
         if (targetEvent) {
           onOpenEvent?.(targetEvent);
           return;
@@ -856,7 +889,7 @@ export default function InfiniteCalendarCanvas({
     if (drag.mode === 'navigate') {
       if (!isMonthView && drag.axis === 'y-native') {
         resetPanLayer();
-        emitCommittedViewport();
+        emitCommittedViewportRef.current?.();
         return;
       }
       const gestureDelta = drag.axis === 'x'
@@ -884,11 +917,10 @@ export default function InfiniteCalendarCanvas({
       }
       return;
     }
-    emitCommittedViewport();
+    emitCommittedViewportRef.current?.();
   }, [
     computeDragRange,
-    emitCommittedViewport,
-    events,
+    eventByKey,
     isMonthView,
     onMoveEvent,
     onOpenEvent,
@@ -900,9 +932,21 @@ export default function InfiniteCalendarCanvas({
 
   const handleWheel = useCallback((event) => {
     const axis = isMonthView ? 'y' : 'x';
+    const absX = Math.abs(event.deltaX || 0);
+    const absY = Math.abs(event.deltaY || 0);
     if (!isMonthView) {
-      const horizontalIntent = Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.shiftKey;
+      const horizontalIntent = event.shiftKey || absX > (absY * 1.2);
       if (!horizontalIntent) {
+        if (finalizeWheelSession(true)) {
+          emitCommittedViewportRef.current?.();
+        }
+        settleInertia(true);
+        const scroller = timeGridScrollRef.current;
+        if (scroller && Number.isFinite(event.deltaY) && Math.abs(event.deltaY) > 0) {
+          if (event.cancelable) event.preventDefault();
+          event.stopPropagation();
+          scroller.scrollTop = Math.max(0, scroller.scrollTop + event.deltaY);
+        }
         return;
       }
     }
@@ -926,10 +970,10 @@ export default function InfiniteCalendarCanvas({
     wheelCommitTimerRef.current = window.setTimeout(() => {
       wheelCommitTimerRef.current = 0;
       if (finalizeWheelSession(true)) {
-        emitCommittedViewport();
+        emitCommittedViewportRef.current?.();
       }
     }, WHEEL_COMMIT_IDLE_MS);
-  }, [clearWheelCommitTimer, emitCommittedViewport, finalizeWheelSession, isMonthView, schedulePanLayer, settleInertia]);
+  }, [clearWheelCommitTimer, finalizeWheelSession, isMonthView, schedulePanLayer, settleInertia]);
 
   const weekDayLabels = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -968,13 +1012,14 @@ export default function InfiniteCalendarCanvas({
     }
 
     const timedByDay = new Map();
-    (events || []).forEach((event) => {
+    eventEntries.forEach(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid() || event?.allDay) return;
       const dayKey = start.format('YYYY-MM-DD');
       const list = timedByDay.get(dayKey) || [];
       const end = event?.end ? parseEventInTimezone(event.end, timezone) : start.add(30, 'minute');
       list.push({
+        eventKey,
         event,
         start,
         end: end.isAfter(start) ? end : start.add(30, 'minute'),
@@ -982,7 +1027,7 @@ export default function InfiniteCalendarCanvas({
       timedByDay.set(dayKey, list);
     });
 
-    const layoutByEventId = new Map();
+    const layoutByEventKey = new Map();
     timedByDay.forEach((list) => {
       const sorted = [...list].sort((a, b) => {
         const diff = a.start.valueOf() - b.start.valueOf();
@@ -996,7 +1041,7 @@ export default function InfiniteCalendarCanvas({
       const finalizeCluster = () => {
         if (!clusterItems.length) return;
         clusterItems.forEach((item) => {
-          layoutByEventId.set(String(item.event.id), { col: item.col, cols: clusterMaxCols });
+          layoutByEventKey.set(String(item.eventKey), { col: item.col, cols: clusterMaxCols });
         });
         clusterItems.length = 0;
         clusterMaxCols = 0;
@@ -1020,14 +1065,14 @@ export default function InfiniteCalendarCanvas({
       finalizeCluster();
     });
 
-    const blocks = (events || []).flatMap((event) => {
+    const blocks = eventEntries.flatMap(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return [];
       const allDay = !!event?.allDay;
       const dayIndex = start.startOf('day').diff(reference, 'day');
       const columnBaseLeft = TIME_AXIS_WIDTH + (dayIndex - cameraSteps) * dayWidth + 2;
       const slotWidth = Math.max(20, dayWidth - 6);
-      const layout = allDay ? { col: 0, cols: 1 } : (layoutByEventId.get(String(event.id)) || { col: 0, cols: 1 });
+      const layout = allDay ? { col: 0, cols: 1 } : (layoutByEventKey.get(String(eventKey)) || { col: 0, cols: 1 });
       const cols = Math.max(1, layout.cols || 1);
       const col = Math.max(0, Math.min(cols - 1, layout.col || 0));
       const colWidth = slotWidth / cols;
@@ -1059,6 +1104,7 @@ export default function InfiniteCalendarCanvas({
       const status = event?.extendedProps?.status || 'pending';
       const readonly = isReadonlyEvent(event);
       return [{
+        eventKey,
         event,
         style: {
           left: x,
@@ -1090,8 +1136,8 @@ export default function InfiniteCalendarCanvas({
           className="absolute inset-0 will-change-transform"
         >
           {columns}
-          {blocks.map(({ event, style, className, titleStyle }) => {
-            const isDraggingThis = dragVisual && String(dragVisual.eventId) === String(event.id);
+          {blocks.map(({ eventKey, event, style, className, titleStyle }) => {
+            const isDraggingThis = dragVisual && String(dragVisual.eventKey) === String(eventKey);
             const readonly = isReadonlyEvent(event);
             const visualStyle = isDraggingThis
               ? {
@@ -1105,7 +1151,8 @@ export default function InfiniteCalendarCanvas({
               : style;
             return (
             <div
-              key={event.id}
+              key={eventKey}
+              data-event-key={eventKey}
               data-event-id={event.id}
               className={`${className} ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
               style={{
@@ -1157,14 +1204,14 @@ export default function InfiniteCalendarCanvas({
     }
 
     const byCell = new Map();
-    (events || []).forEach((event) => {
+    eventEntries.forEach(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return;
       const weekIndex = start.startOf('week').diff(reference, 'week');
       const day = start.day();
       const key = `${weekIndex}|${day}`;
       const list = byCell.get(key) || [];
-      list.push({ event, start });
+      list.push({ eventKey, event, start });
       byCell.set(key, list);
     });
 
@@ -1185,7 +1232,8 @@ export default function InfiniteCalendarCanvas({
         const readonly = isReadonlyEvent(item.event);
         monthEvents.push(
           <div
-            key={item.event.id}
+            key={item.eventKey}
+            data-event-key={item.eventKey}
             data-event-id={item.event.id}
             className={`canvas-event absolute h-5 overflow-hidden rounded px-1 text-[10px] ${
               readonly ? 'bg-slate-500/85 text-white' : 'bg-blue-600/80 text-white'

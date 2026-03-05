@@ -36,6 +36,39 @@ test('buildProjectedEventsFromTasks filters cancelled tasks', () => {
   assert.equal(projected[0].extendedProps.taskId, 1);
 });
 
+test('buildProjectedEventsFromTasks excludes readonly caldav tasks', () => {
+  const tasks = [
+    {
+      id: -101,
+      title: 'caldav',
+      status: 'pending',
+      source: 'caldav',
+      read_only: true,
+      start_time: '2026-03-01T10:00:00Z',
+      end_time: '2026-03-01T11:00:00Z',
+      priority: 0,
+    },
+    {
+      id: 7,
+      title: 'local',
+      status: 'pending',
+      start_time: '2026-03-01T10:00:00Z',
+      end_time: '2026-03-01T11:00:00Z',
+      priority: 0,
+    },
+  ];
+
+  const projected = buildProjectedEventsFromTasks(tasks, {
+    rangeStart: '2026-03-01T00:00:00Z',
+    rangeEnd: '2026-03-02T00:00:00Z',
+    timezone: 'UTC',
+    toCalendarISO: (v) => v,
+  });
+
+  assert.equal(projected.length, 1);
+  assert.equal(projected[0].extendedProps.taskId, 7);
+});
+
 test('buildProjectedEventsFromTasks keeps timezone-boundary task in week/month ranges', () => {
   const tasks = [
     {
@@ -89,7 +122,7 @@ test('mergeCalendarEvents removes cancelled server events and keeps recurring', 
   assert.ok(merged.some((item) => item.extendedProps?.taskId === 1));
 });
 
-test('mergeCalendarEvents drops tasks cancelled in local status index', () => {
+test('mergeCalendarEvents keeps server events even if local status index marks cancelled', () => {
   const tasks = [{ id: 9, status: 'cancelled' }];
   const statusIndex = buildTaskStatusIndex(tasks);
   const server = [
@@ -101,10 +134,11 @@ test('mergeCalendarEvents drops tasks cancelled in local status index', () => {
   ];
 
   const merged = mergeCalendarEvents(server, [], statusIndex);
-  assert.equal(merged.length, 0);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].extendedProps.taskId, 9);
 });
 
-test('mergeCalendarEvents prunes stale server events after local delete', () => {
+test('mergeCalendarEvents does not prune server events by local presence set', () => {
   const tasks = [{ id: 1, status: 'pending' }];
   const statusIndex = buildTaskStatusIndex(tasks);
   const server = [
@@ -121,6 +155,51 @@ test('mergeCalendarEvents prunes stale server events after local delete', () => 
   ];
 
   const merged = mergeCalendarEvents(server, [], statusIndex);
+  assert.equal(merged.length, 2);
+  assert.ok(merged.some((item) => item.extendedProps.taskId === 1));
+  assert.ok(merged.some((item) => item.extendedProps.taskId === 2));
+});
+
+test('mergeCalendarEvents keeps multiple server events sharing same taskId', () => {
+  const server = [
+    {
+      id: 'ev-a',
+      start: '2025-08-01T10:00:00Z',
+      extendedProps: { taskId: 42, status: 'pending', isRecurring: false, readOnly: true, source: 'caldav' },
+    },
+    {
+      id: 'ev-b',
+      start: '2026-12-01T10:00:00Z',
+      extendedProps: { taskId: 42, status: 'pending', isRecurring: false, readOnly: true, source: 'caldav' },
+    },
+  ];
+
+  const merged = mergeCalendarEvents(server, [], { cancelled: new Set(), present: new Set() });
+  assert.equal(merged.length, 2);
+  assert.ok(merged.some((item) => item.id === 'ev-a'));
+  assert.ok(merged.some((item) => item.id === 'ev-b'));
+});
+
+test('mergeCalendarEvents does not override readonly server event with projected duplicate', () => {
+  const server = [
+    {
+      id: 'readonly-1',
+      start: '2026-12-01T10:00:00Z',
+      title: 'server',
+      extendedProps: { taskId: 501, status: 'pending', isRecurring: false, readOnly: true, source: 'caldav' },
+    },
+  ];
+  const projected = [
+    {
+      id: 'task-501',
+      start: '2026-12-01T02:00:00Z',
+      title: 'projected',
+      extendedProps: { taskId: 501, status: 'pending', isRecurring: false, source: 'local_projection' },
+    },
+  ];
+
+  const merged = mergeCalendarEvents(server, projected, { cancelled: new Set(), present: new Set() });
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].extendedProps.taskId, 1);
+  assert.equal(merged[0].id, 'readonly-1');
+  assert.equal(merged[0].title, 'server');
 });

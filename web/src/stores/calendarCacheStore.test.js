@@ -1,0 +1,117 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import useCalendarCacheStore from './calendarCacheStore.js';
+
+function makeEvent(id, title, start, end = '') {
+  return {
+    id,
+    title,
+    start,
+    end,
+    allDay: false,
+    extendedProps: {
+      status: 'pending',
+      taskId: 0,
+      readOnly: true,
+      source: 'caldav',
+    },
+  };
+}
+
+test.beforeEach(() => {
+  useCalendarCacheStore.getState().clear();
+});
+
+test('replaceRangeEvents clears stale events inside fetched range and keeps empty-day marker', () => {
+  const store = useCalendarCacheStore.getState();
+
+  store.replaceRangeEvents(
+    '2026-03-01T00:00:00.000Z',
+    '2026-03-03T23:59:59.999Z',
+    'UTC',
+    {
+      '2026-03-01': [makeEvent('a', 'A', '2026-03-01T08:00:00.000Z')],
+      '2026-03-02': [makeEvent('b', 'B', '2026-03-02T08:00:00.000Z')],
+    },
+  );
+
+  let bucket = store.getEventsMapForTimezone('UTC');
+  assert.equal(bucket['2026-03-02'].length, 1);
+
+  const changed = store.replaceRangeEvents(
+    '2026-03-01T00:00:00.000Z',
+    '2026-03-03T23:59:59.999Z',
+    'UTC',
+    {
+      '2026-03-01': [makeEvent('a', 'A', '2026-03-01T08:00:00.000Z')],
+    },
+  );
+
+  bucket = store.getEventsMapForTimezone('UTC');
+  assert.ok(Array.isArray(bucket['2026-03-02']));
+  assert.equal(bucket['2026-03-02'].length, 0);
+  assert.ok(changed.has('2026-03-02'));
+  assert.equal(
+    store.isRangeFullyCached('2026-03-01T00:00:00.000Z', '2026-03-03T23:59:59.999Z', 'UTC'),
+    true,
+  );
+});
+
+test('calendar cache is isolated by timezone bucket', () => {
+  const store = useCalendarCacheStore.getState();
+
+  store.replaceRangeEvents(
+    '2026-03-01T00:00:00.000Z',
+    '2026-03-01T23:59:59.999Z',
+    'UTC',
+    {
+      '2026-03-01': [makeEvent('utc-1', 'UTC Event', '2026-03-01T08:00:00.000Z')],
+    },
+  );
+
+  store.replaceRangeEvents(
+    '2026-03-01T00:00:00+08:00',
+    '2026-03-01T23:59:59+08:00',
+    'Asia/Shanghai',
+    {
+      '2026-03-01': [makeEvent('cst-1', 'CST Event', '2026-03-01T08:00:00+08:00')],
+    },
+  );
+
+  assert.equal(store.getEventsForDate('2026-03-01', 'UTC')[0].id, 'utc-1');
+  assert.equal(store.getEventsForDate('2026-03-01', 'Asia/Shanghai')[0].id, 'cst-1');
+
+  store.clear('UTC');
+  assert.equal(store.getEventsForDate('2026-03-01', 'UTC').length, 0);
+  assert.equal(store.getEventsForDate('2026-03-01', 'Asia/Shanghai').length, 1);
+});
+
+test('replaceFetchedSegments batches multiple segment updates', () => {
+  const store = useCalendarCacheStore.getState();
+
+  const changed = store.replaceFetchedSegments([
+    {
+      start: '2026-03-01T00:00:00.000Z',
+      end: '2026-03-02T00:00:00.000Z',
+      timezone: 'UTC',
+      eventsByDate: {
+        '2026-03-01': [makeEvent('s1', 'S1', '2026-03-01T08:00:00.000Z')],
+      },
+    },
+    {
+      start: '2026-03-02T00:00:00.000Z',
+      end: '2026-03-03T00:00:00.000Z',
+      timezone: 'UTC',
+      eventsByDate: {
+        '2026-03-02': [makeEvent('s2', 'S2', '2026-03-02T08:00:00.000Z')],
+      },
+    },
+  ]);
+
+  assert.equal(changed.size, 2);
+  assert.equal(store.getEventsForDate('2026-03-01', 'UTC').length, 1);
+  assert.equal(store.getEventsForDate('2026-03-02', 'UTC').length, 1);
+  const next = useCalendarCacheStore.getState();
+  assert.equal(Array.isArray(next.metadata.loadedRanges), true);
+  assert.equal(next.metadata.loadedRanges.length, 2);
+});

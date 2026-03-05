@@ -3,7 +3,7 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { calendarAPI } from '../api/client';
 import TaskModal from './TaskModal';
@@ -18,10 +18,8 @@ import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMuta
 import { useTasksQuery } from '../query/hooks';
 import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvents } from './calendarEventMerge';
 import { openSearchDialog } from '../state/searchOverlay';
-// 新架构导入
-import { useCalendarFetch, useEventsForRange, useInvalidateCalendarDates } from '../hooks/useCalendarFetch';
-import { useCalendarPrefetchManager } from '../hooks/useCalendarPrefetchManager';
-import { getEventDates } from '../utils/calendarEvents';
+import { useCalendarFetch, useEventsForRange } from '../hooks/useCalendarFetch';
+import useCalendarCacheStore from '../stores/calendarCacheStore';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -234,6 +232,7 @@ function CalendarView() {
   const [hasCalendarDataLoaded, setHasCalendarDataLoaded] = useState(false);
   const [canvasAnchorDate, setCanvasAnchorDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
   const [canvasNudgeDirection, setCanvasNudgeDirection] = useState(0);
+  const timezoneRef = useRef(timezone);
 
   const timeGranularity = getUserTimeGranularity();
   const calendarLocale = i18n.language === 'zh-CN' ? 'zh-cn' : 'en';
@@ -300,9 +299,12 @@ function CalendarView() {
 
   useEffect(() => {
     const syncCalendarPrefs = () => {
+      useCalendarCacheStore.getState().clear();
       setCalendarDefaultView(readCalendarDefaultView());
       setTimezone(getUserTimezone());
       setCalendarPool({ start: '', end: '' });
+      setDateRange({ start: '', end: '' });
+      setHasCalendarDataLoaded(false);
     };
     window.addEventListener('user:profile-updated', syncCalendarPrefs);
     window.addEventListener('storage', syncCalendarPrefs);
@@ -311,6 +313,15 @@ function CalendarView() {
       window.removeEventListener('storage', syncCalendarPrefs);
     };
   }, []);
+
+  useEffect(() => {
+    if (timezoneRef.current === timezone) return;
+    timezoneRef.current = timezone;
+    useCalendarCacheStore.getState().clear();
+    setCalendarPool({ start: '', end: '' });
+    setDateRange({ start: '', end: '' });
+    setHasCalendarDataLoaded(false);
+  }, [timezone]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -471,7 +482,7 @@ function CalendarView() {
   /**
    * 1. 数据获取：使用 TanStack Query 获取数据，自动写入 CacheSet
    */
-  const { isLoading: calendarLoading, error: calendarError } = useCalendarFetch(
+  const { isLoading: calendarLoading } = useCalendarFetch(
     calendarPool.start,
     calendarPool.end,
     timezone,
@@ -479,18 +490,7 @@ function CalendarView() {
   );
 
   /**
-   * 2. 预加载管理器：后台预加载用户可能滚动到的数据
-   */
-  const { prefetchImmediately } = useCalendarPrefetchManager({
-    visibleStartDate: dateRange.start,
-    visibleEndDate: dateRange.end,
-    timezone,
-    prefetchPastDays: 30,
-    prefetchFutureDays: 60,
-  });
-
-  /**
-   * 3. 从 CacheSet 获取当前可见范围的事件
+   * 2. 从 CacheSet 获取当前可见范围的事件
    *    这是新的数据获取方式，不再依赖 pooledEvents
    */
   const rawEvents = useEventsForRange(
@@ -498,20 +498,6 @@ function CalendarView() {
     dateRange.end,
     timezone
   );
-
-  /**
-   * 4. 缓存失效工具
-   */
-  const invalidateCalendarDates = useInvalidateCalendarDates();
-
-  // ==================== 保留的日历重新验证逻辑（简化版） ====================
-  // 注意：新架构中，预加载管理器处理后台数据获取，这里保留最基础的重验证逻辑
-  const revalidateVisibleCalendar = useCallback((reason = 'interval') => {
-    // 新架构中不需要手动触发重新验证，useCalendarFetch 会自动处理
-    console.log(`[Calendar] Revalidate requested (${reason}), handled by new architecture`);
-  }, []);
-
-  // 移除旧的自动重新验证 useEffect（由预加载管理器处理）
 
   // 保留任务投影更新到缓存的逻辑
   useEffect(() => {
@@ -711,11 +697,8 @@ function CalendarView() {
       pendingFocusDateRef.current = nextCurrent;
       setMobileStripStartDate(nextStart);
       setMobileCurrentDate(nextCurrent);
-
-      const api = calendarRef.current?.getApi();
-      if (api) {
-        api.gotoDate(nextCurrent);
-      }
+      setCanvasAnchorDate(nextCurrent);
+      setCanvasNudgeDirection(0);
 
       stripAnimationRef.current = { ...animation, phase: 'in' };
       setStripTransitionMs(0);
