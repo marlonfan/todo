@@ -1,11 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
+import { flushSync } from 'react-dom';
 
 const HOUR_HEIGHT = 56;
 const MONTH_WEEK_HEIGHT = 164;
 const HEADER_HEIGHT = 36;
 const TIME_AXIS_WIDTH = 46;
 const COMMIT_IDLE_MS = 120;
+const GESTURE_ACTIVATE_PX = 4;
+const CLICK_CANCEL_DISTANCE_PX = 8;
+const LONG_PRESS_TO_DRAG_MS = 260;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 14;
+const HORIZONTAL_DRAG_GAIN = 1.24;
+const INERTIA_MIN_VELOCITY = 0.008; // px/ms
+const INERTIA_STOP_VELOCITY = 0.0025; // px/ms
+const INERTIA_DECAY_PER_16MS = 0.955;
 
 function clampDurationMinutes(start, end) {
   const s = dayjs(start);
@@ -56,27 +65,54 @@ export default function InfiniteCalendarCanvas({
 }) {
   const viewportRef = useRef(null);
   const timeGridScrollRef = useRef(null);
+  const longPressTimerRef = useRef(0);
   const userSelectPrevRef = useRef('');
   const commitTimerRef = useRef(0);
   const lastCommitRef = useRef({ rangeStart: '', rangeEnd: '', centerDate: '' });
+  const offsetPxRef = useRef(0);
+  const pendingOffsetRef = useRef(null);
+  const offsetFrameRef = useRef(0);
+  const panLayerRef = useRef(null);
+  const panFrameRef = useRef(0);
+  const pendingPanDeltaRef = useRef(0);
+  const currentPanDeltaRef = useRef(0);
+  const inertiaFrameRef = useRef(0);
+  const inertiaRef = useRef({
+    active: false,
+    mode: '',
+    delta: 0,
+    velocity: 0,
+    startOffset: 0,
+    startScrollTop: 0,
+    lastTs: 0,
+  });
   const dragRef = useRef({
     active: false,
     moved: false,
     startX: 0,
     startY: 0,
     startOffset: 0,
-    axis: 'x',
+    axis: '',
     pointerId: null,
     mode: 'navigate',
     eventCandidate: null,
     dragEvent: null,
     lastClientX: 0,
     lastClientY: 0,
+    startScrollTop: 0,
+    velocity: 0,
+    lastInstantVelocity: 0,
+    lastMoveTs: 0,
+    lastAxisDelta: 0,
+    requiresLongPress: false,
+    longPressTriggered: false,
     ignoreClickTarget: false,
+    captured: false,
   });
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [offsetPx, setOffsetPx] = useState(0);
   const [dragVisual, setDragVisual] = useState(null);
+  const [eventGestureLocked, setEventGestureLocked] = useState(false);
   const dayColumns = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const dayWidth = useMemo(() => {
     const usable = Math.max(240, (viewportSize.width || 700) - TIME_AXIS_WIDTH);
@@ -103,13 +139,221 @@ export default function InfiniteCalendarCanvas({
     userSelectPrevRef.current = '';
   }, []);
 
+  const clearLongPressTimer = useCallback(() => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = 0;
+    }
+  }, []);
+
   useEffect(() => () => {
     unlockTextSelection();
+    clearLongPressTimer();
     if (commitTimerRef.current) {
       window.clearTimeout(commitTimerRef.current);
       commitTimerRef.current = 0;
     }
-  }, [unlockTextSelection]);
+    if (offsetFrameRef.current) {
+      window.cancelAnimationFrame(offsetFrameRef.current);
+      offsetFrameRef.current = 0;
+    }
+    if (panFrameRef.current) {
+      window.cancelAnimationFrame(panFrameRef.current);
+      panFrameRef.current = 0;
+    }
+    if (inertiaFrameRef.current) {
+      window.cancelAnimationFrame(inertiaFrameRef.current);
+      inertiaFrameRef.current = 0;
+    }
+    pendingOffsetRef.current = null;
+    pendingPanDeltaRef.current = 0;
+    currentPanDeltaRef.current = 0;
+    inertiaRef.current.active = false;
+    inertiaRef.current.mode = '';
+    inertiaRef.current.delta = 0;
+    inertiaRef.current.velocity = 0;
+    inertiaRef.current.startOffset = 0;
+    inertiaRef.current.startScrollTop = 0;
+    inertiaRef.current.lastTs = 0;
+    const layer = panLayerRef.current;
+    if (layer) {
+      layer.style.transform = 'translate3d(0, 0, 0)';
+    }
+  }, [clearLongPressTimer, unlockTextSelection]);
+
+  const commitOffsetPx = useCallback((nextOffset) => {
+    if (!Number.isFinite(nextOffset)) return;
+    offsetPxRef.current = nextOffset;
+    setOffsetPx((prev) => (Math.abs(prev - nextOffset) < 0.01 ? prev : nextOffset));
+  }, []);
+
+  const scheduleOffsetPx = useCallback((nextOffset) => {
+    if (!Number.isFinite(nextOffset)) return;
+    offsetPxRef.current = nextOffset;
+    pendingOffsetRef.current = nextOffset;
+    if (offsetFrameRef.current) return;
+    offsetFrameRef.current = window.requestAnimationFrame(() => {
+      offsetFrameRef.current = 0;
+      const pending = pendingOffsetRef.current;
+      pendingOffsetRef.current = null;
+      if (!Number.isFinite(pending)) return;
+      commitOffsetPx(pending);
+    });
+  }, [commitOffsetPx]);
+
+  const flushPendingOffsetPx = useCallback(() => {
+    if (offsetFrameRef.current) {
+      window.cancelAnimationFrame(offsetFrameRef.current);
+      offsetFrameRef.current = 0;
+    }
+    const pending = pendingOffsetRef.current;
+    pendingOffsetRef.current = null;
+    if (Number.isFinite(pending)) {
+      commitOffsetPx(pending);
+      return pending;
+    }
+    return offsetPxRef.current;
+  }, [commitOffsetPx]);
+
+  const flushPanLayer = useCallback((delta = 0) => {
+    const layer = panLayerRef.current;
+    if (!layer) return;
+    const moveDelta = Number.isFinite(delta) ? delta : 0;
+    currentPanDeltaRef.current = moveDelta;
+    if (Math.abs(moveDelta) < 0.01) {
+      layer.style.transform = 'translate3d(0, 0, 0)';
+      return;
+    }
+    if (isMonthView) {
+      layer.style.transform = `translate3d(0, ${moveDelta}px, 0)`;
+    } else {
+      layer.style.transform = `translate3d(${moveDelta}px, 0, 0)`;
+    }
+  }, [isMonthView]);
+
+  const schedulePanLayer = useCallback((delta) => {
+    pendingPanDeltaRef.current = Number.isFinite(delta) ? delta : 0;
+    if (panFrameRef.current) return;
+    panFrameRef.current = window.requestAnimationFrame(() => {
+      panFrameRef.current = 0;
+      flushPanLayer(pendingPanDeltaRef.current);
+    });
+  }, [flushPanLayer]);
+
+  const resetPanLayer = useCallback(() => {
+    pendingPanDeltaRef.current = 0;
+    currentPanDeltaRef.current = 0;
+    if (panFrameRef.current) {
+      window.cancelAnimationFrame(panFrameRef.current);
+      panFrameRef.current = 0;
+    }
+    flushPanLayer(0);
+  }, [flushPanLayer]);
+
+  const cancelInertia = useCallback(() => {
+    inertiaRef.current.active = false;
+    inertiaRef.current.mode = '';
+    inertiaRef.current.delta = 0;
+    inertiaRef.current.velocity = 0;
+    inertiaRef.current.startOffset = 0;
+    inertiaRef.current.startScrollTop = 0;
+    inertiaRef.current.lastTs = 0;
+    if (inertiaFrameRef.current) {
+      window.cancelAnimationFrame(inertiaFrameRef.current);
+      inertiaFrameRef.current = 0;
+    }
+  }, []);
+
+  const settleInertia = useCallback((commit = true) => {
+    const snapshot = { ...inertiaRef.current };
+    if (!snapshot.active && !snapshot.mode) return;
+    cancelInertia();
+    if (!commit) return;
+    if (snapshot.mode === 'offset') {
+      flushSync(() => {
+        commitOffsetPx(snapshot.startOffset - snapshot.delta);
+      });
+      resetPanLayer();
+      emitCommittedViewport();
+      return;
+    }
+    if (snapshot.mode === 'scroll') {
+      const scroller = timeGridScrollRef.current;
+      if (scroller) {
+        scroller.scrollTop = Math.max(0, snapshot.startScrollTop - snapshot.delta);
+      }
+      emitCommittedViewport();
+    }
+  }, [cancelInertia, commitOffsetPx, resetPanLayer]);
+
+  const startInertia = useCallback(({
+    mode,
+    startDelta,
+    velocity,
+    startOffset,
+    startScrollTop,
+  }) => {
+    const initialDelta = Number.isFinite(startDelta) ? startDelta : 0;
+    const initialVelocity = Number.isFinite(velocity) ? velocity : 0;
+
+    if (Math.abs(initialVelocity) < INERTIA_MIN_VELOCITY) {
+      if (mode === 'offset') {
+        flushSync(() => {
+          commitOffsetPx(startOffset - initialDelta);
+        });
+        resetPanLayer();
+      } else {
+        const scroller = timeGridScrollRef.current;
+        if (scroller) {
+          scroller.scrollTop = Math.max(0, startScrollTop - initialDelta);
+        }
+      }
+      emitCommittedViewport();
+      return;
+    }
+
+    settleInertia(false);
+    inertiaRef.current = {
+      active: true,
+      mode,
+      delta: initialDelta,
+      velocity: initialVelocity,
+      startOffset,
+      startScrollTop,
+      lastTs: 0,
+    };
+
+    const tick = (ts) => {
+      const state = inertiaRef.current;
+      if (!state.active) return;
+      if (!state.lastTs) {
+        state.lastTs = ts;
+        inertiaFrameRef.current = window.requestAnimationFrame(tick);
+        return;
+      }
+      const dt = Math.min(40, Math.max(8, ts - state.lastTs));
+      state.lastTs = ts;
+      state.delta += state.velocity * dt;
+      state.velocity *= Math.pow(INERTIA_DECAY_PER_16MS, dt / 16);
+
+      if (state.mode === 'offset') {
+        schedulePanLayer(state.delta);
+      } else {
+        const scroller = timeGridScrollRef.current;
+        if (scroller) {
+          scroller.scrollTop = Math.max(0, state.startScrollTop - state.delta);
+        }
+      }
+
+      if (Math.abs(state.velocity) <= INERTIA_STOP_VELOCITY) {
+        settleInertia(true);
+        return;
+      }
+      inertiaFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    inertiaFrameRef.current = window.requestAnimationFrame(tick);
+  }, [commitOffsetPx, resetPanLayer, schedulePanLayer, settleInertia]);
 
   const reference = useMemo(() => {
     const base = anchorDate ? dayjs(anchorDate).tz(timezone) : dayjs().tz(timezone);
@@ -118,19 +362,29 @@ export default function InfiniteCalendarCanvas({
   }, [anchorDate, timezone, view]);
 
   useEffect(() => {
+    offsetPxRef.current = offsetPx;
+  }, [offsetPx]);
+
+  useEffect(() => {
     setOffsetPx(0);
-  }, [anchorDate, view, timezone]);
+    cancelInertia();
+    resetPanLayer();
+  }, [anchorDate, cancelInertia, resetPanLayer, view, timezone]);
 
   useEffect(() => {
     if (!todayJumpToken) return;
     setOffsetPx(0);
-  }, [todayJumpToken]);
+    cancelInertia();
+    resetPanLayer();
+  }, [cancelInertia, resetPanLayer, todayJumpToken]);
 
   useEffect(() => {
     if (!nudgeDirection) return;
     setOffsetPx((prev) => prev + (nudgeDirection * stepPx));
+    cancelInertia();
+    resetPanLayer();
     onNudgeConsumed?.();
-  }, [nudgeDirection, onNudgeConsumed, stepPx]);
+  }, [cancelInertia, nudgeDirection, onNudgeConsumed, resetPanLayer, stepPx]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -292,18 +546,21 @@ export default function InfiniteCalendarCanvas({
   const handlePointerDown = useCallback((event) => {
     if (event.button !== 0) return;
     if (event.target.closest('.canvas-ui-action')) return;
+    settleInertia(true);
     const eventNode = event.target.closest('.canvas-event');
     const eventId = eventNode ? eventNode.getAttribute('data-event-id') : null;
     const targetEvent = eventId ? (events || []).find((item) => String(item.id) === String(eventId)) : null;
     const resizeHandle = event.target.closest('.canvas-event-resize');
     const isReadonly = targetEvent ? isReadonlyEvent(targetEvent) : false;
     const dragMode = targetEvent && !isReadonly ? (resizeHandle ? 'resize' : 'event') : 'navigate';
+    const requiresLongPress = (dragMode === 'event' || dragMode === 'resize')
+      && (event.pointerType === 'touch' || event.pointerType === 'pen');
     dragRef.current = {
       active: true,
       moved: false,
       startX: event.clientX,
       startY: event.clientY,
-      startOffset: offsetPx,
+      startOffset: offsetPxRef.current,
       axis: isMonthView ? 'y' : 'x',
       pointerId: event.pointerId,
       mode: dragMode,
@@ -311,30 +568,117 @@ export default function InfiniteCalendarCanvas({
       dragEvent: targetEvent || null,
       lastClientX: event.clientX,
       lastClientY: event.clientY,
+      startScrollTop: timeGridScrollRef.current?.scrollTop || 0,
+      velocity: 0,
+      lastInstantVelocity: 0,
+      lastMoveTs: Number.isFinite(event.timeStamp) ? event.timeStamp : performance.now(),
+      lastAxisDelta: 0,
+      requiresLongPress,
+      longPressTriggered: false,
       ignoreClickTarget: false,
+      captured: false,
     };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    if (targetEvent && !isReadonly) {
-      event.preventDefault();
+    if (requiresLongPress) {
+      clearLongPressTimer();
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTimerRef.current = 0;
+        const activeDrag = dragRef.current;
+        if (!activeDrag.active) return;
+        if (activeDrag.pointerId !== event.pointerId) return;
+        if (activeDrag.mode !== 'event' && activeDrag.mode !== 'resize') return;
+        activeDrag.longPressTriggered = true;
+        activeDrag.moved = true;
+        activeDrag.ignoreClickTarget = true;
+        lockTextSelection();
+        if (!activeDrag.captured) {
+          viewportRef.current?.setPointerCapture?.(activeDrag.pointerId);
+          activeDrag.captured = true;
+        }
+        setEventGestureLocked(true);
+      }, LONG_PRESS_TO_DRAG_MS);
+    } else {
+      setEventGestureLocked(false);
     }
-  }, [events, isMonthView, offsetPx]);
+    if (targetEvent && !isReadonly) {
+      dragRef.current.ignoreClickTarget = false;
+    }
+  }, [clearLongPressTimer, events, isMonthView, lockTextSelection, settleInertia]);
 
   const handlePointerMove = useCallback((event) => {
     const drag = dragRef.current;
     if (!drag.active) return;
     drag.lastClientX = event.clientX;
     drag.lastClientY = event.clientY;
-    const delta = drag.axis === 'x'
-      ? event.clientX - drag.startX
-      : event.clientY - drag.startY;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    if (!drag.ignoreClickTarget && (absX > CLICK_CANCEL_DISTANCE_PX || absY > CLICK_CANCEL_DISTANCE_PX)) {
+      drag.ignoreClickTarget = true;
+    }
+    if ((drag.mode === 'event' || drag.mode === 'resize') && drag.requiresLongPress && !drag.longPressTriggered) {
+      if (absX <= LONG_PRESS_MOVE_TOLERANCE_PX && absY <= LONG_PRESS_MOVE_TOLERANCE_PX) {
+        return;
+      }
+      clearLongPressTimer();
+      if (!isMonthView && absY >= absX * 0.9) {
+        drag.mode = 'navigate';
+        drag.dragEvent = null;
+        drag.eventCandidate = null;
+        drag.axis = 'y-manual';
+        drag.moved = true;
+        drag.ignoreClickTarget = true;
+        lockTextSelection();
+        if (!drag.captured) {
+          event.currentTarget.setPointerCapture?.(drag.pointerId);
+          drag.captured = true;
+        }
+        setEventGestureLocked(false);
+        return;
+      }
+      if (drag.mode === 'event' && absX > absY * 1.35) {
+        drag.mode = 'navigate';
+        drag.dragEvent = null;
+        drag.eventCandidate = null;
+        drag.axis = 'x';
+        drag.moved = true;
+        drag.ignoreClickTarget = true;
+        lockTextSelection();
+        if (!drag.captured) {
+          event.currentTarget.setPointerCapture?.(drag.pointerId);
+          drag.captured = true;
+        }
+        setEventGestureLocked(false);
+      } else {
+        return;
+      }
+    }
     if (drag.mode === 'event' || drag.mode === 'resize') {
-      const dx = event.clientX - drag.startX;
-      const dy = event.clientY - drag.startY;
-      if (!drag.moved && (Math.abs(dx) > 1 || Math.abs(dy) > 1)) {
+      // On editable cards, prioritize horizontal swipe navigation over event drag.
+      if (
+        drag.mode === 'event'
+        && !drag.moved
+        && absX > GESTURE_ACTIVATE_PX
+        && absX > absY * 1.35
+      ) {
+        clearLongPressTimer();
+        drag.mode = 'navigate';
+        drag.dragEvent = null;
+        drag.eventCandidate = null;
+        setEventGestureLocked(false);
+      }
+    }
+    if (drag.mode === 'event' || drag.mode === 'resize') {
+      if (!drag.moved && (absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX)) {
         drag.moved = true;
         lockTextSelection();
+        if (!drag.captured) {
+          event.currentTarget.setPointerCapture?.(drag.pointerId);
+          drag.captured = true;
+        }
       }
       if (drag.moved) {
+        setEventGestureLocked(true);
         setDragVisual({
           eventId: drag.dragEvent?.id,
           mode: drag.mode,
@@ -346,28 +690,68 @@ export default function InfiniteCalendarCanvas({
       return;
     }
     if (!drag.moved) {
-      const dx = event.clientX - drag.startX;
-      const dy = event.clientY - drag.startY;
-      if (drag.axis === 'x') {
-        if (Math.abs(dx) > 6 && Math.abs(dx) >= Math.abs(dy) * 0.9) {
+      if (isMonthView) {
+        if (absY > GESTURE_ACTIVATE_PX && absY >= absX * 0.72) {
           drag.moved = true;
-        } else if (Math.abs(dy) > 6 && Math.abs(dy) > Math.abs(dx)) {
-          drag.active = false;
-          return;
+          drag.axis = 'y';
+          lockTextSelection();
         }
-      } else if (Math.abs(delta) > 6) {
-        drag.moved = true;
+      } else {
+        const hasIntent = absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX;
+        if (hasIntent) {
+          if (absX >= absY * 0.92) {
+            drag.moved = true;
+            drag.axis = 'x';
+            lockTextSelection();
+          } else if (absY > absX * 1.1) {
+            // Let native vertical scroll handle this gesture in time-grid views.
+            drag.moved = true;
+            drag.axis = 'y-native';
+            drag.ignoreClickTarget = true;
+          }
+        }
+      }
+      if (drag.moved && !drag.captured && (isMonthView || drag.axis === 'x')) {
+        event.currentTarget.setPointerCapture?.(drag.pointerId);
+        drag.captured = true;
       }
     }
     if (!drag.moved) return;
     if (drag.mode === 'navigate') {
-      setOffsetPx(drag.startOffset - delta);
+      if (!isMonthView && drag.axis === 'y-native') {
+        // Let browser native scrolling/inertia run on vertical gestures.
+        return;
+      }
+      const axisDelta = drag.axis === 'x'
+        ? (dx * HORIZONTAL_DRAG_GAIN)
+        : dy;
+      const nowTs = Number.isFinite(event.timeStamp) ? event.timeStamp : performance.now();
+      const dt = Math.max(1, nowTs - (drag.lastMoveTs || nowTs));
+      const instantVelocity = (axisDelta - (drag.lastAxisDelta || 0)) / dt;
+      drag.lastInstantVelocity = instantVelocity;
+      drag.velocity = drag.velocity
+        ? (drag.velocity * 0.55) + (instantVelocity * 0.45)
+        : instantVelocity;
+      drag.lastMoveTs = nowTs;
+      drag.lastAxisDelta = axisDelta;
+
+      if (drag.axis === 'x' || isMonthView) {
+        schedulePanLayer(axisDelta);
+      } else {
+        const scroller = timeGridScrollRef.current;
+        if (scroller) {
+          scroller.scrollTop = Math.max(0, drag.startScrollTop - dy);
+        }
+      }
+      if (event.cancelable) event.preventDefault();
     }
-  }, []);
+  }, [clearLongPressTimer, isMonthView, lockTextSelection, schedulePanLayer]);
 
   const handlePointerUp = useCallback((event) => {
     const drag = dragRef.current;
     if (!drag.active) return;
+    clearLongPressTimer();
+    setEventGestureLocked(false);
     const wasMoved = !!drag.moved;
     const eventCandidate = drag.eventCandidate;
     const pointerId = drag.pointerId;
@@ -376,10 +760,12 @@ export default function InfiniteCalendarCanvas({
     dragRef.current.active = false;
     unlockTextSelection();
     setDragVisual(null);
-    if (event.currentTarget.hasPointerCapture?.(pointerId)) {
+    if (drag.captured && event.currentTarget.hasPointerCapture?.(pointerId)) {
       event.currentTarget.releasePointerCapture(pointerId);
     }
+    drag.captured = false;
     if (!wasMoved) {
+      resetPanLayer();
       if (drag.ignoreClickTarget) {
         return;
       }
@@ -394,7 +780,13 @@ export default function InfiniteCalendarCanvas({
       return;
     }
 
-    if ((drag.mode === 'event' || drag.mode === 'resize') && drag.dragEvent && onMoveEvent) {
+    const totalMoveDistance = Math.hypot(endX - drag.startX, endY - drag.startY);
+    if (
+      (drag.mode === 'event' || drag.mode === 'resize')
+      && drag.dragEvent
+      && onMoveEvent
+      && totalMoveDistance > 2
+    ) {
       const range = computeDragRange(drag, endX, endY);
       if (range) {
         if (drag.mode === 'event') {
@@ -416,8 +808,52 @@ export default function InfiniteCalendarCanvas({
         }
       }
     }
+    if (drag.mode === 'navigate') {
+      if (!isMonthView && drag.axis === 'y-native') {
+        resetPanLayer();
+        emitCommittedViewport();
+        return;
+      }
+      const gestureDelta = drag.axis === 'x'
+        ? ((endX - drag.startX) * HORIZONTAL_DRAG_GAIN)
+        : (endY - drag.startY);
+      if (drag.axis === 'x' || isMonthView) {
+        const releaseVelocity = Math.abs(drag.lastInstantVelocity || 0) > Math.abs(drag.velocity || 0)
+          ? (drag.lastInstantVelocity || 0)
+          : (drag.velocity || 0);
+        startInertia({
+          mode: 'offset',
+          startDelta: gestureDelta,
+          velocity: releaseVelocity,
+          startOffset: drag.startOffset,
+          startScrollTop: drag.startScrollTop,
+        });
+      } else {
+        startInertia({
+          mode: 'scroll',
+          startDelta: gestureDelta,
+          velocity: drag.velocity || 0,
+          startOffset: offsetPxRef.current,
+          startScrollTop: drag.startScrollTop,
+        });
+      }
+      return;
+    }
+    flushPendingOffsetPx();
     emitCommittedViewport();
-  }, [computeDragRange, emitCommittedViewport, events, onMoveEvent, onOpenEvent, openCreateAtPoint, unlockTextSelection]);
+  }, [
+    computeDragRange,
+    emitCommittedViewport,
+    events,
+    flushPendingOffsetPx,
+    isMonthView,
+    onMoveEvent,
+    onOpenEvent,
+    openCreateAtPoint,
+    startInertia,
+    unlockTextSelection,
+    clearLongPressTimer,
+  ]);
 
   const handleWheel = useCallback((event) => {
     const axis = isMonthView ? 'y' : 'x';
@@ -431,8 +867,8 @@ export default function InfiniteCalendarCanvas({
       ? event.deltaY
       : (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : (event.shiftKey ? event.deltaY : 0));
     if (!delta) return;
-    setOffsetPx((prev) => prev + delta);
-  }, [isMonthView]);
+    scheduleOffsetPx(offsetPxRef.current + delta);
+  }, [isMonthView, scheduleOffsetPx]);
 
   const weekDayLabels = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -444,8 +880,8 @@ export default function InfiniteCalendarCanvas({
       const day = reference.add(i, 'day');
       const x = TIME_AXIS_WIDTH + (i - cameraSteps) * dayWidth;
       columns.push(
-        <div key={`day-${i}`} className="absolute top-0 bottom-0 border-l border-blue-100" style={{ left: x, width: dayWidth }}>
-          <div className="sticky top-0 z-50 flex h-9 items-center justify-center border-b border-blue-100 bg-white/95 px-1 text-center text-xs font-semibold text-slate-700 backdrop-blur" style={{ zIndex: 70 }}>
+        <div key={`day-${i}`} className="pointer-events-none absolute top-0 bottom-0 border-l border-blue-100" style={{ left: x, width: dayWidth }}>
+          <div className="pointer-events-none sticky top-0 z-50 flex h-9 items-center justify-center border-b border-blue-100 bg-white/95 px-1 text-center text-xs font-semibold text-slate-700 backdrop-blur" style={{ zIndex: 70 }}>
             {day.format('M/D')} / 周{weekDayLabels[day.day()]}
           </div>
         </div>
@@ -456,7 +892,7 @@ export default function InfiniteCalendarCanvas({
     for (let h = 0; h <= 24; h += 1) {
       const y = HEADER_HEIGHT + h * HOUR_HEIGHT;
       hourLines.push(
-        <div key={`h-${h}`} className="absolute left-0 right-0 border-t border-blue-100" style={{ top: y }} />
+        <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-blue-100" style={{ top: y }} />
       );
     }
 
@@ -464,7 +900,7 @@ export default function InfiniteCalendarCanvas({
     for (let h = 0; h < 24; h += 1) {
       const y = HEADER_HEIGHT + h * HOUR_HEIGHT;
       timeAxis.push(
-        <div key={`t-${h}`} className="absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-500" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
+        <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-500" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
           {String(h).padStart(2, '0')}:00
         </div>
       );
@@ -583,45 +1019,52 @@ export default function InfiniteCalendarCanvas({
     return (
       <>
         <div
-          className="absolute left-0 top-0 bottom-0 z-30 border-r border-blue-100 bg-white/95"
+          className="pointer-events-none absolute left-0 top-0 bottom-0 z-30 border-r border-blue-100 bg-white/95"
           style={{ width: TIME_AXIS_WIDTH }}
         />
-        {columns}
         {hourLines}
         {timeAxis}
-        {blocks.map(({ event, style, className, titleStyle }) => {
-          const isDraggingThis = dragVisual && String(dragVisual.eventId) === String(event.id);
-          const visualStyle = isDraggingThis
-            ? {
-                ...style,
-                transform: `translate3d(${dragVisual.dx}px, ${dragVisual.mode === 'event' ? dragVisual.dy : 0}px, 0)`,
-                height: dragVisual.mode === 'resize'
-                  ? Math.max(18, (style.height || 18) + dragVisual.dy)
-                  : style.height,
-                zIndex: 90,
-              }
-            : style;
-          return (
-          <div
-            key={event.id}
-            data-event-id={event.id}
-            className={`${className} ${isReadonlyEvent(event) ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
-            style={{
-              ...visualStyle,
-              touchAction: isReadonlyEvent(event) ? 'auto' : 'none',
-              WebkitUserSelect: 'none',
-            }}
-          >
-            <span className="block" style={titleStyle}>{event.title || 'Untitled'}</span>
-            {!isReadonlyEvent(event) && !event?.allDay && (
-              <span
-                className="canvas-event-resize absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize"
-                style={{ touchAction: 'none' }}
-              />
-            )}
-          </div>
-          );
-        })}
+        <div
+          ref={panLayerRef}
+          className="absolute inset-0 will-change-transform"
+          style={{ transform: 'translate3d(0, 0, 0)' }}
+        >
+          {columns}
+          {blocks.map(({ event, style, className, titleStyle }) => {
+            const isDraggingThis = dragVisual && String(dragVisual.eventId) === String(event.id);
+            const readonly = isReadonlyEvent(event);
+            const visualStyle = isDraggingThis
+              ? {
+                  ...style,
+                  transform: `translate3d(${dragVisual.mode === 'event' ? dragVisual.dx : 0}px, ${dragVisual.mode === 'event' ? dragVisual.dy : 0}px, 0)`,
+                  height: dragVisual.mode === 'resize'
+                    ? Math.max(18, (style.height || 18) + dragVisual.dy)
+                    : style.height,
+                  zIndex: 90,
+                }
+              : style;
+            return (
+            <div
+              key={event.id}
+              data-event-id={event.id}
+              className={`${className} ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
+              style={{
+                ...visualStyle,
+                touchAction: isMonthView ? 'none' : (readonly ? 'pan-y' : 'none'),
+                WebkitUserSelect: 'none',
+              }}
+            >
+              <span className="block" style={titleStyle}>{event.title || 'Untitled'}</span>
+              {!readonly && !event?.allDay && (
+                <span
+                  className="canvas-event-resize absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize"
+                  style={{ touchAction: 'none' }}
+                />
+              )}
+            </div>
+            );
+          })}
+        </div>
       </>
     );
   };
@@ -636,16 +1079,16 @@ export default function InfiniteCalendarCanvas({
       const weekStart = reference.add(w, 'week');
       const y = HEADER_HEIGHT + (w - cameraSteps) * MONTH_WEEK_HEIGHT;
       rows.push(
-        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-blue-100" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
+        <div key={`w-${w}`} className="pointer-events-none absolute left-0 right-0 border-t border-blue-100" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
           {Array.from({ length: 7 }).map((_, d) => {
             const day = weekStart.add(d, 'day');
             return (
               <div
                 key={`${w}-${d}`}
-                className="absolute border-l border-blue-100 text-left"
+                className="pointer-events-none absolute border-l border-blue-100 text-left"
                 style={{ left: d * dayCellWidth, width: dayCellWidth, height: MONTH_WEEK_HEIGHT }}
               >
-                <span className="block px-1.5 pt-1 text-xs font-semibold text-slate-700">{day.format('M/D')}</span>
+                <span className="pointer-events-none block px-1.5 pt-1 text-xs font-semibold text-slate-700">{day.format('M/D')}</span>
               </div>
             );
           })}
@@ -659,7 +1102,7 @@ export default function InfiniteCalendarCanvas({
       if (!start.isValid()) return;
       const weekIndex = start.startOf('week').diff(reference, 'week');
       const day = start.day();
-      const key = `${weekIndex}-${day}`;
+      const key = `${weekIndex}|${day}`;
       const list = byCell.get(key) || [];
       list.push({ event, start });
       byCell.set(key, list);
@@ -668,7 +1111,7 @@ export default function InfiniteCalendarCanvas({
     const monthEvents = [];
     const moreIndicators = [];
     byCell.forEach((list, key) => {
-      const [weekPart, dayPart] = key.split('-');
+      const [weekPart, dayPart] = key.split('|');
       const weekIndex = Number.parseInt(weekPart, 10);
       const day = Number.parseInt(dayPart, 10);
       if (!Number.isFinite(weekIndex) || !Number.isFinite(day)) return;
@@ -727,16 +1170,22 @@ export default function InfiniteCalendarCanvas({
 
     return (
       <>
-        <div className="sticky top-0 z-20 flex h-9 border-b border-blue-100 bg-white/95 text-xs font-semibold text-slate-600 backdrop-blur">
+        <div className="pointer-events-none sticky top-0 z-20 flex h-9 border-b border-blue-100 bg-white/95 text-xs font-semibold text-slate-600 backdrop-blur">
           {weekDayLabels.map((label) => (
-            <div key={label} className="flex items-center justify-center border-l border-blue-100" style={{ width: dayCellWidth }}>
+            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-blue-100" style={{ width: dayCellWidth }}>
               周{label}
             </div>
           ))}
         </div>
-        {rows}
-        {monthEvents}
-        {moreIndicators}
+        <div
+          ref={panLayerRef}
+          className="absolute inset-x-0 top-0 bottom-0 will-change-transform"
+          style={{ transform: 'translate3d(0, 0, 0)' }}
+        >
+          {rows}
+          {monthEvents}
+          {moreIndicators}
+        </div>
       </>
     );
   };
@@ -751,7 +1200,7 @@ export default function InfiniteCalendarCanvas({
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       style={{
-        touchAction: isMonthView ? 'none' : 'pan-y',
+        touchAction: isMonthView ? 'none' : (eventGestureLocked ? 'none' : 'pan-y'),
         overscrollBehaviorX: 'none',
         overscrollBehaviorY: isMonthView ? 'none' : 'contain',
       }}
@@ -761,7 +1210,11 @@ export default function InfiniteCalendarCanvas({
           {renderMonthGrid()}
         </div>
       ) : (
-        <div ref={timeGridScrollRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden">
+        <div
+          ref={timeGridScrollRef}
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+          style={{ touchAction: eventGestureLocked ? 'none' : 'pan-y' }}
+        >
           <div className="relative" style={{ height: timelineHeight }}>
             {renderTimeGrid()}
           </div>
