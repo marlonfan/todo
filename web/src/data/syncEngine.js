@@ -104,6 +104,15 @@ function wait(ms) {
   });
 }
 
+async function safeLocalCall(fn, fallback, label) {
+  try {
+    return await fn();
+  } catch (error) {
+    console.error(`Local store operation failed (${label}):`, error);
+    return fallback;
+  }
+}
+
 function hasToken() {
   if (typeof window === 'undefined') return false;
   return Boolean(localStorage.getItem('token'));
@@ -288,7 +297,7 @@ async function processOutbox() {
   let loopCount = 0;
   while (loopCount < 200) {
     loopCount += 1;
-    const dueOps = await getDueOutbox(Date.now(), 30);
+    const dueOps = await safeLocalCall(() => getDueOutbox(Date.now(), 30), [], 'getDueOutbox');
     if (!dueOps.length) break;
 
     for (const op of dueOps) {
@@ -323,8 +332,8 @@ async function pullServerData() {
 
   const [categoriesRes, outboxOps, lastCursor] = await Promise.all([
     categoriesAPI.list(),
-    readOutbox(),
-    getMeta(TASK_SYNC_CURSOR_KEY, ''),
+    safeLocalCall(() => readOutbox(), [], 'readOutbox'),
+    safeLocalCall(() => getMeta(TASK_SYNC_CURSOR_KEY, ''), '', `getMeta:${TASK_SYNC_CURSOR_KEY}`),
   ]);
   let nextCursor = String(lastCursor || '');
   const categories = Array.isArray(categoriesRes?.data) ? categoriesRes.data : [];
@@ -333,7 +342,10 @@ async function pullServerData() {
   const syncLimit = 1000;
   let rounds = 0;
   let hasMore = true;
-  let mergedTasks = queryClientRef.getQueryData(queryKeys.tasks.all) || await readTasks();
+  let mergedTasks = queryClientRef.getQueryData(queryKeys.tasks.all);
+  if (!Array.isArray(mergedTasks)) {
+    mergedTasks = await safeLocalCall(() => readTasks(), [], 'readTasks');
+  }
   while (hasMore && rounds < 6) {
     rounds += 1;
     const syncRes = await tasksAPI.sync({
@@ -395,10 +407,10 @@ async function pullServerData() {
   queryClientRef.setQueryData(queryKeys.categories.all, categories);
 
   await Promise.all([
-    upsertTasks(mergedTasks),
-    replaceCategories(categories),
-    setMeta('last_pull_at', nowISO()),
-    setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO()),
+    safeLocalCall(() => upsertTasks(mergedTasks), null, 'upsertTasks'),
+    safeLocalCall(() => replaceCategories(categories), null, 'replaceCategories'),
+    safeLocalCall(() => setMeta('last_pull_at', nowISO()), null, 'setMeta:last_pull_at'),
+    safeLocalCall(() => setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO()), null, `setMeta:${TASK_SYNC_CURSOR_KEY}`),
   ]);
   emitSyncTrace('pull_merged', {
     rounds,
@@ -411,9 +423,9 @@ async function pullServerData() {
 async function hydrateFromLocal() {
   if (!queryClientRef) return;
   const [tasks, categories, lastPullAt] = await Promise.all([
-    readTasks(),
-    readCategories(),
-    getMeta('last_pull_at', ''),
+    safeLocalCall(() => readTasks(), [], 'readTasks'),
+    safeLocalCall(() => readCategories(), [], 'readCategories'),
+    safeLocalCall(() => getMeta('last_pull_at', ''), '', 'getMeta:last_pull_at'),
   ]);
 
   if (Array.isArray(tasks) && tasks.length > 0) {
@@ -562,7 +574,7 @@ export async function rebuildLocalDataAndSync() {
     await waitForIdle();
   }
 
-  await clearAllLocalData();
+  await safeLocalCall(() => clearAllLocalData(), null, 'clearAllLocalData');
 
   if (queryClientRef) {
     queryClientRef.setQueryData(queryKeys.tasks.all, []);

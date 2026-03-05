@@ -37,7 +37,12 @@ export function useTasksQuery() {
   return useQuery({
     queryKey: queryKeys.tasks.all,
     queryFn: async () => {
-      const cached = await readTasks();
+      let cached = [];
+      try {
+        cached = await readTasks();
+      } catch (error) {
+        console.error('Failed to read tasks from local cache, falling back to server:', error);
+      }
       if (Array.isArray(cached) && cached.length > 0) {
         scheduleSync();
         return cached;
@@ -51,7 +56,11 @@ export function useTasksQuery() {
         client_updated_at: task?.updated_at || new Date().toISOString(),
         last_error: '',
       }));
-      await upsertTasks(synced);
+      try {
+        await upsertTasks(synced);
+      } catch (error) {
+        console.error('Failed to persist server tasks into local cache:', error);
+      }
       scheduleSync();
       return synced;
     },
@@ -62,7 +71,12 @@ export function useCategoriesQuery() {
   return useQuery({
     queryKey: queryKeys.categories.all,
     queryFn: async () => {
-      const cached = await readCategories();
+      let cached = [];
+      try {
+        cached = await readCategories();
+      } catch (error) {
+        console.error('Failed to read categories from local cache, falling back to server:', error);
+      }
       if (Array.isArray(cached) && cached.length > 0) {
         scheduleSync();
         return cached;
@@ -70,7 +84,11 @@ export function useCategoriesQuery() {
 
       const res = await categoriesAPI.list();
       const list = Array.isArray(res.data) ? res.data : [];
-      await replaceCategories(list);
+      try {
+        await replaceCategories(list);
+      } catch (error) {
+        console.error('Failed to persist server categories into local cache:', error);
+      }
       scheduleSync();
       return list;
     },

@@ -8,6 +8,7 @@ const STORE_META = 'meta';
 const STORE_CALENDAR_RANGES = 'calendar_ranges';
 
 let dbPromise = null;
+let recoveryTried = false;
 
 function toPromise(request) {
   return new Promise((resolve, reject) => {
@@ -27,7 +28,7 @@ function txDone(tx) {
 async function getDB() {
   if (dbPromise) return dbPromise;
 
-  dbPromise = new Promise((resolve, reject) => {
+  const openOnce = () => new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = () => {
@@ -65,7 +66,49 @@ async function getDB() {
     request.onerror = () => reject(request.error || new Error('Failed to open IndexedDB'));
   });
 
-  return dbPromise;
+  const deleteDB = () => new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error('Failed to delete IndexedDB'));
+    request.onblocked = () => resolve();
+  });
+
+  dbPromise = (async () => {
+    try {
+      const db = await openOnce();
+      db.onversionchange = () => {
+        db.close();
+        if (dbPromise) dbPromise = null;
+      };
+      return db;
+    } catch (error) {
+      if (recoveryTried) {
+        throw error;
+      }
+      recoveryTried = true;
+      dbPromise = null;
+      console.error('IndexedDB open failed, attempting recovery by resetting local cache:', error);
+      try {
+        await deleteDB();
+      } catch (deleteError) {
+        console.error('IndexedDB recovery delete failed:', deleteError);
+        throw error;
+      }
+      const db = await openOnce();
+      db.onversionchange = () => {
+        db.close();
+        if (dbPromise) dbPromise = null;
+      };
+      return db;
+    }
+  })();
+
+  try {
+    return await dbPromise;
+  } catch (error) {
+    dbPromise = null;
+    throw error;
+  }
 }
 
 async function getAll(storeName) {
