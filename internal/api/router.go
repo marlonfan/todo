@@ -80,6 +80,7 @@ func (r *Router) Setup() *gin.Engine {
 			protected.PATCH("/tasks/:id/status", r.taskHandler.UpdateStatus)
 			protected.PATCH("/tasks/:id/schedule", r.taskHandler.UpdateSchedule)
 			protected.GET("/tasks/:id/instances", r.calendarHandler.GetInstances)
+			protected.GET("/tasks/:id/activities", r.taskHandler.ListActivities)
 			protected.GET("/tasks/:id/notifications", r.taskHandler.ListNotifications)
 			protected.POST("/tasks/:id/notifications", r.taskHandler.CreateNotification)
 

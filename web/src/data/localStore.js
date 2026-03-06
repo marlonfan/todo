@@ -1,11 +1,12 @@
 const DB_NAME = 'todo-kimi-local-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORE_TASKS = 'tasks';
 const STORE_CATEGORIES = 'categories';
 const STORE_OUTBOX = 'outbox';
 const STORE_META = 'meta';
 const STORE_CALENDAR_RANGES = 'calendar_ranges';
+const STORE_TASK_ACTIVITIES = 'task_activities';
 
 let dbPromise = null;
 let recoveryTried = false;
@@ -59,6 +60,12 @@ async function getDB() {
       if (!db.objectStoreNames.contains(STORE_CALENDAR_RANGES)) {
         const store = db.createObjectStore(STORE_CALENDAR_RANGES, { keyPath: 'key' });
         store.createIndex('updated_at', 'updated_at', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_TASK_ACTIVITIES)) {
+        const store = db.createObjectStore(STORE_TASK_ACTIVITIES, { keyPath: 'id' });
+        store.createIndex('task_id', 'task_id', { unique: false });
+        store.createIndex('occurred_at', 'occurred_at', { unique: false });
       }
     };
 
@@ -202,6 +209,60 @@ export async function removeTask(taskID) {
   await del(STORE_TASKS, taskID);
 }
 
+export async function readTaskActivities(taskID, limit = 200) {
+  const numericTaskID = Number(taskID);
+  if (!numericTaskID) return [];
+  const all = await getAll(STORE_TASK_ACTIVITIES);
+  return all
+    .filter((item) => Number(item?.task_id) === numericTaskID)
+    .sort((a, b) => {
+      const timeA = Date.parse(a?.occurred_at || '') || 0;
+      const timeB = Date.parse(b?.occurred_at || '') || 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return Number(b?.id || 0) - Number(a?.id || 0);
+    })
+    .slice(0, Math.max(1, Number(limit) || 200));
+}
+
+export async function upsertTaskActivities(rows) {
+  await bulkPut(STORE_TASK_ACTIVITIES, rows);
+}
+
+export async function replaceTaskActivitiesForTask(taskID, rows) {
+  const numericTaskID = Number(taskID);
+  if (!numericTaskID) return;
+  const list = Array.isArray(rows) ? rows : [];
+  const existing = await getAll(STORE_TASK_ACTIVITIES);
+  const db = await getDB();
+  const tx = db.transaction([STORE_TASK_ACTIVITIES], 'readwrite');
+  const store = tx.objectStore(STORE_TASK_ACTIVITIES);
+  (Array.isArray(existing) ? existing : []).forEach((item) => {
+    if (Number(item?.task_id) === numericTaskID && Number(item?.id || 0) > 0) {
+      store.delete(item.id);
+    }
+  });
+  list.forEach((item) => {
+    if (!item || typeof item.id === 'undefined' || item.id === null) return;
+    store.put(item);
+  });
+  await txDone(tx);
+}
+
+export async function removeTaskActivitiesByTask(taskID) {
+  const numericTaskID = Number(taskID);
+  if (!numericTaskID) return;
+  const existing = await getAll(STORE_TASK_ACTIVITIES);
+  const db = await getDB();
+  const tx = db.transaction([STORE_TASK_ACTIVITIES], 'readwrite');
+  const store = tx.objectStore(STORE_TASK_ACTIVITIES);
+  (Array.isArray(existing) ? existing : []).forEach((item) => {
+    if (Number(item?.task_id) === numericTaskID && Number(item?.id || 0) > 0) {
+      store.delete(item.id);
+    }
+  });
+  await txDone(tx);
+}
+
 export async function readCategories() {
   return getAll(STORE_CATEGORIES);
 }
@@ -336,7 +397,14 @@ export async function clearCalendarRanges() {
 export async function clearAllLocalData() {
   const db = await getDB();
   const tx = db.transaction(
-    [STORE_TASKS, STORE_CATEGORIES, STORE_OUTBOX, STORE_META, STORE_CALENDAR_RANGES],
+    [
+      STORE_TASKS,
+      STORE_CATEGORIES,
+      STORE_OUTBOX,
+      STORE_META,
+      STORE_CALENDAR_RANGES,
+      STORE_TASK_ACTIVITIES,
+    ],
     'readwrite'
   );
   tx.objectStore(STORE_TASKS).clear();
@@ -344,5 +412,6 @@ export async function clearAllLocalData() {
   tx.objectStore(STORE_OUTBOX).clear();
   tx.objectStore(STORE_META).clear();
   tx.objectStore(STORE_CALENDAR_RANGES).clear();
+  tx.objectStore(STORE_TASK_ACTIVITIES).clear();
   await txDone(tx);
 }

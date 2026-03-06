@@ -41,14 +41,26 @@ export const authAPI = {
   updateProfile: (data) => apiClient.patch('/auth/profile', data),
 };
 
-function withIfMatch(options = {}) {
+function withTaskMutationHeaders(options = {}) {
+  const headers = {};
   const revision = Number(options?.ifMatchRevision || 0);
-  if (!revision) return {};
-  return {
-    headers: {
-      'If-Match': String(revision),
-    },
-  };
+  if (revision) {
+    headers['If-Match'] = String(revision);
+  }
+  const submittedAt = typeof options?.clientSubmittedAt === 'string'
+    ? options.clientSubmittedAt.trim()
+    : '';
+  if (submittedAt) {
+    headers['X-Client-Submitted-At'] = submittedAt;
+  }
+  const submitSource = typeof options?.submitSource === 'string'
+    ? options.submitSource.trim()
+    : '';
+  if (submitSource) {
+    headers['X-Client-Submit-Source'] = submitSource;
+  }
+  if (Object.keys(headers).length === 0) return {};
+  return { headers };
 }
 
 // Tasks API
@@ -56,18 +68,19 @@ export const tasksAPI = {
   list: (params) => apiClient.get('/tasks', { params }),
   sync: (params) => apiClient.get('/tasks/sync', { params }),
   get: (id) => apiClient.get(`/tasks/${id}`),
-  create: (data) => apiClient.post('/tasks', data),
-  update: (id, data, options = {}) => apiClient.put(`/tasks/${id}`, data, withIfMatch(options)),
-  delete: (id, options = {}) => apiClient.delete(`/tasks/${id}`, withIfMatch(options)),
+  create: (data, options = {}) => apiClient.post('/tasks', data, withTaskMutationHeaders(options)),
+  update: (id, data, options = {}) => apiClient.put(`/tasks/${id}`, data, withTaskMutationHeaders(options)),
+  delete: (id, options = {}) => apiClient.delete(`/tasks/${id}`, withTaskMutationHeaders(options)),
   updateStatus: (id, dataOrStatus, options = {}) => {
     const payload =
       typeof dataOrStatus === 'string'
         ? { status: dataOrStatus }
         : dataOrStatus;
-    return apiClient.patch(`/tasks/${id}/status`, payload, withIfMatch(options));
+    return apiClient.patch(`/tasks/${id}/status`, payload, withTaskMutationHeaders(options));
   },
-  updateSchedule: (id, data, options = {}) => apiClient.patch(`/tasks/${id}/schedule`, data, withIfMatch(options)),
+  updateSchedule: (id, data, options = {}) => apiClient.patch(`/tasks/${id}/schedule`, data, withTaskMutationHeaders(options)),
   getInstances: (id, params) => apiClient.get(`/tasks/${id}/instances`, { params }),
+  listActivities: (id, params) => apiClient.get(`/tasks/${id}/activities`, { params }),
   // Task notification
   listNotifications: (taskId) => apiClient.get(`/tasks/${taskId}/notifications`),
   createNotification: (taskId, data) => apiClient.post(`/tasks/${taskId}/notifications`, data),

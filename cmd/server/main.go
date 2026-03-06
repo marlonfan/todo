@@ -66,6 +66,7 @@ func main() {
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
 	taskRepo := repository.NewTaskRepository(db)
+	taskActivityRepo := repository.NewTaskActivityRepository(db)
 	catRepo := repository.NewCategoryRepository(db)
 	notifyRepo := repository.NewNotificationRepository(db)
 	caldavRepo := repository.NewCaldavRepository(db)
@@ -88,7 +89,7 @@ func main() {
 	// Initialize services
 	authService := service.NewAuthService(userRepo, &cfg.JWT)
 	caldavService := service.NewCaldavService(caldavRepo, cfg.JWT.Secret)
-	taskService := service.NewTaskService(taskRepo, catRepo, userRepo, notifyRepo)
+	taskService := service.NewTaskService(taskRepo, taskActivityRepo, catRepo, userRepo, notifyRepo)
 	taskService.SetCaldavService(caldavService)
 	catService := service.NewCategoryService(catRepo)
 	notifyService := service.NewNotifyService(notifyRepo, userRepo, taskRepo, registry)

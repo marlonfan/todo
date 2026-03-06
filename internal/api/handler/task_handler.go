@@ -33,6 +33,33 @@ func parseIfMatchRevision(c *gin.Context) (*int64, error) {
 	return &revision, nil
 }
 
+func parseClientSubmittedAt(c *gin.Context) *time.Time {
+	raw := strings.TrimSpace(c.GetHeader("X-Client-Submitted-At"))
+	if raw == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return nil
+		}
+	}
+	normalized := parsed.UTC()
+	return &normalized
+}
+
+func parseTaskActivityMeta(c *gin.Context) *service.TaskActivityMeta {
+	meta := &service.TaskActivityMeta{
+		SubmittedAt:  parseClientSubmittedAt(c),
+		SubmitSource: strings.TrimSpace(c.GetHeader("X-Client-Submit-Source")),
+	}
+	if meta.SubmittedAt == nil && meta.SubmitSource == "" {
+		return nil
+	}
+	return meta
+}
+
 func respondTaskError(c *gin.Context, err error) {
 	var conflict *service.RevisionConflictError
 	if errors.As(err, &conflict) {
@@ -122,6 +149,41 @@ func (h *TaskHandler) List(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, tasks)
+}
+
+func (h *TaskHandler) ListActivities(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task ID"})
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		if parsed > 500 {
+			parsed = 500
+		}
+		limit = parsed
+	}
+
+	activities, err := h.taskService.ListActivities(userID, taskID, limit)
+	if err != nil {
+		if strings.Contains(err.Error(), "task not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, activities)
 }
 
 func (h *TaskHandler) Sync(c *gin.Context) {
@@ -220,7 +282,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskService.Update(userID, taskID, &req, fieldMask, expectedRevision)
+	task, err := h.taskService.Update(userID, taskID, &req, fieldMask, expectedRevision, parseTaskActivityMeta(c))
 	if err != nil {
 		respondTaskError(c, err)
 		return
@@ -250,7 +312,15 @@ func (h *TaskHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskService.UpdateStatus(userID, taskID, req.Status, req.InstanceID, req.OccurrenceDate, expectedRevision)
+	task, err := h.taskService.UpdateStatus(
+		userID,
+		taskID,
+		req.Status,
+		req.InstanceID,
+		req.OccurrenceDate,
+		expectedRevision,
+		parseTaskActivityMeta(c),
+	)
 	if err != nil {
 		respondTaskError(c, err)
 		return
@@ -280,7 +350,7 @@ func (h *TaskHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskService.UpdateSchedule(userID, taskID, &req, expectedRevision)
+	task, err := h.taskService.UpdateSchedule(userID, taskID, &req, expectedRevision, parseTaskActivityMeta(c))
 	if err != nil {
 		respondTaskError(c, err)
 		return

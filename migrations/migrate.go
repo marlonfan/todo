@@ -13,6 +13,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Task{},
 		&models.TaskDeleteLog{},
 		&models.TaskOccurrenceStatus{},
+		&models.TaskActivity{},
 		&models.TaskCategory{},
 		&models.Notification{},
 		&models.UserNotifySetting{},

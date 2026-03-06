@@ -1,7 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { caldavAPI, categoriesAPI, tasksAPI } from '../api/client';
 import { queryKeys } from './keys';
-import { readCategories, readTasks, replaceCategories, upsertTasks } from '../data/localStore';
+import {
+  readCategories,
+  readTaskActivities,
+  readTasks,
+  replaceCategories,
+  replaceTaskActivitiesForTask,
+  upsertTasks,
+} from '../data/localStore';
 import { scheduleSync } from '../data/syncEngine';
 
 const CALDAV_TASKS_CACHE_KEY = 'caldav_tasks_cache_v1';
@@ -125,6 +132,62 @@ export function useCaldavTasksQuery(start, end) {
         if (fallback.length > 0) return fallback;
         throw err;
       }
+    },
+  });
+}
+
+const taskActivitiesRefreshMap = new Map();
+
+function normalizeTaskActivities(items) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => Number(item?.id || 0) > 0)
+    .sort((a, b) => {
+      const timeA = Date.parse(a?.occurred_at || '') || 0;
+      const timeB = Date.parse(b?.occurred_at || '') || 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return Number(b?.id || 0) - Number(a?.id || 0);
+    });
+}
+
+function refreshTaskActivitiesInBackground(taskID, limit, queryClient) {
+  const key = Number(taskID) || 0;
+  if (!key) return;
+  if (taskActivitiesRefreshMap.get(key)) return;
+  taskActivitiesRefreshMap.set(key, true);
+  void (async () => {
+    try {
+      const res = await tasksAPI.listActivities(key, { limit });
+      const list = normalizeTaskActivities(res?.data);
+      await replaceTaskActivitiesForTask(key, list);
+      queryClient.setQueryData(queryKeys.tasks.activities(key), list);
+    } catch (error) {
+      console.error('Failed to refresh task activities:', error);
+    } finally {
+      taskActivitiesRefreshMap.delete(key);
+    }
+  })();
+}
+
+export function useTaskActivitiesQuery(taskID, options = {}) {
+  const queryClient = useQueryClient();
+  const numericTaskID = Number(taskID) || 0;
+  const limit = Number(options?.limit || 200) || 200;
+  const enabled = options?.enabled !== false && numericTaskID > 0;
+
+  return useQuery({
+    queryKey: queryKeys.tasks.activities(numericTaskID),
+    enabled,
+    staleTime: 30 * 1000,
+    queryFn: async () => {
+      const cached = await readTaskActivities(numericTaskID, limit);
+      if (cached.length > 0) {
+        refreshTaskActivitiesInBackground(numericTaskID, limit, queryClient);
+        return normalizeTaskActivities(cached);
+      }
+      const res = await tasksAPI.listActivities(numericTaskID, { limit });
+      const list = normalizeTaskActivities(res?.data);
+      await replaceTaskActivitiesForTask(numericTaskID, list);
+      return list;
     },
   });
 }

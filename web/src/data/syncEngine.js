@@ -11,6 +11,7 @@ import {
   remapOutboxEntityID,
   removeOutbox,
   removeTask,
+  removeTaskActivitiesByTask,
   replaceCategories,
   replaceTaskID,
   setMeta,
@@ -20,6 +21,7 @@ import {
 } from './localStore';
 import { getCoalescePlan } from './outboxCoalesce';
 import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } from './taskMerge';
+import { pushSyncConflict } from '../state/syncConflictCenter';
 
 const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
@@ -122,6 +124,24 @@ function nowISO() {
   return new Date().toISOString();
 }
 
+function sanitizeConflictPayload(payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  const sanitized = { ...payload };
+  delete sanitized.client_timezone;
+  delete sanitized.start_time_local;
+  delete sanitized.end_time_local;
+  return sanitized;
+}
+
+function normalizeClientSubmittedAt(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) return '';
+  return new Date(parsed).toISOString();
+}
+
 async function patchTaskSyncState(taskID, patch) {
   if (!queryClientRef || !taskID) return;
   let nextTask = null;
@@ -186,7 +206,10 @@ async function executeOutboxOperation(op) {
   });
   switch (op.op_type) {
     case 'create': {
-      const res = await tasksAPI.create(op.payload);
+      const res = await tasksAPI.create(op.payload, {
+        clientSubmittedAt: op.client_submitted_at,
+        submitSource: op.submit_source,
+      });
       if (res?.data?.id) {
         await applyServerTask(res.data, op.entity_id);
       }
@@ -195,6 +218,8 @@ async function executeOutboxOperation(op) {
     case 'update': {
       const res = await tasksAPI.update(op.entity_id, op.payload, {
         ifMatchRevision: op.if_match_revision,
+        clientSubmittedAt: op.client_submitted_at,
+        submitSource: op.submit_source,
       });
       if (res?.data?.id) {
         await applyServerTask(res.data);
@@ -206,6 +231,8 @@ async function executeOutboxOperation(op) {
     case 'status': {
       const res = await tasksAPI.updateStatus(op.entity_id, op.payload, {
         ifMatchRevision: op.if_match_revision,
+        clientSubmittedAt: op.client_submitted_at,
+        submitSource: op.submit_source,
       });
       if (res?.data?.id) {
         await applyServerTask(res.data);
@@ -217,6 +244,8 @@ async function executeOutboxOperation(op) {
     case 'schedule': {
       const res = await tasksAPI.updateSchedule(op.entity_id, op.payload, {
         ifMatchRevision: op.if_match_revision,
+        clientSubmittedAt: op.client_submitted_at,
+        submitSource: op.submit_source,
       });
       if (res?.data?.id) {
         await applyServerTask(res.data);
@@ -234,6 +263,7 @@ async function executeOutboxOperation(op) {
         return prev.filter((task) => task.id !== op.entity_id);
       });
       await removeTask(op.entity_id);
+      await removeTaskActivitiesByTask(op.entity_id);
       return;
     }
     default:
@@ -248,6 +278,17 @@ async function handleOutboxFailure(op, error) {
   if (status === 409) {
     await removeOutbox(op.op_id);
     const latest = error?.response?.data?.latest;
+    pushSyncConflict({
+      task_id: latest?.id || op.entity_id,
+      task_title: latest?.title || '',
+      op_type: op.op_type,
+      message,
+      latest_revision: latest?.revision,
+      submit_source: op.submit_source || '',
+      occurred_at: nowISO(),
+      local_payload: sanitizeConflictPayload(op.payload),
+      latest_task: latest || null,
+    });
     if (latest?.id) {
       await applyServerTask(latest);
     } else if (op.op_type !== 'delete') {
@@ -514,6 +555,8 @@ export async function enqueueTaskOperation(op, options = {}) {
     next_retry_at: Number(op.next_retry_at || now),
     created_at: Number(op.created_at || now),
     if_match_revision: Number(op.if_match_revision || 0) || undefined,
+    client_submitted_at: normalizeClientSubmittedAt(op.client_submitted_at || ''),
+    submit_source: typeof op.submit_source === 'string' ? op.submit_source.trim() : '',
   };
   const all = await readOutbox();
   const plan = getCoalescePlan(all, normalized);

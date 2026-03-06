@@ -44,6 +44,16 @@ export function IconClock({ className }) {
   );
 }
 
+export function IconHistory({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4V8H7" />
+      <path d="M12 8V12L15 14" />
+    </BaseIcon>
+  );
+}
+
 export function IconRepeat({ className }) {
   return (
     <BaseIcon className={className}>

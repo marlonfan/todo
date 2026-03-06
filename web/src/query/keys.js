@@ -1,6 +1,7 @@
 export const queryKeys = {
   tasks: {
     all: ['tasks', 'all'],
+    activities: (taskID) => ['tasks', 'activities', Number(taskID) || 0],
   },
   categories: {
     all: ['categories', 'all'],

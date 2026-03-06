@@ -37,6 +37,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 
 	userRepo := repository.NewUserRepository(db)
 	taskRepo := repository.NewTaskRepository(db)
+	taskActivityRepo := repository.NewTaskActivityRepository(db)
 	catRepo := repository.NewCategoryRepository(db)
 	notifyRepo := repository.NewNotificationRepository(db)
 	caldavRepo := repository.NewCaldavRepository(db)
@@ -46,7 +47,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 		Expire: 24 * time.Hour,
 	})
 	notifySvc := service.NewNotifyService(notifyRepo, userRepo, taskRepo, notify.NewRegistry())
-	taskSvc := service.NewTaskService(taskRepo, catRepo, userRepo, notifyRepo)
+	taskSvc := service.NewTaskService(taskRepo, taskActivityRepo, catRepo, userRepo, notifyRepo)
 	caldavSvc := service.NewCaldavService(caldavRepo, "e2e-secret")
 	taskSvc.SetCaldavService(caldavSvc)
 	catSvc := service.NewCategoryService(catRepo)
@@ -181,5 +182,86 @@ func TestCalendarCreateDeleteFlowAcrossWeekAndMonthRanges(t *testing.T) {
 		if event.ExtendedProps.TaskID == created.ID {
 			t.Fatalf("deleted task should not appear in month calendar")
 		}
+	}
+}
+
+func TestTaskActivitiesMergedWithin15Minutes(t *testing.T) {
+	router := setupE2ERouter(t)
+
+	username := fmt.Sprintf("a_%d", time.Now().UnixNano())
+	email := fmt.Sprintf("%s@example.com", username)
+	registerResp := doJSON(t, router, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"username": username,
+		"email":    email,
+		"password": "secret123",
+	}, nil)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+
+	loginResp := doJSON(t, router, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"username": username,
+		"password": "secret123",
+	}, nil)
+	if loginResp.Code != http.StatusOK {
+		t.Fatalf("login status = %d body=%s", loginResp.Code, loginResp.Body.String())
+	}
+	loginData := decodeJSON[map[string]any](t, loginResp)
+	token, _ := loginData["token"].(string)
+	if token == "" {
+		t.Fatalf("missing token in login response")
+	}
+
+	createResp := doJSON(t, router, http.MethodPost, "/api/tasks", token, map[string]any{
+		"title":    "A",
+		"priority": 0,
+	}, nil)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create task status = %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	task := decodeJSON[models.Task](t, createResp)
+
+	firstSubmitAt := "2026-03-06T08:00:00.000Z"
+	firstUpdateResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
+		"title": "B",
+	}, map[string]string{
+		"If-Match":               fmt.Sprintf("%d", task.Revision),
+		"X-Client-Submitted-At":  firstSubmitAt,
+		"X-Client-Submit-Source": "manual",
+	})
+	if firstUpdateResp.Code != http.StatusOK {
+		t.Fatalf("first update status = %d body=%s", firstUpdateResp.Code, firstUpdateResp.Body.String())
+	}
+	updatedOnce := decodeJSON[models.Task](t, firstUpdateResp)
+
+	secondSubmitAt := "2026-03-06T08:10:00.000Z"
+	secondUpdateResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
+		"title": "C",
+	}, map[string]string{
+		"If-Match":               fmt.Sprintf("%d", updatedOnce.Revision),
+		"X-Client-Submitted-At":  secondSubmitAt,
+		"X-Client-Submit-Source": "manual",
+	})
+	if secondUpdateResp.Code != http.StatusOK {
+		t.Fatalf("second update status = %d body=%s", secondUpdateResp.Code, secondUpdateResp.Body.String())
+	}
+
+	activitiesResp := doJSON(t, router, http.MethodGet, fmt.Sprintf("/api/tasks/%d/activities?limit=20", task.ID), token, nil, nil)
+	if activitiesResp.Code != http.StatusOK {
+		t.Fatalf("activities status = %d body=%s", activitiesResp.Code, activitiesResp.Body.String())
+	}
+	activities := decodeJSON[[]models.TaskActivity](t, activitiesResp)
+	if len(activities) != 1 {
+		t.Fatalf("expected 1 merged activity, got %d", len(activities))
+	}
+	change, ok := activities[0].Changes["title"]
+	if !ok {
+		t.Fatalf("expected title change in merged activity")
+	}
+	if fmt.Sprint(change.From) != "A" || fmt.Sprint(change.To) != "C" {
+		t.Fatalf("expected title change A->C, got %v -> %v", change.From, change.To)
+	}
+	if activities[0].OccurredAt.UTC().Format(time.RFC3339) != "2026-03-06T08:10:00Z" {
+		t.Fatalf("unexpected occurred_at: %s", activities[0].OccurredAt.UTC().Format(time.RFC3339))
 	}
 }

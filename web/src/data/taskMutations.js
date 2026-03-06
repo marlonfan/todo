@@ -11,6 +11,17 @@ function nowISO() {
   return new Date().toISOString();
 }
 
+function normalizeSubmitMeta(meta = {}) {
+  const rawTime = typeof meta?.submittedAt === 'string' ? meta.submittedAt.trim() : '';
+  const parsed = rawTime ? Date.parse(rawTime) : NaN;
+  const clientSubmittedAt = Number.isFinite(parsed) ? new Date(parsed).toISOString() : '';
+  const submitSource = typeof meta?.submitSource === 'string' ? meta.submitSource.trim() : '';
+  return {
+    client_submitted_at: clientSubmittedAt || undefined,
+    submit_source: submitSource || undefined,
+  };
+}
+
 function createOpID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -35,6 +46,16 @@ function setTasksCache(queryClient, updater) {
   });
 }
 
+function runMutationSideEffects(label, work) {
+  void (async () => {
+    try {
+      await work();
+    } catch (error) {
+      console.error(`[taskMutations] ${label} failed:`, error);
+    }
+  })();
+}
+
 async function invalidateCalendarCaches(queryClient, taskID = null, options = {}) {
   const { revalidateQuery = false } = options;
   if (taskID) {
@@ -57,8 +78,9 @@ function resolveCategoriesFromIDs(queryClient, categoryIDs) {
   return categories.filter((item) => ids.includes(Number(item.id)));
 }
 
-function applyTaskPatch(currentTask, payload, queryClient) {
+function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
   if (!currentTask) return currentTask;
+  const { incrementRevision = true } = options;
   const currentRevision = Number(currentTask.revision || 1);
   const patch = {
     ...currentTask,
@@ -74,7 +96,7 @@ function applyTaskPatch(currentTask, payload, queryClient) {
     recurrence_end_date: typeof payload.recurrence_end_date !== 'undefined'
       ? payload.recurrence_end_date
       : currentTask.recurrence_end_date,
-    revision: currentRevision + 1,
+    revision: incrementRevision ? (currentRevision + 1) : currentRevision,
     sync_state: 'pending',
     last_error: '',
     client_updated_at: nowISO(),
@@ -87,7 +109,8 @@ function applyTaskPatch(currentTask, payload, queryClient) {
   return patch;
 }
 
-export async function createTaskLocal(queryClient, payload) {
+export async function createTaskLocal(queryClient, payload, options = {}) {
+  const submitMeta = normalizeSubmitMeta(options?.submitMeta);
   const tempTaskID = createTempTaskID();
   const optimisticTask = {
     id: tempTaskID,
@@ -111,49 +134,91 @@ export async function createTaskLocal(queryClient, payload) {
   };
 
   setTasksCache(queryClient, (prev) => [optimisticTask, ...prev]);
-  await upsertTask(optimisticTask);
-
-  await enqueueTaskOperation({
-    op_id: createOpID(),
-    entity_type: 'task',
-    entity_id: tempTaskID,
-    op_type: 'create',
-    payload,
+  runMutationSideEffects('createTaskLocal', async () => {
+    await upsertTask(optimisticTask);
+      await enqueueTaskOperation({
+        op_id: createOpID(),
+        entity_type: 'task',
+        entity_id: tempTaskID,
+        op_type: 'create',
+        payload,
+        ...submitMeta,
+      });
+    await invalidateCalendarCaches(queryClient, null, { revalidateQuery: true });
   });
-  await invalidateCalendarCaches(queryClient, null, { revalidateQuery: true });
 
   return optimisticTask;
 }
 
 export async function updateTaskLocal(queryClient, taskID, payload, options = {}) {
-  const { scheduleSync: shouldScheduleSync = true } = options;
+  const {
+    scheduleSync: shouldScheduleSync = true,
+    localOnly = false,
+    skipOptimistic = false,
+    submitMeta: submitMetaInput = null,
+  } = options;
+  const submitMeta = normalizeSubmitMeta(submitMetaInput || {});
   let nextTask = null;
   let baseRevision = 0;
-  setTasksCache(queryClient, (prev) => prev.map((task) => {
-    if (task.id !== taskID) return task;
-    baseRevision = Number(task.revision || 1);
-    nextTask = applyTaskPatch(task, payload, queryClient);
-    return nextTask;
-  }));
-
-  if (nextTask) {
-    await upsertTask(nextTask);
+  if (!skipOptimistic) {
+    setTasksCache(queryClient, (prev) => prev.map((task) => {
+      if (task.id !== taskID) return task;
+      baseRevision = Number(task.revision || 1);
+      nextTask = applyTaskPatch(task, payload, queryClient, {
+        incrementRevision: !localOnly,
+      });
+      return nextTask;
+    }));
+  } else {
+    const currentList = queryClient.getQueryData(queryKeys.tasks.all);
+    const currentTask = Array.isArray(currentList)
+      ? currentList.find((task) => Number(task.id) === Number(taskID))
+      : null;
+    baseRevision = Number(currentTask?.revision || 1);
+    nextTask = currentTask || null;
   }
 
-  await enqueueTaskOperation({
-    op_id: createOpID(),
-    entity_type: 'task',
-    entity_id: taskID,
-    op_type: 'update',
-    payload,
-    if_match_revision: baseRevision || undefined,
-  }, { schedule: shouldScheduleSync });
-  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
+  if (nextTask) {
+    runMutationSideEffects('updateTaskLocal', async () => {
+      if (!skipOptimistic) {
+        await upsertTask(nextTask);
+      }
+      if (!localOnly) {
+        await enqueueTaskOperation({
+          op_id: createOpID(),
+          entity_type: 'task',
+          entity_id: taskID,
+          op_type: 'update',
+          payload,
+          if_match_revision: baseRevision || undefined,
+          ...submitMeta,
+        }, { schedule: shouldScheduleSync });
+      }
+      await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
+    });
+    return nextTask;
+  }
+
+  runMutationSideEffects('updateTaskLocalNoTask', async () => {
+    if (!localOnly) {
+      await enqueueTaskOperation({
+        op_id: createOpID(),
+        entity_type: 'task',
+        entity_id: taskID,
+        op_type: 'update',
+        payload,
+        if_match_revision: baseRevision || undefined,
+        ...submitMeta,
+      }, { schedule: shouldScheduleSync });
+    }
+    await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
+  });
 
   return nextTask;
 }
 
-export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
+export async function updateTaskStatusLocal(queryClient, taskID, statusInput, options = {}) {
+  const submitMeta = normalizeSubmitMeta(options?.submitMeta || {});
   const payload = typeof statusInput === 'string'
     ? { status: statusInput }
     : (statusInput || {});
@@ -180,24 +245,30 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
     }
 
     if (nextTask) {
-      await upsertTask(nextTask);
+      runMutationSideEffects('updateTaskStatusLocalBasePatch', async () => {
+        await upsertTask(nextTask);
+      });
     }
   }
 
-  await enqueueTaskOperation({
-    op_id: createOpID(),
-    entity_type: 'task',
-    entity_id: taskID,
-    op_type: 'status',
-    payload,
-    if_match_revision: shouldPatchBaseTask ? (baseRevision || undefined) : undefined,
+  runMutationSideEffects('updateTaskStatusLocal', async () => {
+    await enqueueTaskOperation({
+      op_id: createOpID(),
+      entity_type: 'task',
+      entity_id: taskID,
+      op_type: 'status',
+      payload,
+      if_match_revision: shouldPatchBaseTask ? (baseRevision || undefined) : undefined,
+      ...submitMeta,
+    });
+    await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
   });
-  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
 
   return nextTask;
 }
 
-export async function updateTaskScheduleLocal(queryClient, taskID, payload) {
+export async function updateTaskScheduleLocal(queryClient, taskID, payload, options = {}) {
+  const submitMeta = normalizeSubmitMeta(options?.submitMeta || {});
   let nextTask = null;
   let baseRevision = 0;
 
@@ -218,18 +289,23 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload) {
   }));
 
   if (nextTask) {
-    await upsertTask(nextTask);
+    runMutationSideEffects('updateTaskScheduleLocalBasePatch', async () => {
+      await upsertTask(nextTask);
+    });
   }
 
-  await enqueueTaskOperation({
-    op_id: createOpID(),
-    entity_type: 'task',
-    entity_id: taskID,
-    op_type: 'schedule',
-    payload,
-    if_match_revision: baseRevision || undefined,
+  runMutationSideEffects('updateTaskScheduleLocal', async () => {
+    await enqueueTaskOperation({
+      op_id: createOpID(),
+      entity_type: 'task',
+      entity_id: taskID,
+      op_type: 'schedule',
+      payload,
+      if_match_revision: baseRevision || undefined,
+      ...submitMeta,
+    });
+    await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
   });
-  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
 
   return nextTask;
 }
@@ -252,20 +328,22 @@ export async function deleteTaskLocal(queryClient, taskID) {
   const baseRevision = Number(currentTask?.revision || 0);
 
   setTasksCache(queryClient, (prev) => prev.filter((task) => task.id !== numericID));
-  await removeTask(numericID);
+  runMutationSideEffects('deleteTaskLocal', async () => {
+    await removeTask(numericID);
 
-  if (numericID < 0) {
-    await removeOutboxByEntity('task', numericID);
-  } else {
-    await enqueueTaskOperation({
-      op_id: createOpID(),
-      entity_type: 'task',
-      entity_id: numericID,
-      op_type: 'delete',
-      payload: {},
-      if_match_revision: baseRevision || undefined,
-    });
-  }
+    if (numericID < 0) {
+      await removeOutboxByEntity('task', numericID);
+    } else {
+      await enqueueTaskOperation({
+        op_id: createOpID(),
+        entity_type: 'task',
+        entity_id: numericID,
+        op_type: 'delete',
+        payload: {},
+        if_match_revision: baseRevision || undefined,
+      });
+    }
 
-  await invalidateCalendarCaches(queryClient, numericID, { revalidateQuery: true });
+    await invalidateCalendarCaches(queryClient, numericID, { revalidateQuery: true });
+  });
 }

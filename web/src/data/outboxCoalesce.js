@@ -2,6 +2,8 @@ function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+const COALESCE_WINDOW_MS = 15 * 60 * 1000;
+
 function baseStatusPayload(payload) {
   const body = isPlainObject(payload) ? payload : {};
   return !body.instance_id && !body.occurrence_date;
@@ -22,6 +24,28 @@ function pickEarliestRevision(ops, fallback = 0) {
   }
   const base = Number(fallback || 0);
   return base > 0 ? base : undefined;
+}
+
+function getOpTimestamp(op) {
+  const submitted = typeof op?.client_submitted_at === 'string'
+    ? Date.parse(op.client_submitted_at)
+    : NaN;
+  if (Number.isFinite(submitted)) return submitted;
+  return Number(op?.created_at || 0);
+}
+
+function pickRecentCoalescibleOps(ops, incoming) {
+  const base = Array.isArray(ops) ? ops : [];
+  if (base.length === 0) return [];
+  const incomingTs = getOpTimestamp(incoming);
+  if (!Number.isFinite(incomingTs) || incomingTs <= 0) {
+    return base;
+  }
+  return base.filter((item) => {
+    const currentTs = getOpTimestamp(item);
+    if (!Number.isFinite(currentTs) || currentTs <= 0) return true;
+    return Math.abs(incomingTs - currentTs) <= COALESCE_WINDOW_MS;
+  });
 }
 
 export function getCoalescePlan(existingOps, incomingOp) {
@@ -81,7 +105,10 @@ export function getCoalescePlan(existingOps, incomingOp) {
     };
   }
 
-  const existingCoalescible = sameEntity.filter((item) => isCoalescibleOp(item));
+  const existingCoalescible = pickRecentCoalescibleOps(
+    sameEntity.filter((item) => isCoalescibleOp(item)),
+    incoming,
+  );
   if (!existingCoalescible.length) {
     return {
       mode: 'enqueue',

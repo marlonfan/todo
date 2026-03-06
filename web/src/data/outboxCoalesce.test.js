@@ -71,6 +71,33 @@ test('replaces prior coalescible ops with one update op', () => {
   });
 });
 
+test('does not coalesce coalescible ops outside 15 minute window', () => {
+  const existing = [
+    {
+      op_id: 'u1',
+      entity_type: 'task',
+      entity_id: 88,
+      op_type: 'update',
+      payload: { title: 'old' },
+      created_at: 1000,
+      client_submitted_at: '2026-03-06T08:00:00.000Z',
+    },
+  ];
+  const incoming = {
+    op_id: 'u2',
+    entity_type: 'task',
+    entity_id: 88,
+    op_type: 'update',
+    payload: { title: 'new' },
+    created_at: 1001,
+    client_submitted_at: '2026-03-06T08:20:01.000Z',
+  };
+
+  const plan = getCoalescePlan(existing, incoming);
+  assert.equal(plan.mode, 'enqueue');
+  assert.deepEqual(plan.removeOpIDs, []);
+});
+
 test('does not coalesce recurring instance status operation', () => {
   const existing = [
     {

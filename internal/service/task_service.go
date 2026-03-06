@@ -1,10 +1,13 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,16 +19,24 @@ import (
 )
 
 type TaskService struct {
-	taskRepo   *repository.TaskRepository
-	catRepo    *repository.CategoryRepository
-	userRepo   *repository.UserRepository
-	notifyRepo *repository.NotificationRepository
-	caldavSvc  *CaldavService
+	taskRepo         *repository.TaskRepository
+	taskActivityRepo *repository.TaskActivityRepository
+	catRepo          *repository.CategoryRepository
+	userRepo         *repository.UserRepository
+	notifyRepo       *repository.NotificationRepository
+	caldavSvc        *CaldavService
 }
 
 type RevisionConflictError struct {
 	Latest *models.Task
 }
+
+type TaskActivityMeta struct {
+	SubmittedAt  *time.Time
+	SubmitSource string
+}
+
+const taskActivityMergeWindow = 15 * time.Minute
 
 func (e *RevisionConflictError) Error() string {
 	return "revision conflict"
@@ -46,15 +57,17 @@ func checkRevision(expected *int64, task *models.Task) error {
 
 func NewTaskService(
 	taskRepo *repository.TaskRepository,
+	taskActivityRepo *repository.TaskActivityRepository,
 	catRepo *repository.CategoryRepository,
 	userRepo *repository.UserRepository,
 	notifyRepo *repository.NotificationRepository,
 ) *TaskService {
 	return &TaskService{
-		taskRepo:   taskRepo,
-		catRepo:    catRepo,
-		userRepo:   userRepo,
-		notifyRepo: notifyRepo,
+		taskRepo:         taskRepo,
+		taskActivityRepo: taskActivityRepo,
+		catRepo:          catRepo,
+		userRepo:         userRepo,
+		notifyRepo:       notifyRepo,
 	}
 }
 
@@ -133,7 +146,26 @@ func (s *TaskService) List(userID int64, filters map[string]interface{}) ([]mode
 	return s.taskRepo.List(userID, filters)
 }
 
-func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest, fieldMask map[string]bool, expectedRevision *int64) (*models.Task, error) {
+func (s *TaskService) ListActivities(userID, taskID int64, limit int) ([]models.TaskActivity, error) {
+	if _, err := s.taskRepo.GetByIDAndUser(taskID, userID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("task not found")
+		}
+		return nil, err
+	}
+	if s.taskActivityRepo == nil {
+		return []models.TaskActivity{}, nil
+	}
+	return s.taskActivityRepo.ListByTask(userID, taskID, limit)
+}
+
+func (s *TaskService) Update(
+	userID, taskID int64,
+	req *models.UpdateTaskRequest,
+	fieldMask map[string]bool,
+	expectedRevision *int64,
+	activityMeta *TaskActivityMeta,
+) (*models.Task, error) {
 	if err := normalizeTaskTimes(req.ClientTimezone, req.StartTimeLocal, req.EndTimeLocal, &req.StartTime, &req.EndTime); err != nil {
 		return nil, err
 	}
@@ -148,6 +180,7 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
+	beforeSnapshot := snapshotTaskForActivity(task)
 	var completedAnchorDate time.Time
 	hasCompletedAnchor := false
 
@@ -233,6 +266,10 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	if err != nil {
 		return nil, err
 	}
+	afterSnapshot := snapshotTaskForActivity(updatedTask)
+	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
+		log.Printf("Warning: failed to record task activity after task update for user %d task %d: %v", userID, updatedTask.ID, err)
+	}
 
 	if err := s.syncTaskReminder(userID, updatedTask); err != nil {
 		log.Printf("Warning: failed to sync reminder after task update for user %d task %d: %v", userID, updatedTask.ID, err)
@@ -241,7 +278,13 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	return updatedTask, nil
 }
 
-func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatus, instanceID, occurrenceDate string, expectedRevision *int64) (*models.Task, error) {
+func (s *TaskService) UpdateStatus(
+	userID, taskID int64,
+	status models.TaskStatus,
+	instanceID, occurrenceDate string,
+	expectedRevision *int64,
+	activityMeta *TaskActivityMeta,
+) (*models.Task, error) {
 	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -252,6 +295,7 @@ func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatu
 	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
+	beforeSnapshot := snapshotTaskForActivity(task)
 
 	if task.RecurrenceRule != nil {
 		date, found, err := parseOccurrenceDate(instanceID, occurrenceDate)
@@ -291,6 +335,10 @@ func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatu
 	if err != nil {
 		return nil, err
 	}
+	afterSnapshot := snapshotTaskForActivity(updatedTask)
+	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
+		log.Printf("Warning: failed to record task activity after task status update for user %d task %d: %v", userID, updatedTask.ID, err)
+	}
 	return updatedTask, nil
 }
 
@@ -301,7 +349,12 @@ func requiresRecurringOccurrenceContext(task *models.Task, status models.TaskSta
 	return status == models.TaskStatusPending || status == models.TaskStatusCompleted
 }
 
-func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTaskScheduleRequest, expectedRevision *int64) (*models.Task, error) {
+func (s *TaskService) UpdateSchedule(
+	userID, taskID int64,
+	req *models.UpdateTaskScheduleRequest,
+	expectedRevision *int64,
+	activityMeta *TaskActivityMeta,
+) (*models.Task, error) {
 	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -312,6 +365,7 @@ func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTas
 	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
+	beforeSnapshot := snapshotTaskForActivity(task)
 
 	task.StartTime = req.StartTime
 	task.EndTime = req.EndTime
@@ -333,6 +387,10 @@ func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTas
 	updatedTask, err := s.taskRepo.GetByID(task.ID)
 	if err != nil {
 		return nil, err
+	}
+	afterSnapshot := snapshotTaskForActivity(updatedTask)
+	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
+		log.Printf("Warning: failed to record task activity after task schedule update for user %d task %d: %v", userID, updatedTask.ID, err)
 	}
 	return updatedTask, nil
 }
@@ -421,6 +479,204 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 		Status:       models.NotifyStatusPending,
 	}
 	return s.notifyRepo.ReplaceActiveByTaskSource(notification)
+}
+
+type taskActivitySnapshot struct {
+	Title             string
+	Description       string
+	Priority          models.Priority
+	Status            models.TaskStatus
+	StartTime         *time.Time
+	EndTime           *time.Time
+	DueDate           *time.Time
+	AllDay            bool
+	CategoryIDs       []int64
+	RecurrenceRule    *models.RecurrenceRule
+	RecurrenceEndDate *time.Time
+}
+
+func snapshotTaskForActivity(task *models.Task) taskActivitySnapshot {
+	if task == nil {
+		return taskActivitySnapshot{}
+	}
+	return taskActivitySnapshot{
+		Title:             task.Title,
+		Description:       task.Description,
+		Priority:          task.Priority,
+		Status:            task.Status,
+		StartTime:         cloneTimePointer(task.StartTime),
+		EndTime:           cloneTimePointer(task.EndTime),
+		DueDate:           cloneTimePointer(task.DueDate),
+		AllDay:            task.AllDay,
+		CategoryIDs:       normalizeCategoryIDs(task.Categories),
+		RecurrenceRule:    cloneRecurrenceRule(task.RecurrenceRule),
+		RecurrenceEndDate: cloneTimePointer(task.RecurrenceEndDate),
+	}
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	next := value.UTC()
+	return &next
+}
+
+func cloneRecurrenceRule(rule *models.RecurrenceRule) *models.RecurrenceRule {
+	if rule == nil {
+		return nil
+	}
+	cloned := &models.RecurrenceRule{
+		Freq:     rule.Freq,
+		Interval: rule.Interval,
+		Count:    rule.Count,
+	}
+	if len(rule.ByDay) > 0 {
+		cloned.ByDay = append([]string(nil), rule.ByDay...)
+	}
+	if len(rule.ByMonth) > 0 {
+		cloned.ByMonth = append([]int(nil), rule.ByMonth...)
+	}
+	if len(rule.ByDate) > 0 {
+		cloned.ByDate = append([]int(nil), rule.ByDate...)
+	}
+	return cloned
+}
+
+func normalizeCategoryIDs(categories []models.Category) []int64 {
+	if len(categories) == 0 {
+		return []int64{}
+	}
+	ids := make([]int64, 0, len(categories))
+	for _, category := range categories {
+		if category.ID <= 0 {
+			continue
+		}
+		ids = append(ids, category.ID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func normalizeActivityTime(value *time.Time) interface{} {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func normalizeActivityRecurrence(rule *models.RecurrenceRule) interface{} {
+	if rule == nil {
+		return nil
+	}
+	raw, err := json.Marshal(rule)
+	if err != nil {
+		return nil
+	}
+	var normalized interface{}
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return nil
+	}
+	return normalized
+}
+
+func normalizeActivityValue(value interface{}) interface{} {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var normalized interface{}
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return value
+	}
+	return normalized
+}
+
+func activityValuesEqual(left, right interface{}) bool {
+	return reflect.DeepEqual(normalizeActivityValue(left), normalizeActivityValue(right))
+}
+
+func appendActivityFieldChange(
+	changes models.TaskActivityChanges,
+	field string,
+	from interface{},
+	to interface{},
+) {
+	if activityValuesEqual(from, to) {
+		return
+	}
+	changes[field] = models.TaskActivityFieldChange{
+		From: normalizeActivityValue(from),
+		To:   normalizeActivityValue(to),
+	}
+}
+
+func buildTaskActivityChanges(before, after taskActivitySnapshot) models.TaskActivityChanges {
+	changes := models.TaskActivityChanges{}
+	appendActivityFieldChange(changes, "title", before.Title, after.Title)
+	appendActivityFieldChange(changes, "description", before.Description, after.Description)
+	appendActivityFieldChange(changes, "priority", before.Priority, after.Priority)
+	appendActivityFieldChange(changes, "status", before.Status, after.Status)
+	appendActivityFieldChange(changes, "start_time", normalizeActivityTime(before.StartTime), normalizeActivityTime(after.StartTime))
+	appendActivityFieldChange(changes, "end_time", normalizeActivityTime(before.EndTime), normalizeActivityTime(after.EndTime))
+	appendActivityFieldChange(changes, "due_date", normalizeActivityTime(before.DueDate), normalizeActivityTime(after.DueDate))
+	appendActivityFieldChange(changes, "all_day", before.AllDay, after.AllDay)
+	appendActivityFieldChange(changes, "category_ids", before.CategoryIDs, after.CategoryIDs)
+	appendActivityFieldChange(
+		changes,
+		"recurrence_rule",
+		normalizeActivityRecurrence(before.RecurrenceRule),
+		normalizeActivityRecurrence(after.RecurrenceRule),
+	)
+	appendActivityFieldChange(
+		changes,
+		"recurrence_end_date",
+		normalizeActivityTime(before.RecurrenceEndDate),
+		normalizeActivityTime(after.RecurrenceEndDate),
+	)
+	return changes
+}
+
+func resolveActivityOccurredAt(meta *TaskActivityMeta) time.Time {
+	if meta == nil || meta.SubmittedAt == nil {
+		return time.Now().UTC()
+	}
+	submitted := meta.SubmittedAt.UTC()
+	if submitted.IsZero() {
+		return time.Now().UTC()
+	}
+	clockSkew := submitted.Sub(time.Now().UTC())
+	if clockSkew > 24*time.Hour || clockSkew < -24*time.Hour {
+		return time.Now().UTC()
+	}
+	return submitted
+}
+
+func (s *TaskService) recordTaskActivity(
+	userID, taskID int64,
+	before, after taskActivitySnapshot,
+	meta *TaskActivityMeta,
+) error {
+	if s.taskActivityRepo == nil {
+		return nil
+	}
+	changes := buildTaskActivityChanges(before, after)
+	if len(changes) == 0 {
+		return nil
+	}
+	return s.taskActivityRepo.RecordWithMerge(
+		userID,
+		taskID,
+		resolveActivityOccurredAt(meta),
+		func() string {
+			if meta == nil {
+				return ""
+			}
+			return meta.SubmitSource
+		}(),
+		changes,
+		taskActivityMergeWindow,
+	)
 }
 
 // ExpandRecurringTasks expands recurring tasks within a date range
