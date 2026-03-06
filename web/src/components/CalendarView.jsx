@@ -1550,8 +1550,8 @@ function CalendarView() {
                     </button>
                   );
                 }
-                const startLabel = event.start ? dayjs(event.start).utc().format('HH:mm') : '--:--';
-                const endLabel = event.end ? dayjs(event.end).utc().format('HH:mm') : '';
+                const startLabel = event.start ? dayjs(event.start).tz(timezone).format('HH:mm') : '--:--';
+                const endLabel = event.end ? dayjs(event.end).tz(timezone).format('HH:mm') : '';
                 return (
                   <button
                     key={event.id}

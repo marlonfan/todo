@@ -6,8 +6,9 @@ import dayjs from 'dayjs';
 import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconRepeat, IconRepeatOff, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconHistory, IconRepeat, IconRepeatOff, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import TaskActivityTimeline from './TaskActivityTimeline';
 import { useCategoriesQuery } from '../query/hooks';
 import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
@@ -246,6 +247,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [basicPanel, setBasicPanel] = useState('');
   const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
+  const [showActivityPanel, setShowActivityPanel] = useState(false);
   const basicPanelRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const timeGranularity = getUserTimeGranularity();
@@ -317,16 +319,27 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
   useEffect(() => {
-    if (!basicPanel) return undefined;
+    if (!basicPanel && !showActivityPanel) return undefined;
     const handlePointerDown = (event) => {
       if (!basicPanelRef.current) return;
       if (!basicPanelRef.current.contains(event.target)) {
         setBasicPanel('');
+        setShowActivityPanel(false);
       }
     };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [basicPanel, showActivityPanel]);
+
+  useEffect(() => {
+    if (basicPanel) {
+      setShowActivityPanel(false);
+    }
   }, [basicPanel]);
+
+  useEffect(() => {
+    setShowActivityPanel(false);
+  }, [task?.id]);
 
   useEffect(() => {
     if (!showRecurrence) {
@@ -515,7 +528,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   };
 
   const onSubmit = async (data) => {
-    setLoading(true);
     setError('');
 
     try {
@@ -640,20 +652,47 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         payload.category_ids = [];
       }
 
-      let savedTask;
+      const submitMeta = {
+        submittedAt: new Date().toISOString(),
+        submitSource: 'manual',
+      };
+      let savePromise;
       if (isEditing) {
-        savedTask = await updateTaskLocal(queryClient, task.id, payload);
+        const localSavedTask = await updateTaskLocal(queryClient, task.id, payload, {
+          localOnly: true,
+          scheduleSync: false,
+        });
+        savePromise = updateTaskLocal(queryClient, task.id, payload, {
+          localOnly: false,
+          scheduleSync: true,
+          skipOptimistic: true,
+          submitMeta,
+        });
+        onSaved(localSavedTask || null);
       } else {
-        savedTask = await createTaskLocal(queryClient, payload);
+        savePromise = createTaskLocal(queryClient, payload, { submitMeta });
+        onSaved(null);
       }
 
-      onSaved(savedTask);
+      // Close immediately with optimistic UI; persistence/sync continues in background.
+      void Promise.resolve(savePromise)
+        .then((savedTask) => {
+          if (savedTask?.id) {
+            onSaved(savedTask);
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to persist task after optimistic save:', err);
+        });
     } catch (err) {
       setError(err.response?.data?.error || t('task.saveFailed'));
-    } finally {
-      setLoading(false);
     }
   };
+
+  const handleDescriptionSaveShortcut = useCallback(() => {
+    if (loading) return;
+    void handleSubmit(onSubmit)();
+  }, [handleSubmit, loading, onSubmit]);
 
   const requestClose = useCallback(() => {
     const state = modalHistoryRef.current;
@@ -681,7 +720,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (occurrenceBase) {
           payload.occurrence_date = dayjs(occurrenceBase).tz(getUserTimezone()).format('YYYY-MM-DD');
         }
-        await updateTaskStatusLocal(queryClient, task.id, payload);
+        await updateTaskStatusLocal(queryClient, task.id, payload, {
+          submitMeta: {
+            submittedAt: new Date().toISOString(),
+            submitSource: 'manual',
+          },
+        });
       } else {
         const hasRecurrence = !!parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
         if (hasRecurrence) {
@@ -698,6 +742,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             // Keep historical occurrences, stop current/future occurrences.
             await updateTaskLocal(queryClient, task.id, {
               recurrence_end_date: occurrenceStart.subtract(1, 'second').utc().toISOString(),
+            }, {
+              submitMeta: {
+                submittedAt: new Date().toISOString(),
+                submitSource: 'manual',
+              },
             });
           } else {
             await deleteTaskLocal(queryClient, task.id);
@@ -747,7 +796,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           occurrence_date: dayjs(occurrenceBase || undefined).tz(getUserTimezone()).format('YYYY-MM-DD'),
         };
       }
-      const savedTask = await updateTaskStatusLocal(queryClient, task.id, statusPayload);
+      const savedTask = await updateTaskStatusLocal(queryClient, task.id, statusPayload, {
+        submitMeta: {
+          submittedAt: new Date().toISOString(),
+          submitSource: 'manual',
+        },
+      });
       onSaved(savedTask || { ...task, status: nextStatus });
       requestClose();
     } catch (err) {
@@ -866,6 +920,30 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 <input type="hidden" {...register('category_ids')} />
                 <div ref={basicPanelRef} className="relative flex items-center gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
+                    {isEditing && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBasicPanel('');
+                            setShowActivityPanel((prev) => !prev);
+                          }}
+                          className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                            showActivityPanel
+                              ? 'bg-slate-100 text-slate-700'
+                              : 'text-slate-500 hover:bg-slate-100'
+                          }`}
+                          title={t('task.activityTitle')}
+                        >
+                          <IconHistory className="h-4 w-4" />
+                        </button>
+                        {showActivityPanel && task?.id && (
+                          <div className="absolute left-0 top-10 z-20 w-[min(30rem,calc(100vw-3.5rem))]">
+                            <TaskActivityTimeline taskID={task.id} />
+                          </div>
+                        )}
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={() => setBasicPanel(basicPanel === 'priority' ? '' : 'priority')}
@@ -1257,14 +1335,15 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               </div>
 
               <div className="flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
-                <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
                     value={descriptionValue}
                     onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}
+                    onSaveShortcut={handleDescriptionSaveShortcut}
                     placeholder={t('task.description')}
-                    className="min-h-0 flex-1"
+                    className="min-h-0 min-w-0 flex-1 overflow-hidden"
                     fill
                     minHeight={320}
                   />

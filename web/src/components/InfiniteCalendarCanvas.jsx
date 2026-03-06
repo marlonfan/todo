@@ -1628,7 +1628,7 @@ export default function InfiniteCalendarCanvas({
           <button
             key={`more-${key}`}
             type="button"
-            className="canvas-ui-action absolute h-5 rounded px-1 text-left text-[10px] font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+            className="canvas-ui-action absolute inline-flex h-5 items-center whitespace-nowrap rounded px-1 text-left text-[10px] font-semibold leading-5 text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
             style={{
               left: x,
               top: y,
@@ -1652,7 +1652,7 @@ export default function InfiniteCalendarCanvas({
               });
             }}
           >
-            +{hidden.length} more
+            +{hidden.length}
           </button>
         );
       }

@@ -14,8 +14,9 @@ import {
   getTaskListGroupPref,
   setTaskListGroupPref,
 } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconGroup, IconRepeat, IconRepeatOff, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconGroup, IconHistory, IconRepeat, IconRepeatOff, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import TaskActivityTimeline from './TaskActivityTimeline';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import {
@@ -25,10 +26,10 @@ import {
   updateTaskLocal,
   updateTaskStatusLocal,
 } from '../data/taskMutations';
-import { scheduleSync } from '../data/syncEngine';
 
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
+const DRAFT_IDLE_SUBMIT_MS = 30000;
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -366,6 +367,8 @@ function TaskList({ forcedView = '' }) {
   const [selectedTaskID, setSelectedTaskID] = useState(0);
   const [draft, setDraft] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [submittingDraft, setSubmittingDraft] = useState(false);
+  const [pendingSubmitTaskID, setPendingSubmitTaskID] = useState(0);
   const [quickTitle, setQuickTitle] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [sortBy, setSortBy] = useState('due_asc');
@@ -376,6 +379,7 @@ function TaskList({ forcedView = '' }) {
   const [draftParsePreview, setDraftParsePreview] = useState('');
   const [showDraftCustomRecurrenceMenu, setShowDraftCustomRecurrenceMenu] = useState(false);
   const [showDraftMonthlyDatePicker, setShowDraftMonthlyDatePicker] = useState(false);
+  const [showActivityPanel, setShowActivityPanel] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false
@@ -389,13 +393,22 @@ function TaskList({ forcedView = '' }) {
   const draftSourceTaskIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
   const draftSyncTimerRef = useRef(0);
+  const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
+  const selectedTaskSnapshotRef = useRef(null);
+  const draftSnapshotRef = useRef(null);
+  const isDraftDirtyRef = useRef(false);
+  const isSavingDraftRef = useRef(false);
+  const leaveFlushInFlightRef = useRef(false);
+  const flushDraftOnLeaveRef = useRef(null);
 
   const params = new URLSearchParams(location.search);
   const isSearchPath = location.pathname === '/search';
   const view = forcedView || (isSearchPath ? 'search' : (params.get('view') || 'all'));
   const legacySearchQuery = String(params.get('q') || '').trim();
   const categoryID = Number.parseInt(params.get('category_id') || '', 10);
+  const taskIDParam = Number.parseInt(params.get('task_id') || '', 10);
   const activeCategoryID = Number.isNaN(categoryID) ? 0 : categoryID;
+  const focusTaskID = Number.isNaN(taskIDParam) ? 0 : taskIDParam;
   const viewPrefKey = useMemo(() => resolveTaskListViewKey(view, activeCategoryID), [activeCategoryID, view]);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
@@ -453,15 +466,22 @@ function TaskList({ forcedView = '' }) {
   }, []);
 
   useEffect(() => {
-    if (!detailPanel) return undefined;
+    if (!detailPanel && !showActivityPanel) return undefined;
     const handlePointerDown = (event) => {
       if (!detailPanelRef.current) return;
       if (!detailPanelRef.current.contains(event.target)) {
         setDetailPanel('');
+        setShowActivityPanel(false);
       }
     };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [detailPanel, showActivityPanel]);
+
+  useEffect(() => {
+    if (detailPanel) {
+      setShowActivityPanel(false);
+    }
   }, [detailPanel]);
 
   useEffect(() => {
@@ -475,15 +495,6 @@ function TaskList({ forcedView = '' }) {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [listToolbarPanel]);
-
-  useEffect(() => () => {
-    if (draftSyncTimerRef.current) {
-      window.clearTimeout(draftSyncTimerRef.current);
-      draftSyncTimerRef.current = 0;
-      // Flush deferred outbox sync on unmount to avoid pending local-only edits.
-      scheduleSync();
-    }
-  }, []);
 
   const loading = tasksLoading && tasks.length === 0;
   const setTasksCache = (updater) => {
@@ -695,6 +706,21 @@ function TaskList({ forcedView = '' }) {
     }
   }, [filteredTasks, selectedTaskID]);
 
+  useEffect(() => {
+    if (!focusTaskID) return;
+    const targetExists = filteredTasks.some((task) => task.id === focusTaskID);
+    if (!targetExists) return;
+    if (selectedTaskID !== focusTaskID) {
+      setSelectedTaskID(focusTaskID);
+      return;
+    }
+    const nextParams = new URLSearchParams(location.search);
+    if (!nextParams.has('task_id')) return;
+    nextParams.delete('task_id');
+    const nextQuery = nextParams.toString();
+    navigate(`${location.pathname}${nextQuery ? `?${nextQuery}` : ''}`, { replace: true });
+  }, [filteredTasks, focusTaskID, location.pathname, location.search, navigate, selectedTaskID]);
+
   const selectedTask = useMemo(
     () => filteredTasks.find((task) => task.id === selectedTaskID) || null,
     [filteredTasks, selectedTaskID]
@@ -763,6 +789,7 @@ function TaskList({ forcedView = '' }) {
     setDraftParsePreview('');
     setShowDraftCustomRecurrenceMenu(false);
     setShowDraftMonthlyDatePicker(false);
+    setShowActivityPanel(false);
   }, [selectedTask?.id]);
 
   useEffect(() => {
@@ -862,6 +889,19 @@ function TaskList({ forcedView = '' }) {
     const original = normalizeDraftForCompare(buildDraftFromTask(selectedTask));
     return JSON.stringify(current) !== JSON.stringify(original);
   }, [draft, selectedTask]);
+  useEffect(() => {
+    selectedTaskSnapshotRef.current = selectedTask || null;
+  }, [selectedTask]);
+  useEffect(() => {
+    draftSnapshotRef.current = draft || null;
+  }, [draft]);
+  useEffect(() => {
+    isDraftDirtyRef.current = isDraftDirty;
+  }, [isDraftDirty]);
+  useEffect(() => {
+    isSavingDraftRef.current = savingDraft;
+  }, [savingDraft]);
+  const hasPendingSubmit = !!selectedTask && pendingSubmitTaskID === selectedTask.id;
 
   const getPriorityBadge = (priorityValue) => {
     const value = Number.parseInt(priorityValue, 10) || 0;
@@ -877,9 +917,19 @@ function TaskList({ forcedView = '' }) {
         await updateTaskStatusLocal(queryClient, task.id, {
           status: newStatus,
           occurrence_date: dayjs().tz(timezone).format('YYYY-MM-DD'),
+        }, {
+          submitMeta: {
+            submittedAt: new Date().toISOString(),
+            submitSource: 'manual',
+          },
         });
       } else {
-        await updateTaskStatusLocal(queryClient, task.id, newStatus);
+        await updateTaskStatusLocal(queryClient, task.id, newStatus, {
+          submitMeta: {
+            submittedAt: new Date().toISOString(),
+            submitSource: 'manual',
+          },
+        });
       }
     } catch (err) {
       console.error('Failed to update task status:', err);
@@ -1011,7 +1061,128 @@ function TaskList({ forcedView = '' }) {
   const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
-  const handleSaveDraft = async () => {
+
+  const buildDraftPayload = useCallback((taskValue, draftValue) => {
+    if (!taskValue || !draftValue) return null;
+    const title = (draftValue.title || '').trim();
+    if (!title) return null;
+    const parsedPriority = parsePriorityFromTitle(title);
+    const normalizedTitle = parsedPriority?.cleanedTitle?.trim() || title;
+    const normalizedPriority = Number.isInteger(parsedPriority?.priority)
+      ? parsedPriority.priority
+      : (Number.parseInt(draftValue.priority, 10) || 0);
+    const originalDraft = buildDraftFromTask(taskValue);
+    const recurrenceChanged =
+      !!draftValue.recurrence_enabled !== !!originalDraft?.recurrence_enabled
+      || String(draftValue.recurrence_type || 'daily') !== String(originalDraft?.recurrence_type || 'daily')
+      || JSON.stringify([...(draftValue.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
+        !== JSON.stringify([...(originalDraft?.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
+      || clampMonthlyDate(draftValue.recurrence_date, 1) !== clampMonthlyDate(originalDraft?.recurrence_date, 1);
+    const timeChanged =
+      !!draftValue.all_day !== !!originalDraft?.all_day
+      || String(draftValue.start_time || '') !== String(originalDraft?.start_time || '')
+      || String(draftValue.end_time || '') !== String(originalDraft?.end_time || '');
+
+    const payload = {
+      title: normalizedTitle,
+      description: draftValue.description || '',
+      priority: normalizedPriority,
+      status: draftValue.status || taskValue.status || 'pending',
+      client_timezone: timezone,
+      category_ids: (draftValue.category_ids || []).map((id) => Number.parseInt(id, 10)).filter((id) => !Number.isNaN(id)),
+    };
+
+    if (timeChanged || recurrenceChanged) {
+      const startInput = String(draftValue.start_time || originalDraft?.start_time || '');
+      const endInput = String(draftValue.end_time || originalDraft?.end_time || '');
+      payload.all_day = !!draftValue.all_day;
+      if (payload.all_day) {
+        const startDate = splitDatePart(startInput);
+        const endDate = splitDatePart(endInput);
+        payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`) : null;
+        payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`) : null;
+      } else {
+        payload.start_time = startInput ? toISOString(startInput) : null;
+        payload.end_time = endInput ? toISOString(endInput) : null;
+      }
+
+      if (startInput) payload.start_time_local = startInput;
+      if (endInput) payload.end_time_local = endInput;
+    }
+
+    if (draftValue.recurrence_enabled) {
+      const normalizedDays = (draftValue.recurrence_days || [])
+        .map((day) => String(day || '').toUpperCase())
+        .filter((day) => WEEKDAY_ONLY_RE.test(day));
+      const rule = {
+        freq: draftValue.recurrence_type || 'daily',
+        interval: 1,
+      };
+      if (draftValue.recurrence_type === 'biweekly') {
+        rule.freq = 'weekly';
+        rule.interval = 2;
+        rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+      } else if (draftValue.recurrence_type === 'monthly') {
+        rule.bydate = [clampMonthlyDate(draftValue.recurrence_date, 1)];
+      } else if (rule.freq === 'weekly' && normalizedDays.length > 0) {
+        rule.byday = normalizedDays;
+      }
+      payload.recurrence_rule = rule;
+    } else {
+      payload.recurrence_rule = null;
+    }
+
+    return {
+      payload,
+      normalizedTitle,
+      normalizedPriority,
+    };
+  }, [timezone, workDayKeys]);
+
+  const submitPendingDraft = useCallback(async (taskIDOverride = 0, submitSource = 'idle') => {
+    const pending = pendingDraftSubmitRef.current;
+    if (!pending?.taskID || !pending?.payload) return;
+    const taskID = Number(taskIDOverride || pending.taskID || 0);
+    if (!taskID || taskID !== Number(pending.taskID)) return;
+    if (submittingDraft) return;
+
+    setSubmittingDraft(true);
+    try {
+      await updateTaskLocal(queryClient, taskID, pending.payload, {
+        scheduleSync: true,
+        localOnly: false,
+        skipOptimistic: true,
+        submitMeta: {
+          submittedAt: new Date().toISOString(),
+          submitSource,
+        },
+      });
+      pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+      setPendingSubmitTaskID(0);
+      setLastSavedAt(dayjs().format('HH:mm:ss'));
+    } catch (err) {
+      console.error('Failed to submit task details:', err);
+    } finally {
+      setSubmittingDraft(false);
+    }
+  }, [queryClient, submittingDraft]);
+
+  const scheduleIdleDraftSubmit = useCallback((taskID) => {
+    if (draftSyncTimerRef.current) {
+      window.clearTimeout(draftSyncTimerRef.current);
+      draftSyncTimerRef.current = 0;
+    }
+    if (!taskID) return;
+    draftSyncTimerRef.current = window.setTimeout(() => {
+      const pending = pendingDraftSubmitRef.current;
+      if (Number(pending?.taskID || 0) === Number(taskID || 0)) {
+        void submitPendingDraft(taskID, 'idle');
+      }
+      draftSyncTimerRef.current = 0;
+    }, DRAFT_IDLE_SUBMIT_MS);
+  }, [submitPendingDraft]);
+
+  const handleSaveDraft = async ({ submitAfter = false, submitSource = 'idle' } = {}) => {
     if (!selectedTask || !draft) return;
     if (selectedTask.read_only) return;
     if (savingDraft) return;
@@ -1020,103 +1191,120 @@ function TaskList({ forcedView = '' }) {
     if (!title) return;
 
     const targetTaskID = selectedTask.id;
+    const built = buildDraftPayload(selectedTask, draft);
+    if (!built?.payload) return;
+
     setSavingDraft(true);
     try {
-      const parsedPriority = parsePriorityFromTitle(title);
-      const normalizedTitle = parsedPriority?.cleanedTitle?.trim() || title;
-      const normalizedPriority = Number.isInteger(parsedPriority?.priority)
-        ? parsedPriority.priority
-        : (Number.parseInt(draft.priority, 10) || 0);
-      if (normalizedTitle !== title || String(normalizedPriority) !== String(draft.priority)) {
+      if (built.normalizedTitle !== title || String(built.normalizedPriority) !== String(draft.priority)) {
         setDraft((prev) => (prev ? {
           ...prev,
-          title: normalizedTitle,
-          priority: String(normalizedPriority),
+          title: built.normalizedTitle,
+          priority: String(built.normalizedPriority),
         } : prev));
       }
-      const originalDraft = buildDraftFromTask(selectedTask);
-      const recurrenceChanged =
-        !!draft.recurrence_enabled !== !!originalDraft?.recurrence_enabled
-        || String(draft.recurrence_type || 'daily') !== String(originalDraft?.recurrence_type || 'daily')
-        || JSON.stringify([...(draft.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
-          !== JSON.stringify([...(originalDraft?.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
-        || clampMonthlyDate(draft.recurrence_date, 1) !== clampMonthlyDate(originalDraft?.recurrence_date, 1);
-      const timeChanged =
-        !!draft.all_day !== !!originalDraft?.all_day ||
-        String(draft.start_time || '') !== String(originalDraft?.start_time || '') ||
-        String(draft.end_time || '') !== String(originalDraft?.end_time || '');
 
-      const payload = {
-        title: normalizedTitle,
-        description: draft.description || '',
-        priority: normalizedPriority,
-        status: draft.status || selectedTask.status || 'pending',
-        client_timezone: timezone,
-        category_ids: (draft.category_ids || []).map((id) => Number.parseInt(id, 10)).filter((id) => !Number.isNaN(id)),
-      };
-
-      if (timeChanged || recurrenceChanged) {
-        const startInput = String(draft.start_time || originalDraft?.start_time || '');
-        const endInput = String(draft.end_time || originalDraft?.end_time || '');
-        payload.all_day = !!draft.all_day;
-        if (payload.all_day) {
-          const startDate = splitDatePart(startInput);
-          const endDate = splitDatePart(endInput);
-          payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`) : null;
-          payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`) : null;
-        } else {
-          payload.start_time = startInput ? toISOString(startInput) : null;
-          payload.end_time = endInput ? toISOString(endInput) : null;
-        }
-
-        if (startInput) payload.start_time_local = startInput;
-        if (endInput) payload.end_time_local = endInput;
-      }
-
-      if (draft.recurrence_enabled) {
-        const normalizedDays = (draft.recurrence_days || [])
-          .map((day) => String(day || '').toUpperCase())
-          .filter((day) => WEEKDAY_ONLY_RE.test(day));
-        const rule = {
-          freq: draft.recurrence_type || 'daily',
-          interval: 1,
-        };
-        if (draft.recurrence_type === 'biweekly') {
-          rule.freq = 'weekly';
-          rule.interval = 2;
-          rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
-        } else if (draft.recurrence_type === 'monthly') {
-          rule.bydate = [clampMonthlyDate(draft.recurrence_date, 1)];
-        } else if (rule.freq === 'weekly' && normalizedDays.length > 0) {
-          rule.byday = normalizedDays;
-        }
-        payload.recurrence_rule = rule;
-      } else {
-        payload.recurrence_rule = null;
-      }
-
-      const savedTask = await updateTaskLocal(queryClient, targetTaskID, payload, { scheduleSync: false });
+      const savedTask = await updateTaskLocal(queryClient, targetTaskID, built.payload, {
+        scheduleSync: false,
+        localOnly: true,
+      });
       if (draftSourceTaskIDRef.current !== targetTaskID) {
         return;
       }
       draftTouchedRef.current = false;
-      // Do not overwrite draft from saved response here.
-      // For controlled editors, forced value resets can clear redo history stack.
       void savedTask;
-      if (draftSyncTimerRef.current) {
-        window.clearTimeout(draftSyncTimerRef.current);
-      }
-      draftSyncTimerRef.current = window.setTimeout(() => {
-        scheduleSync();
-        draftSyncTimerRef.current = 0;
-      }, 4000);
+
+      pendingDraftSubmitRef.current = { taskID: targetTaskID, payload: built.payload };
+      setPendingSubmitTaskID(targetTaskID);
+      scheduleIdleDraftSubmit(targetTaskID);
       setLastSavedAt(dayjs().format('HH:mm:ss'));
+
+      if (submitAfter) {
+        void submitPendingDraft(targetTaskID, submitSource);
+      }
     } catch (err) {
       console.error('Failed to save task details:', err);
     } finally {
       setSavingDraft(false);
     }
   };
+
+  const flushDraftOnLeave = useCallback(async (submitSource = 'leave') => {
+    if (leaveFlushInFlightRef.current) return;
+    const taskValue = selectedTaskSnapshotRef.current;
+    const draftValue = draftSnapshotRef.current;
+    if (!taskValue || !draftValue) return;
+    if (taskValue.read_only) return;
+    if (!isDraftDirtyRef.current || !draftTouchedRef.current) return;
+    if (isSavingDraftRef.current) return;
+    if (!(draftValue.title || '').trim()) return;
+
+    const built = buildDraftPayload(taskValue, draftValue);
+    if (!built?.payload) return;
+
+    leaveFlushInFlightRef.current = true;
+    try {
+      await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+        scheduleSync: false,
+        localOnly: true,
+      });
+      await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+        scheduleSync: true,
+        localOnly: false,
+        skipOptimistic: true,
+        submitMeta: {
+          submittedAt: new Date().toISOString(),
+          submitSource,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to flush draft on leave:', error);
+    } finally {
+      leaveFlushInFlightRef.current = false;
+    }
+  }, [buildDraftPayload, queryClient]);
+
+  useEffect(() => {
+    flushDraftOnLeaveRef.current = flushDraftOnLeave;
+  }, [flushDraftOnLeave]);
+
+  useEffect(() => () => {
+    if (draftSyncTimerRef.current) {
+      window.clearTimeout(draftSyncTimerRef.current);
+      draftSyncTimerRef.current = 0;
+    }
+    const flush = flushDraftOnLeaveRef.current;
+    if (typeof flush === 'function') {
+      void flush('leave');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handlePageHide = () => {
+      const flush = flushDraftOnLeaveRef.current;
+      if (typeof flush === 'function') {
+        void flush('pagehide');
+      }
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, []);
+
+  const handleSubmitDraft = async () => {
+    if (!selectedTask || selectedTask.read_only) return;
+    if (isDraftDirty) {
+      await handleSaveDraft({ submitAfter: true, submitSource: 'manual' });
+      return;
+    }
+    await submitPendingDraft(selectedTask.id, 'manual');
+  };
+
+  const handleDraftEditorSaveShortcut = useCallback(() => {
+    void handleSubmitDraft();
+  }, [handleSubmitDraft]);
 
   const handleDeleteSelected = async () => {
     if (!selectedTask) return;
@@ -1128,6 +1316,10 @@ function TaskList({ forcedView = '' }) {
         await deleteTaskLocal(queryClient, selectedTask.id);
       } else {
         await cancelTaskLocal(queryClient, selectedTask.id);
+      }
+      if (Number(pendingDraftSubmitRef.current?.taskID || 0) === Number(selectedTask.id)) {
+        pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+        setPendingSubmitTaskID(0);
       }
       setSelectedTaskID(0);
     } catch (err) {
@@ -1546,14 +1738,38 @@ function TaskList({ forcedView = '' }) {
                     )}
                     {savingDraft ? (
                       <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">{t('task.saving')}</span>
+                    ) : (submittingDraft && hasPendingSubmit) ? (
+                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-indigo-700">{t('task.submitting')}</span>
                     ) : isDraftDirty ? (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">{t('task.unsavedChanges')}</span>
+                    ) : hasPendingSubmit ? (
+                      <span className="rounded-full bg-violet-100 px-2 py-0.5 text-violet-700">{t('task.pendingSubmit')}</span>
                     ) : (
                       <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">{t('task.saved')}</span>
                     )}
                     {lastSavedAt && <span className="text-slate-400">{t('task.lastSavedAt', { time: lastSavedAt })}</span>}
                   </div>
                   <div ref={detailPanelRef} className="order-1 relative flex min-w-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDetailPanel('');
+                        setShowActivityPanel((prev) => !prev);
+                      }}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                        showActivityPanel
+                          ? 'bg-slate-100 text-slate-700'
+                          : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                      title={t('task.activityTitle')}
+                    >
+                      <IconHistory className="h-4 w-4" />
+                    </button>
+                    {showActivityPanel && selectedTask && (
+                      <div className="absolute left-0 top-10 z-20 w-[30rem] max-w-[min(30rem,calc(100vw-3rem))]">
+                        <TaskActivityTimeline taskID={selectedTask.id} />
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => setDetailPanel(detailPanel === 'priority' ? '' : 'priority')}
@@ -1951,14 +2167,15 @@ function TaskList({ forcedView = '' }) {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
-                <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
                     key={`task-editor-${selectedTask.id}`}
                     value={draft.description}
                     onChange={(nextValue) => handleDraftFieldChange('description', nextValue)}
+                    onSaveShortcut={handleDraftEditorSaveShortcut}
                     placeholder={t('task.description')}
-                    className="min-h-0 flex-1"
+                    className="min-h-0 min-w-0 flex-1 overflow-hidden"
                     fill
                     minHeight={280}
                   />
@@ -1970,11 +2187,11 @@ function TaskList({ forcedView = '' }) {
                   {t('common.delete')}
                 </button>
                 <button
-                  onClick={handleSaveDraft}
-                  disabled={savingDraft || !isDraftDirty}
+                  onClick={handleSubmitDraft}
+                  disabled={savingDraft || submittingDraft || (!isDraftDirty && !hasPendingSubmit)}
                   className="btn-primary text-sm"
                 >
-                  {savingDraft ? t('common.loading') : t('common.save')}
+                  {submittingDraft ? t('task.submitting') : t('settings.syncNow')}
                 </button>
               </div>
             </div>

@@ -5,6 +5,7 @@ import 'vditor/dist/index.css';
 function LiveMarkdownEditor({
   value,
   onChange,
+  onSaveShortcut,
   placeholder,
   minHeight = 220,
   fill = false,
@@ -19,11 +20,16 @@ function LiveMarkdownEditor({
   const externalVersionRef = useRef(0);
   const appliedExternalVersionRef = useRef(0);
   const onChangeRef = useRef(onChange);
+  const onSaveShortcutRef = useRef(onSaveShortcut);
   const mountIDRef = useRef(`vditor-${Math.random().toString(36).slice(2, 11)}`);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    onSaveShortcutRef.current = onSaveShortcut;
+  }, [onSaveShortcut]);
 
   const resolveHeight = () => (fill ? '100%' : `${minHeight}px`);
   const normalize = (text) => String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
@@ -82,15 +88,32 @@ function LiveMarkdownEditor({
       },
     });
 
-    const handleRedoAlias = (event) => {
-      const key = String(event.key || '').toLowerCase();
-      const isRedoAlias = ((event.ctrlKey || event.metaKey) && event.shiftKey && key === 'z')
-        || ((event.ctrlKey || event.metaKey) && key === 'y');
-      if (!isRedoAlias) return;
+    const handleEditorShortcuts = (event) => {
       const target = event.target && typeof event.target.closest === 'function'
         ? event.target
         : document.activeElement;
-      if (!target || typeof target.closest !== 'function' || !target.closest('.vditor')) return;
+      const isInsideCurrentEditor = !!(
+        target
+        && mountRef.current
+        && typeof mountRef.current.contains === 'function'
+        && mountRef.current.contains(target)
+      );
+      if (!isInsideCurrentEditor) return;
+
+      const key = String(event.key || '').toLowerCase();
+      const isSaveShortcut = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === 's';
+      if (isSaveShortcut) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof onSaveShortcutRef.current === 'function') {
+          onSaveShortcutRef.current();
+        }
+        return;
+      }
+
+      const isRedoAlias = ((event.ctrlKey || event.metaKey) && event.shiftKey && key === 'z')
+        || ((event.ctrlKey || event.metaKey) && key === 'y');
+      if (!isRedoAlias) return;
       event.preventDefault();
       event.stopPropagation();
       try {
@@ -112,10 +135,10 @@ function LiveMarkdownEditor({
       });
       target.dispatchEvent(synthetic);
     };
-    window.addEventListener('keydown', handleRedoAlias, true);
+    window.addEventListener('keydown', handleEditorShortcuts, true);
 
     return () => {
-      window.removeEventListener('keydown', handleRedoAlias, true);
+      window.removeEventListener('keydown', handleEditorShortcuts, true);
       readyRef.current = false;
       instance.destroy();
       editorRef.current = null;
