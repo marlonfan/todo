@@ -84,9 +84,12 @@ function LiveMarkdownEditor({
 
     const handleRedoAlias = (event) => {
       const key = String(event.key || '').toLowerCase();
-      const isRedoAlias = event.ctrlKey && event.shiftKey && key === 'z';
+      const isRedoAlias = ((event.ctrlKey || event.metaKey) && event.shiftKey && key === 'z')
+        || ((event.ctrlKey || event.metaKey) && key === 'y');
       if (!isRedoAlias) return;
-      const target = event.target;
+      const target = event.target && typeof event.target.closest === 'function'
+        ? event.target
+        : document.activeElement;
       if (!target || typeof target.closest !== 'function' || !target.closest('.vditor')) return;
       event.preventDefault();
       event.stopPropagation();
@@ -102,7 +105,8 @@ function LiveMarkdownEditor({
       const synthetic = new KeyboardEvent('keydown', {
         key: 'y',
         code: 'KeyY',
-        ctrlKey: true,
+        ctrlKey: !event.metaKey,
+        metaKey: !!event.metaKey,
         bubbles: true,
         cancelable: true,
       });

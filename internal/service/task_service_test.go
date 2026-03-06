@@ -73,3 +73,26 @@ func TestCheckRevisionConflictReturnsLatestTask(t *testing.T) {
 		t.Fatalf("expected latest task snapshot to be returned")
 	}
 }
+
+func TestRequiresRecurringOccurrenceContext(t *testing.T) {
+	recurring := &models.Task{
+		RecurrenceRule: &models.RecurrenceRule{Freq: "weekly"},
+	}
+	nonRecurring := &models.Task{}
+
+	if !requiresRecurringOccurrenceContext(recurring, models.TaskStatusCompleted, false) {
+		t.Fatalf("expected recurring completed status without context to require occurrence context")
+	}
+	if !requiresRecurringOccurrenceContext(recurring, models.TaskStatusPending, false) {
+		t.Fatalf("expected recurring pending status without context to require occurrence context")
+	}
+	if requiresRecurringOccurrenceContext(recurring, models.TaskStatusCancelled, false) {
+		t.Fatalf("cancelled should still allow series-level updates without occurrence context")
+	}
+	if requiresRecurringOccurrenceContext(recurring, models.TaskStatusCompleted, true) {
+		t.Fatalf("status with occurrence context should not be blocked")
+	}
+	if requiresRecurringOccurrenceContext(nonRecurring, models.TaskStatusCompleted, false) {
+		t.Fatalf("non-recurring task should not require occurrence context")
+	}
+}

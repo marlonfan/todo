@@ -5,7 +5,6 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { calendarAPI } from '../api/client';
 import TaskModal from './TaskModal';
 import InfiniteCalendarCanvas from './InfiniteCalendarCanvas';
 import dayjs from 'dayjs';
@@ -13,7 +12,6 @@ import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { toServerRangeBoundary } from '../utils/syncTime';
 import { queryKeys } from '../query/keys';
 import { IconSearch } from './icons/TaskIcons';
-import { buildCalendarRangeKey, getCalendarRange, getMeta, listCalendarRanges, putCalendarRange, setMeta } from '../data/localStore';
 import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
 import { useTasksQuery } from '../query/hooks';
 import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvents } from './calendarEventMerge';
@@ -25,7 +23,7 @@ function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
     return value;
   }
-  return 'timeGridDay';
+  return 'timeGridWeek';
 }
 
 function readCalendarDefaultView() {
@@ -33,7 +31,7 @@ function readCalendarDefaultView() {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     return normalizeCalendarDefaultView(user.calendar_default_view);
   } catch {
-    return 'timeGridDay';
+    return 'timeGridWeek';
   }
 }
 
@@ -51,7 +49,7 @@ function normalizeMobileView(value) {
   if (value === 'timeGridDay' || value === 'timeGridThreeDay' || value === 'dayGridMonth') {
     return value;
   }
-  return 'timeGridDay';
+  return 'timeGridThreeDay';
 }
 
 function getWeekStripStart(dateValue) {
@@ -134,30 +132,6 @@ function isRangeCoveredByPool(rangeStartISO, rangeEndISO, pool) {
     (rangeEnd.isBefore(poolEnd) || rangeEnd.isSame(poolEnd));
 }
 
-function buildCalendarSnapshotMetaKey(timezone) {
-  return `calendar_last_success_snapshot:${timezone || 'UTC'}`;
-}
-
-function emitCalendarTrace(detail = {}) {
-  if (typeof window === 'undefined') return;
-  if (!window.__TODO_SYNC_DEBUG__) return;
-  window.dispatchEvent(new CustomEvent('sync:trace', {
-    detail: {
-      type: 'calendar_rebuilt',
-      at: new Date().toISOString(),
-      ...detail,
-    },
-  }));
-}
-
-const CALENDAR_CACHE_SCHEMA_VERSION = 2;
-const CALENDAR_CACHE_REFRESH_MS = 10 * 60 * 1000;
-const CALENDAR_AUTO_REVALIDATE_MS = 2 * 60 * 1000;
-
-function isCurrentCalendarCache(entry) {
-  return Number(entry?.cache_version || 0) === CALENDAR_CACHE_SCHEMA_VERSION;
-}
-
 // Simplified expand function for calendar pool
 function expandCalendarPool(existingPool, newRangeStartISO, newRangeEndISO) {
   if (!existingPool?.start || !existingPool?.end) {
@@ -191,7 +165,6 @@ function CalendarView() {
   const suppressStripClickRef = useRef(false);
   const pendingFocusDateRef = useRef('');
   const touchDraggingEventRef = useRef(false);
-  const calendarFetchInFlightRef = useRef(new Map());
   const wheelGestureRef = useRef({ sumX: 0, sumY: 0, lastAt: 0 });
   const wheelNavLockUntilRef = useRef(0);
   const desktopSwipeRef = useRef({ active: false, startX: 0, startY: 0, allow: false });
@@ -205,7 +178,6 @@ function CalendarView() {
   const viewDropdownRef = useRef(null);
   const readonlyModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const moreEventsModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
-  const lastCalendarRevalidateAtRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -223,7 +195,7 @@ function CalendarView() {
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
   const [timezone, setTimezone] = useState(getUserTimezone);
-  const [mobileView, setMobileView] = useState('timeGridDay');
+  const [mobileView, setMobileView] = useState('timeGridThreeDay');
   const [mobileCurrentDate, setMobileCurrentDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
   const [mobileStripStartDate, setMobileStripStartDate] = useState(() => getWeekStripStart(dayjs().tz(getUserTimezone())));
   const [stripTranslateX, setStripTranslateX] = useState(0);
@@ -284,8 +256,8 @@ function CalendarView() {
 
   const mobileViewOptions = useMemo(
     () => [
-      { value: 'timeGridDay', label: t('calendar.day') },
       { value: 'timeGridThreeDay', label: i18n.language === 'zh-CN' ? '三日' : '3-day' },
+      { value: 'timeGridDay', label: t('calendar.day') },
       { value: 'dayGridMonth', label: t('calendar.month') },
     ],
     [i18n.language, t]
@@ -411,10 +383,6 @@ function CalendarView() {
     }
   }, [activeCalendarView, mobileCurrentDate, mobileStripStartDate]);
 
-  const currentCalendarQueryKey = useMemo(
-    () => queryKeys.calendar.events(calendarPool.start || '', calendarPool.end || '', timezone),
-    [calendarPool.end, calendarPool.start, timezone]
-  );
   const taskStatusIndex = useMemo(
     () => buildTaskStatusIndex(tasksForProjection),
     [tasksForProjection]
@@ -428,82 +396,6 @@ function CalendarView() {
     if (!isoString) return null;
     return dayjs(isoString).utc().toISOString();
   }, []);
-
-  const fetchCalendarRangeFromServer = useCallback(async (rangeStart, rangeEnd, options = {}) => {
-    if (!rangeStart || !rangeEnd) return [];
-    const requestKey = `${timezone}|${rangeStart}|${rangeEnd}`;
-    const existing = calendarFetchInFlightRef.current.get(requestKey);
-    if (existing) {
-      const deduped = await existing;
-      if (options.updateQuery) {
-        queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), deduped);
-      }
-      return deduped;
-    }
-
-    const fetchPromise = (async () => {
-      const res = await calendarAPI.getEvents({
-        start: toServerISO(rangeStart),
-        end: toServerISO(rangeEnd),
-      });
-      const list = Array.isArray(res.data) ? res.data : [];
-      const mapped = list
-        .map((event) => ({
-          ...event,
-          start: toCalendarISO(event.start),
-          end: event.end ? toCalendarISO(event.end) : undefined,
-        }))
-        .filter((event) => (event?.extendedProps?.status || 'pending') !== 'cancelled');
-      const projected = buildProjectedEventsFromTasks(tasksForProjection, {
-        rangeStart,
-        rangeEnd,
-        timezone,
-        toCalendarISO,
-      });
-      const merged = mergeCalendarEvents(mapped, projected, taskStatusIndex);
-      const annotated = annotateOverlapCount(merged, Math.max(15, timeGranularity));
-      const cacheKey = buildCalendarRangeKey(rangeStart, rangeEnd, timezone);
-
-      await putCalendarRange({
-        key: cacheKey,
-        start: rangeStart,
-        end: rangeEnd,
-        timezone,
-        events: merged,
-        cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
-        updated_at: Date.now(),
-      });
-      await setMeta(buildCalendarSnapshotMetaKey(timezone), {
-        start: rangeStart,
-        end: rangeEnd,
-        timezone,
-        events: merged,
-        cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
-        updated_at: Date.now(),
-      });
-
-      emitCalendarTrace({
-        source: 'server_merge',
-        range_start: rangeStart,
-        range_end: rangeEnd,
-        projected_count: projected.length,
-        event_count: annotated.length,
-      });
-
-      return annotated;
-    })();
-
-    calendarFetchInFlightRef.current.set(requestKey, fetchPromise);
-    try {
-      const annotated = await fetchPromise;
-      if (options.updateQuery) {
-        queryClient.setQueryData(queryKeys.calendar.events(rangeStart, rangeEnd, timezone), annotated);
-      }
-      return annotated;
-    } finally {
-      calendarFetchInFlightRef.current.delete(requestKey);
-    }
-  }, [queryClient, taskStatusIndex, tasksForProjection, timeGranularity, timezone, toCalendarISO, toServerISO]);
 
   // ==================== 新架构：日历数据获取 ====================
 
@@ -532,15 +424,6 @@ function CalendarView() {
     if (!calendarPool.start || !calendarPool.end) return;
     // 任务投影逻辑会在 useEventsForRange 中自动处理
   }, [tasksForProjection, calendarPool.start, calendarPool.end, timezone]);
-
-  const updateCurrentCalendarEvents = useCallback((updater) => {
-    // 新架构中，我们不再直接修改 Query 数据
-    // 而是收集受影响的日期，使缓存失效
-    // 实际的数据更新会在下一个渲染周期通过 useCalendarFetch 自动处理
-
-    // 注意：这个函数现在主要用于触发缓存失效
-    // 实际的数据更新应该通过 API 调用后，新数据会自动合并到 CacheSet
-  }, [timezone]);
 
   useEffect(() => {
     if (!dateRange.start || !dateRange.end) return;
@@ -1066,6 +949,12 @@ function CalendarView() {
     }
     const taskId = info.event.extendedProps.taskId;
     const instanceId = info.event.id;
+    const occurrenceDate = info?.event?.start
+      ? dayjs(info.event.start).tz(timezone).format('YYYY-MM-DD')
+      : '';
+    const occurrenceStart = info?.event?.start
+      ? dayjs(info.event.start).toISOString()
+      : '';
     const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
     const cachedTask = Array.isArray(cachedTasks)
       ? cachedTasks.find((task) => task.id === taskId)
@@ -1075,7 +964,10 @@ function CalendarView() {
       setSelectedTask({
         ...cachedTask,
         id: taskId,
+        status: info?.event?.extendedProps?.status || cachedTask.status,
         instanceId,
+        occurrenceDate,
+        occurrenceStart,
       });
       setSelectedRange(null);
       setModalOpen(true);
@@ -1095,6 +987,12 @@ function CalendarView() {
     const taskId = Number(eventLike?.extendedProps?.taskId || 0);
     if (!taskId) return;
     const instanceId = eventLike?.id;
+    const occurrenceDate = eventLike?.start
+      ? dayjs(eventLike.start).tz(timezone).format('YYYY-MM-DD')
+      : '';
+    const occurrenceStart = eventLike?.start
+      ? dayjs(eventLike.start).toISOString()
+      : '';
     const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
     const cachedTask = Array.isArray(cachedTasks)
       ? cachedTasks.find((task) => task.id === taskId)
@@ -1104,7 +1002,10 @@ function CalendarView() {
       setSelectedTask({
         ...cachedTask,
         id: taskId,
+        status: eventLike?.extendedProps?.status || cachedTask.status,
         instanceId,
+        occurrenceDate,
+        occurrenceStart,
       });
       setSelectedRange(null);
       setModalOpen(true);
@@ -1114,7 +1015,7 @@ function CalendarView() {
     if (!cachedTask) {
       alert(t('calendar.loadTaskFailed'));
     }
-  }, [openReadonlyEventModal, queryClient, t]);
+  }, [openReadonlyEventModal, queryClient, t, timezone]);
 
   const handleMoreLinkClick = useCallback((info) => {
     const allSegs = Array.isArray(info?.allSegs) ? info.allSegs : [];
@@ -1158,31 +1059,22 @@ function CalendarView() {
     const isRecurring = !!event.extendedProps.isRecurring;
     const currentStatus = event.extendedProps.status || 'pending';
     const nextStatus = currentStatus === 'completed' ? 'pending' : 'completed';
-    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    updateCurrentCalendarEvents((prev) => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.map((item) => {
-        if (item.id !== event.id) return item;
-        return {
-          ...item,
-          extendedProps: {
-            ...item.extendedProps,
-            status: nextStatus,
-          },
-        };
-      });
-    });
 
     try {
       const payload = {
         status: nextStatus,
       };
       if (isRecurring) {
-        payload.instance_id = instanceId;
+        const validInstanceID = /^\d+_\d{8}$/.test(String(instanceId || '').trim());
+        if (validInstanceID) {
+          payload.instance_id = instanceId;
+        }
+        if (event?.start) {
+          payload.occurrence_date = dayjs(event.start).tz(timezone).format('YYYY-MM-DD');
+        }
       }
       await updateTaskStatusLocal(queryClient, taskId, payload);
     } catch (err) {
-      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to update task status:', err);
     }
   };
@@ -1204,14 +1096,6 @@ function CalendarView() {
       }
     }
 
-    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    const optimisticStart = dayjs(info.event.start).utc().toISOString();
-    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().toISOString() : undefined;
-    updateCurrentCalendarEvents((prev) => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
-    });
-
     try {
       await updateTaskScheduleLocal(queryClient, taskId, {
         start_time: newStart,
@@ -1219,7 +1103,6 @@ function CalendarView() {
         all_day: info.event.allDay,
       });
     } catch (err) {
-      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to update schedule:', err);
       info.revert();
     } finally {
@@ -1244,14 +1127,6 @@ function CalendarView() {
       }
     }
 
-    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    const optimisticStart = dayjs(info.event.start).utc().toISOString();
-    const optimisticEnd = info.event.end ? dayjs(info.event.end).utc().toISOString() : undefined;
-    updateCurrentCalendarEvents((prev) => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.map((item) => (item.id === info.event.id ? { ...item, start: optimisticStart, end: optimisticEnd } : item));
-    });
-
     try {
       await updateTaskScheduleLocal(queryClient, taskId, {
         start_time: newStart,
@@ -1259,7 +1134,6 @@ function CalendarView() {
         all_day: info.event.allDay,
       });
     } catch (err) {
-      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to resize event:', err);
       info.revert();
     } finally {
@@ -1271,15 +1145,6 @@ function CalendarView() {
     if (!event || event?.extendedProps?.readOnly) return;
     const taskId = Number(event?.extendedProps?.taskId || 0);
     if (!taskId) return;
-    const previousEvents = queryClient.getQueryData(currentCalendarQueryKey);
-    const optimisticStart = start ? dayjs(start).utc().toISOString() : event.start;
-    const optimisticEnd = end ? dayjs(end).utc().toISOString() : (event.end || undefined);
-    updateCurrentCalendarEvents((prev) => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.map((item) => (String(item.id) === String(event.id)
-        ? { ...item, start: optimisticStart, end: optimisticEnd }
-        : item));
-    });
 
     try {
       await updateTaskScheduleLocal(queryClient, taskId, {
@@ -1288,10 +1153,9 @@ function CalendarView() {
         all_day: !!allDay,
       });
     } catch (err) {
-      updateCurrentCalendarEvents(previousEvents);
       console.error('Failed to move canvas event:', err);
     }
-  }, [currentCalendarQueryKey, queryClient, updateCurrentCalendarEvents]);
+  }, [queryClient]);
 
   const handleModalClose = () => {
     setModalOpen(false);
@@ -1311,15 +1175,9 @@ function CalendarView() {
         return [savedTask, ...base];
       });
     }
-    // Avoid immediate stale overwrite from server right after local save/outbox enqueue.
-    // Let local projection render first, then softly revalidate after sync has time to finish.
-    if (calendarPool.start && calendarPool.end) {
-      window.setTimeout(() => {
-        fetchCalendarRangeFromServer(calendarPool.start, calendarPool.end, { updateQuery: true }).catch((error) => {
-          console.error('Failed to refresh calendar after delayed save revalidate:', error);
-        });
-      }, 3500);
-    }
+    window.setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ['calendar'] });
+    }, 250);
   };
 
   const renderEventContent = (arg) => {
@@ -1404,11 +1262,13 @@ function CalendarView() {
       <div className="calendar-topbar sticky top-0 z-30 border-b border-blue-100 bg-white/90 backdrop-blur">
         <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
           <div className="inline-flex items-center gap-2">
-            <div className="inline-flex items-center rounded-xl border border-blue-100 bg-white p-1 shadow-sm">
+            <div className={`inline-flex items-center rounded-xl border border-blue-100 bg-white shadow-sm ${isCompactMobile ? 'h-9' : 'p-1'}`}>
               <button
                 type="button"
                 onClick={() => handleNavigatePeriod(-1)}
-                className="md-icon-btn h-8 w-8 text-slate-600 focus:outline-none focus-visible:outline-none"
+                className={`md-icon-btn text-slate-600 focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-full w-8 text-sm' : 'h-8 w-8'
+                }`}
                 aria-label="previous period"
               >
                 ‹
@@ -1416,14 +1276,18 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={handleGoToday}
-                className="inline-flex h-8 items-center rounded-lg px-2.5 text-xs font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+                className={`inline-flex items-center rounded-lg text-xs font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-full px-3' : 'h-8 px-2.5'
+                }`}
               >
                 {t('calendar.today')}
               </button>
               <button
                 type="button"
                 onClick={() => handleNavigatePeriod(1)}
-                className="md-icon-btn h-8 w-8 text-slate-600 focus:outline-none focus-visible:outline-none"
+                className={`md-icon-btn text-slate-600 focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-full w-8 text-sm' : 'h-8 w-8'
+                }`}
                 aria-label="next period"
               >
                 ›
@@ -1436,7 +1300,9 @@ function CalendarView() {
                 aria-expanded={viewDropdownOpen}
                 aria-label="calendar view selector"
                 onClick={() => setViewDropdownOpen((prev) => !prev)}
-                className="inline-flex h-10 items-center gap-1 rounded-xl border border-blue-100 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+                className={`inline-flex items-center gap-1 rounded-xl border border-blue-100 bg-white text-xs font-semibold text-slate-700 shadow-sm hover:bg-blue-50 focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-9 px-3' : 'h-10 px-3'
+                }`}
               >
                 <span>{activeViewOption?.label || t('calendar.month')}</span>
                 <svg viewBox="0 0 20 20" className={`h-3.5 w-3.5 transition-transform ${viewDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -1467,7 +1333,7 @@ function CalendarView() {
             </div>
           </div>
 
-          <div className="min-w-0 flex-1 px-2 text-center">
+          <div className={`min-w-0 flex-1 px-2 text-center ${isCompactMobile ? 'hidden' : ''}`}>
             <h2 className="truncate text-sm font-semibold tracking-tight text-slate-800 md:text-base">
               {currentViewTitle || t('nav.calendar')}
             </h2>
@@ -1482,7 +1348,9 @@ function CalendarView() {
             <button
               type="button"
               onClick={() => openSearchDialog()}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-100 bg-white text-slate-600 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+              className={`inline-flex items-center justify-center rounded-lg border border-blue-100 bg-white text-slate-600 hover:bg-blue-50 focus:outline-none focus-visible:outline-none ${
+                isCompactMobile ? 'h-9 w-9' : 'h-8 w-8'
+              }`}
               title={t('common.search')}
             >
               <IconSearch className="h-4 w-4" />
@@ -1501,62 +1369,7 @@ function CalendarView() {
         </div>
       </div>
 
-      {isCompactMobile && activeCalendarView !== 'dayGridMonth' && (
-        <div className="border-b border-blue-100 bg-white/90 px-2 pt-2 pb-2.5 backdrop-blur">
-            <div
-              ref={stripViewportRef}
-              className="overflow-hidden rounded-2xl border border-blue-100/90 bg-gradient-to-b from-white to-blue-50/35 shadow-[0_8px_20px_rgba(59,130,246,0.08)]"
-              onPointerDown={handleStripPointerDown}
-              onPointerMove={handleStripPointerMove}
-              onPointerUp={handleStripPointerEnd}
-              onPointerCancel={handleStripPointerEnd}
-            >
-              <div
-                className="grid w-full gap-1.5 p-1.5"
-                style={{
-                  gridTemplateColumns: `repeat(${mobileStripDays}, minmax(0, 1fr))`,
-                  transform: `translate3d(${stripTranslateX}px, 0, 0)`,
-                  transition: stripTransitionMs > 0
-                    ? `transform ${stripTransitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`
-                    : 'none',
-                  touchAction: 'pan-y',
-                }}
-                onTransitionEnd={handleStripTransitionEnd}
-              >
-                {mobileDateStrip.map((dateValue) => {
-                  const dateKey = dateValue.format('YYYY-MM-DD');
-                  const active = dateKey === mobileCurrentDate;
-                  const isToday = dateKey === todayDateString;
-                  return (
-                    <button
-                      key={dateKey}
-                      type="button"
-                      onClick={(event) => {
-                        if (suppressStripClickRef.current) {
-                          event.preventDefault();
-                          return;
-                        }
-                        jumpToMobileDate(dateKey);
-                      }}
-                      className={`flex min-h-[60px] w-full flex-col items-center justify-center rounded-xl px-1.5 py-2 text-xs transition ${
-                        active
-                          ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-300/80'
-                          : isToday
-                            ? 'bg-blue-100/90 text-blue-700'
-                            : 'bg-white/80 text-slate-500 hover:bg-blue-50'
-                      }`}
-                    >
-                      <span className="text-[10px] font-medium leading-4 tracking-[0.08em]">{mobileWeekdayShort[dateValue.day()]}</span>
-                      <span className="mt-0.5 text-[15px] font-semibold leading-4">{dateValue.format('D')}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-        </div>
-      )}
-
-      <div className={`relative min-h-0 flex-1 ${isCompactMobile ? 'pb-8' : 'overflow-auto'}`}>
+      <div className={`relative min-h-0 flex-1 ${isCompactMobile ? '' : 'overflow-auto'}`}>
         <div
           ref={desktopViewportRef}
           className="h-full overflow-hidden bg-white"

@@ -534,7 +534,7 @@ function Settings() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.caldav.sources }),
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
-        queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] }),
+        queryClient.invalidateQueries({ queryKey: ['calendar'] }),
       ]);
       showToast('success', caldavEditingSourceID ? t('settings.caldav.toastUpdated') : t('settings.caldav.toastAdded'));
     } catch (err) {
@@ -562,10 +562,6 @@ function Settings() {
         // ignore
       }
       queryClient.setQueriesData({ queryKey: ['caldav', 'tasks'] }, []);
-      queryClient.setQueriesData({ queryKey: ['calendar', 'events'] }, (prev) => {
-        const list = Array.isArray(prev) ? prev : [];
-        return list.filter((event) => String(event?.extendedProps?.source || '') !== 'caldav');
-      });
       queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
         const list = Array.isArray(prev) ? prev : [];
         return list.filter((task) => !(task?.read_only || String(task?.source || '') === 'caldav'));
@@ -587,7 +583,7 @@ function Settings() {
         queryClient.invalidateQueries({ queryKey: queryKeys.caldav.sources }),
         queryClient.removeQueries({ queryKey: ['caldav', 'tasks'] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
-        queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] }),
+        queryClient.invalidateQueries({ queryKey: ['calendar'] }),
       ]);
       showToast('success', t('settings.caldav.toastDeleted'));
     } catch (err) {
@@ -605,7 +601,7 @@ function Settings() {
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: queryKeys.caldav.sources });
         queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
-        queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] });
+        queryClient.invalidateQueries({ queryKey: ['calendar'] });
       }, 3000);
       showToast('success', t('settings.caldav.toastSyncStarted'));
     } catch (err) {

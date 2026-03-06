@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"todo-app/internal/models"
@@ -147,6 +148,8 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
+	var completedAnchorDate time.Time
+	hasCompletedAnchor := false
 
 	// Update fields
 	if fieldMask["title"] {
@@ -182,6 +185,14 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 	}
 	if fieldMask["recurrence_rule"] {
 		task.RecurrenceRule = req.RecurrenceRule
+		// Recurring task base should stay pending; keep the original completion on anchor occurrence only.
+		if task.RecurrenceRule != nil && task.Status == models.TaskStatusCompleted {
+			task.Status = models.TaskStatusPending
+			if anchor, ok := resolveTaskOccurrenceAnchorDate(task); ok {
+				completedAnchorDate = anchor.UTC().Truncate(24 * time.Hour)
+				hasCompletedAnchor = true
+			}
+		}
 	}
 	if fieldMask["recurrence_end_date"] {
 		task.RecurrenceEndDate = req.RecurrenceEndDate
@@ -197,6 +208,11 @@ func (s *TaskService) Update(userID, taskID int64, req *models.UpdateTaskRequest
 
 	if err := s.taskRepo.Update(task); err != nil {
 		return nil, err
+	}
+	if hasCompletedAnchor {
+		if err := s.taskRepo.UpsertOccurrenceStatus(userID, task.ID, completedAnchorDate, models.TaskStatusCompleted); err != nil {
+			return nil, err
+		}
 	}
 
 	// Update categories
@@ -255,6 +271,9 @@ func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatu
 			}
 			return task, nil
 		}
+		if requiresRecurringOccurrenceContext(task, status, found) {
+			return nil, errors.New("recurring status update requires instance_id or occurrence_date")
+		}
 	}
 
 	task.Status = status
@@ -273,6 +292,13 @@ func (s *TaskService) UpdateStatus(userID, taskID int64, status models.TaskStatu
 		return nil, err
 	}
 	return updatedTask, nil
+}
+
+func requiresRecurringOccurrenceContext(task *models.Task, status models.TaskStatus, hasOccurrenceContext bool) bool {
+	if task == nil || task.RecurrenceRule == nil || hasOccurrenceContext {
+		return false
+	}
+	return status == models.TaskStatusPending || status == models.TaskStatusCompleted
 }
 
 func (s *TaskService) UpdateSchedule(userID, taskID int64, req *models.UpdateTaskScheduleRequest, expectedRevision *int64) (*models.Task, error) {
@@ -467,6 +493,19 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 
 var instanceIDPattern = regexp.MustCompile(`^\d+_(\d{8})$`)
 
+func resolveTaskOccurrenceAnchorDate(task *models.Task) (time.Time, bool) {
+	if task == nil {
+		return time.Time{}, false
+	}
+	if task.StartTime != nil {
+		return task.StartTime.UTC(), true
+	}
+	if task.DueDate != nil {
+		return task.DueDate.UTC(), true
+	}
+	return time.Time{}, false
+}
+
 func parseOccurrenceDate(instanceID, occurrenceDate string) (time.Time, bool, error) {
 	if trimmed := strings.TrimSpace(occurrenceDate); trimmed != "" {
 		parsed, err := time.Parse("2006-01-02", trimmed)
@@ -516,6 +555,19 @@ func buildRRuleString(rule *models.RecurrenceRule, dtStart *time.Time, until *ti
 			}
 			// Ensure day codes are uppercase
 			rruleStr += strings.ToUpper(day)
+		}
+	}
+
+	if len(rule.ByDate) > 0 {
+		monthDays := make([]string, 0, len(rule.ByDate))
+		for _, day := range rule.ByDate {
+			if day < 1 || day > 31 {
+				continue
+			}
+			monthDays = append(monthDays, strconv.Itoa(day))
+		}
+		if len(monthDays) > 0 {
+			rruleStr += ";BYMONTHDAY=" + strings.Join(monthDays, ",")
 		}
 	}
 

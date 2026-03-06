@@ -6,12 +6,13 @@ import dayjs from 'dayjs';
 import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconRepeat, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconRepeat, IconRepeatOff, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery } from '../query/hooks';
 import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
+const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 
 function getStoredUser() {
   try {
@@ -57,8 +58,178 @@ function getDefaultStartParts() {
   return { hour: Number.isFinite(hour) ? hour : 9, minute: Number.isFinite(minute) ? minute : 0 };
 }
 
+function parseInputInTimezone(value, timezoneName) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = dayjs.tz(
+    raw.replace('T', ' '),
+    ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'],
+    timezoneName
+  );
+  return parsed.isValid() ? parsed : null;
+}
+
+function parseAbsoluteInTimezone(value, timezoneName) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const direct = dayjs(raw);
+  if (direct.isValid()) return direct.tz(timezoneName);
+  return parseInputInTimezone(raw, timezoneName);
+}
+
+function formatInstanceDateToken(token) {
+  const raw = String(token || '').trim();
+  if (!/^\d{8}$/.test(raw)) return '';
+  return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+}
+
+function resolveSeriesDeleteOccurrenceStart(task, timezoneName) {
+  const explicitStart = parseAbsoluteInTimezone(task?.occurrenceStart || task?.occurrence_start, timezoneName);
+  if (explicitStart) return explicitStart;
+
+  const baseStart = parseAbsoluteInTimezone(
+    task?.start_time || task?.startTime || task?.due_date || task?.dueDate,
+    timezoneName,
+  );
+
+  const dateCandidates = [];
+  const rawOccurrenceDate = String(task?.occurrenceDate || task?.occurrence_date || '').trim();
+  if (rawOccurrenceDate) {
+    dateCandidates.push(rawOccurrenceDate.slice(0, 10));
+  }
+
+  const instanceID = String(task?.instanceId || task?.instance_id || '').trim();
+  const instanceDateToken = instanceID.match(/^\d+_(\d{8})$/)?.[1] || '';
+  const instanceDate = formatInstanceDateToken(instanceDateToken);
+  if (instanceDate) {
+    dateCandidates.push(instanceDate);
+  }
+
+  for (const candidate of dateCandidates) {
+    const dayOnly = parseInputInTimezone(candidate, timezoneName);
+    if (!dayOnly) continue;
+    if (!baseStart) return dayOnly.startOf('day');
+    return dayOnly
+      .hour(baseStart.hour())
+      .minute(baseStart.minute())
+      .second(baseStart.second())
+      .millisecond(0);
+  }
+
+  return null;
+}
+
+function shiftEndByDuration(originalStartInput, originalEndInput, nextStartInput, timezoneName) {
+  const originalStart = parseInputInTimezone(originalStartInput, timezoneName);
+  const originalEnd = parseInputInTimezone(originalEndInput, timezoneName);
+  const nextStart = parseInputInTimezone(nextStartInput, timezoneName);
+  if (!originalStart || !originalEnd || !nextStart) return null;
+  const durationMinutes = originalEnd.diff(originalStart, 'minute');
+  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) return null;
+  return nextStart.add(durationMinutes, 'minute').format('YYYY-MM-DDTHH:mm');
+}
+
+function parseLocalInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = dayjs(raw);
+  return parsed.isValid() ? parsed : null;
+}
+
+function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
+  const start = parseLocalInput(startInput);
+  const end = parseLocalInput(endInput);
+  if (!start && !end) return noDateLabel;
+  if (!isAllDay) {
+    if (start) return start.format('MM/DD HH:mm');
+    return end.format('MM/DD HH:mm');
+  }
+  if (!start && end) return end.format('MM/DD');
+  if (start && !end) return start.format('MM/DD');
+  if (isAllDay) {
+    return `${start.format('MM/DD')}-${end.format('MM/DD')}`;
+  }
+  return start.format('MM/DD');
+}
+
+function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, fallbackLabel) {
+  const ids = Array.isArray(selectedCategoryIDs) ? selectedCategoryIDs.map(String) : [];
+  if (ids.length === 0) return fallbackLabel;
+  const selected = categories.filter((cat) => ids.includes(String(cat.id)));
+  if (selected.length === 0) return `${fallbackLabel}+${ids.length}`;
+  const first = selected[0];
+  const firstLabel = showEmoji && first?.emoji ? `${first.emoji}${first.name}` : String(first?.name || fallbackLabel);
+  if (selected.length === 1) return firstLabel;
+  return `${firstLabel}+${selected.length - 1}`;
+}
+
+function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t) {
+  if (!enabled) return t('task.repeatOff');
+  if (recurrenceType === 'biweekly') {
+    const label = t('task.biweekly');
+    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
+    return dayCount > 0 ? `${label}(${dayCount})` : label;
+  }
+  if (recurrenceType === 'weekly') {
+    const weeklyLabel = t('task.weekly');
+    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
+    return dayCount > 0 ? `${weeklyLabel}(${dayCount})` : weeklyLabel;
+  }
+  if (recurrenceType === 'monthly') return t('task.monthly');
+  if (recurrenceType === 'yearly') return t('task.yearly');
+  return t('task.daily');
+}
+
+function normalizeByDayList(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .map((day) => String(day || '').trim().toUpperCase())
+    .filter((day) => day.length > 0);
+}
+
+function clampMonthlyDate(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(31, Math.max(1, parsed));
+}
+
+function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
+  const rawByDate = Array.isArray(rule?.bydate)
+    ? rule.bydate
+    : Array.isArray(rule?.byDate)
+      ? rule.byDate
+      : Array.isArray(rule?.bymonthday)
+        ? rule.bymonthday
+        : [];
+  for (const raw of rawByDate) {
+    const value = Number.parseInt(raw, 10);
+    if (Number.isFinite(value) && value >= 1 && value <= 31) {
+      return value;
+    }
+  }
+  const start = parseLocalInput(fallbackStartInput);
+  if (start) return start.date();
+  return 1;
+}
+
+function parseRecurrenceSelection(rule) {
+  if (!rule) return { type: 'daily', days: [], monthDate: 1 };
+  const freq = String(rule.freq || 'daily').trim().toLowerCase();
+  const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
+  const byDay = normalizeByDayList(rule.byday || rule.byDay);
+  const monthDate = resolveMonthlyDateFromRule(rule, '');
+  if (freq === 'weekly' && interval === 2) {
+    return { type: 'biweekly', days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)), monthDate };
+  }
+  return {
+    type: freq || 'daily',
+    days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+    monthDate,
+  };
+}
+
 function TaskModal({ task, initialRange, onClose, onSaved }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { register, handleSubmit, watch, setValue, getValues } = useForm();
   const { data: categories = [] } = useCategoriesQuery();
@@ -67,9 +238,13 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [showRecurrence, setShowRecurrence] = useState(false);
   const [recurrenceType, setRecurrenceType] = useState('daily');
   const [selectedDays, setSelectedDays] = useState([]);
+  const [monthlyDate, setMonthlyDate] = useState(1);
+  const [showCustomRecurrenceMenu, setShowCustomRecurrenceMenu] = useState(false);
+  const [showMonthlyDatePicker, setShowMonthlyDatePicker] = useState(false);
   const [timeTouched, setTimeTouched] = useState(false);
   const [parsePreview, setParsePreview] = useState('');
   const [basicPanel, setBasicPanel] = useState('');
+  const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const basicPanelRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
@@ -77,6 +252,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const timeInputStepSeconds = timeGranularity * 60;
 
   const isEditing = !!task;
+  const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
   const isAllDay = watch('all_day');
   const titleValue = watch('title') || '';
   const priorityValue = watch('priority') || '0';
@@ -93,12 +269,51 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const displayPriorityValue = Number.isInteger(parsedPriorityFromTitle?.priority)
     ? parsedPriorityFromTitle.priority
     : (Number.parseInt(priorityValue, 10) || 0);
-  const isZh = i18n.language === 'zh-CN';
-  const priorityIndicator = displayPriorityValue === 1
-    ? { text: isZh ? '高' : 'High', title: t('task.priorityHigh'), className: 'text-rose-600' }
-    : displayPriorityValue === -1
-      ? { text: isZh ? '低' : 'Low', title: t('task.priorityLow'), className: 'text-emerald-600' }
-      : { text: isZh ? '中' : 'Medium', title: t('task.priorityMedium'), className: 'text-sky-600' };
+  const priorityIconTone = displayPriorityValue === 1 ? 'high' : (displayPriorityValue === 0 ? 'medium' : 'default');
+  const priorityButtonClass = basicPanel === 'priority'
+    ? priorityIconTone === 'high'
+      ? 'bg-rose-50 text-rose-700'
+      : priorityIconTone === 'medium'
+        ? 'bg-sky-50 text-sky-700'
+        : 'bg-slate-100 text-slate-700'
+    : priorityIconTone === 'high'
+      ? 'text-rose-600 hover:bg-rose-50'
+      : priorityIconTone === 'medium'
+        ? 'text-sky-600 hover:bg-sky-50'
+        : 'text-slate-500 hover:bg-slate-100';
+  const priorityButtonTitle = priorityIconTone === 'high'
+    ? t('task.priorityHigh')
+    : priorityIconTone === 'medium'
+      ? t('task.priorityMedium')
+      : t('task.priorityLow');
+  const timeSummaryLabel = buildTimeSummaryLabel(startInputValue, endInputValue, isAllDay, t('task.noDate'));
+  const hasParsedTimeHint = !!parsePreview;
+  const hasTimeValue = !!(startInputValue || endInputValue);
+  const timeButtonClass = basicPanel === 'time'
+    ? 'bg-sky-50 text-sky-700'
+    : (hasParsedTimeHint || hasTimeValue)
+      ? 'text-sky-600 hover:bg-sky-50'
+      : 'text-slate-500 hover:bg-slate-100';
+  const timeButtonTitle = hasParsedTimeHint ? parsePreview : timeSummaryLabel;
+  const hasCategoryValue = selectedCategoryValues.length > 0;
+  const categorySummaryLabel = buildCategorySummaryLabel(
+    selectedCategoryValues,
+    categories,
+    showCategoryEmoji,
+    t('task.categories')
+  );
+  const categoryButtonClass = basicPanel === 'category'
+    ? 'bg-indigo-50 text-indigo-700'
+    : hasCategoryValue
+      ? 'text-indigo-600 hover:bg-indigo-50'
+      : 'text-slate-500 hover:bg-slate-100';
+  const recurrenceSummaryLabel = buildRecurrenceSummaryLabel(showRecurrence, recurrenceType, selectedDays, t);
+  const recurrenceButtonClass = basicPanel === 'recurrence'
+    ? 'bg-slate-100 text-slate-700'
+    : showRecurrence
+      ? 'text-emerald-600 hover:bg-emerald-50'
+      : 'text-slate-500 hover:bg-slate-100';
+  const isCustomRecurrenceType = recurrenceType === 'biweekly' || recurrenceType === 'lunar';
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
   useEffect(() => {
@@ -112,6 +327,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [basicPanel]);
+
+  useEffect(() => {
+    if (!showRecurrence) {
+      setShowCustomRecurrenceMenu(false);
+      setShowMonthlyDatePicker(false);
+      return;
+    }
+    if (recurrenceType !== 'monthly') {
+      setShowMonthlyDatePicker(false);
+    }
+  }, [showRecurrence, recurrenceType]);
 
   const applyQuickDatePreset = (preset) => {
     if (preset === 'clear') {
@@ -162,9 +388,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const endTime = task.end_time || task.endTime;
       const allDay = task.all_day || task.allDay;
       const recurrenceRule = parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
+      const startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
       
       if (startTime) {
-        setValue('start_time', toInputFormat(startTime, null, allDay));
+        setValue('start_time', startInput);
       }
       if (endTime) {
         setValue('end_time', toInputFormat(endTime, null, allDay));
@@ -175,14 +402,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setShowRecurrence(false);
       setRecurrenceType('daily');
       setSelectedDays([]);
+      setMonthlyDate(resolveMonthlyDateFromRule(null, startInput));
+      setShowCustomRecurrenceMenu(false);
+      setShowMonthlyDatePicker(false);
       if (recurrenceRule) {
         setShowRecurrence(true);
-        if (recurrenceRule.freq) {
-          setRecurrenceType(recurrenceRule.freq || 'daily');
-        }
-        const byDay = recurrenceRule.byday || recurrenceRule.byDay;
-        if (Array.isArray(byDay)) {
-          setSelectedDays(byDay);
+        const parsedSelection = parseRecurrenceSelection(recurrenceRule);
+        setRecurrenceType(parsedSelection.type);
+        setSelectedDays(parsedSelection.days);
+        setMonthlyDate(resolveMonthlyDateFromRule(recurrenceRule, startInput));
+        if (parsedSelection.type === 'biweekly' || parsedSelection.type === 'lunar') {
+          setShowCustomRecurrenceMenu(true);
         }
       }
       
@@ -197,15 +427,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setShowRecurrence(false);
       setRecurrenceType('daily');
       setSelectedDays([]);
+      setMonthlyDate(1);
+      setShowCustomRecurrenceMenu(false);
+      setShowMonthlyDatePicker(false);
       if (initialRange?.start) {
         setValue('all_day', !!initialRange.allDay);
         setValue('start_time', initialRange.start);
         setValue('end_time', initialRange.end || '');
+        setMonthlyDate(clampMonthlyDate(dayjs(initialRange.start).date(), 1));
       } else {
         const timezone = getUserTimezone();
-        setValue('start_time', getDefaultStartInputValue(timezone));
+        const defaultStart = getDefaultStartInputValue(timezone);
+        setValue('start_time', defaultStart);
         setValue('end_time', '');
         setValue('all_day', false);
+        setMonthlyDate(clampMonthlyDate(dayjs(defaultStart).date(), 1));
       }
       setValue('priority', '0');
       setValue('category_ids', []);
@@ -242,6 +478,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       ? parsedPriority.cleanedTitle
       : rawTitle;
     const originalStartTime = getValues('start_time') || '';
+    const originalEndTime = getValues('end_time') || '';
     const parsed = parseNaturalTimeFromTitle(
       priorityNormalizedTitle,
       getUserTimezone(),
@@ -263,6 +500,15 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     }
     if (shouldUpdateTime && parsed.parsedAtInput !== originalStartTime) {
       setValue('start_time', parsed.parsedAtInput);
+      const shiftedEndTime = shiftEndByDuration(
+        originalStartTime,
+        originalEndTime,
+        parsed.parsedAtInput,
+        getUserTimezone()
+      );
+      if (shiftedEndTime) {
+        setValue('end_time', shiftedEndTime);
+      }
     }
     setParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
     return parsed;
@@ -292,19 +538,63 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         payload.status = data.status || task.status || 'pending';
       }
 
+      const existingRecurrenceRule = isEditing ? parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule) : null;
+      const existingRecurrenceSelection = parseRecurrenceSelection(existingRecurrenceRule);
+      const normalizedExistingDays = (existingRecurrenceSelection.days || [])
+        .map((day) => String(day || '').toUpperCase())
+        .filter((day) => WEEKDAY_ONLY_RE.test(day))
+        .sort();
+      const normalizedSelectedDays = selectedDays
+        .map((day) => String(day || '').toUpperCase())
+        .filter((day) => WEEKDAY_ONLY_RE.test(day))
+        .sort();
+      const recurrenceChanged = isEditing && (
+        showRecurrence !== !!existingRecurrenceRule
+        || (showRecurrence && (
+          (recurrenceType || 'daily') !== (existingRecurrenceSelection.type || 'daily')
+          || JSON.stringify(normalizedSelectedDays) !== JSON.stringify(normalizedExistingDays)
+          || ((recurrenceType || 'daily') === 'monthly'
+            && clampMonthlyDate(monthlyDate) !== clampMonthlyDate(existingRecurrenceSelection.monthDate, 1))
+        ))
+      );
+      const shouldFallbackScheduleFromTask = recurrenceChanged && !timeTouched;
+      const fallbackStartInput = shouldFallbackScheduleFromTask
+        ? toInputFormat(task?.start_time || task?.startTime || task?.due_date || task?.dueDate || '', null, !!data.all_day)
+        : '';
+      const fallbackEndInput = shouldFallbackScheduleFromTask
+        ? toInputFormat(task?.end_time || task?.endTime || '', null, !!data.all_day)
+        : '';
+
       // 处理日期时间
       if (data.all_day) {
-        payload.start_time = data.start_time ? toISOString(`${data.start_time} 00:00:00`) : null;
-        payload.end_time = data.end_time ? toISOString(`${data.end_time} 23:59:59`) : null;
+        const startDate = splitDatePart(data.start_time || fallbackStartInput);
+        const endDate = splitDatePart(data.end_time || fallbackEndInput);
+        payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`) : null;
+        payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`) : null;
       } else {
+        let originalStartInput = data.start_time || fallbackStartInput || '';
+        let originalEndInput = data.end_time || fallbackEndInput || '';
         if (parsedNaturalTime && !timeTouched) {
           data.start_time = parsedNaturalTime.parsedAtInput;
+          const shiftedEndTime = shiftEndByDuration(
+            originalStartInput,
+            originalEndInput,
+            data.start_time,
+            clientTimezone
+          );
+          if (shiftedEndTime) {
+            data.end_time = shiftedEndTime;
+          }
         }
         if (!isEditing && !data.start_time) {
           data.start_time = getDefaultStartInputValue(clientTimezone);
         }
-        payload.start_time = data.start_time ? toISOString(data.start_time) : null;
-        payload.end_time = data.end_time ? toISOString(data.end_time) : null;
+        originalStartInput = data.start_time || originalStartInput || '';
+        originalEndInput = data.end_time || originalEndInput || '';
+        payload.start_time = originalStartInput ? toISOString(originalStartInput) : null;
+        payload.end_time = originalEndInput ? toISOString(originalEndInput) : null;
+        data.start_time = originalStartInput;
+        data.end_time = originalEndInput;
       }
       if (data.start_time) {
         payload.start_time_local = data.start_time;
@@ -320,9 +610,18 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
       // 处理重复规则
       if (showRecurrence) {
+        const normalizedDays = selectedDays
+          .map((day) => String(day || '').toUpperCase())
+          .filter((day) => WEEKDAY_ONLY_RE.test(day));
         const rule = { freq: recurrenceType, interval: 1 };
-        if (recurrenceType === 'weekly' && selectedDays.length > 0) {
-          rule.byday = selectedDays;
+        if (recurrenceType === 'biweekly') {
+          rule.freq = 'weekly';
+          rule.interval = 2;
+          rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+        } else if (recurrenceType === 'monthly') {
+          rule.bydate = [clampMonthlyDate(monthlyDate)];
+        } else if (recurrenceType === 'weekly' && normalizedDays.length > 0) {
+          rule.byday = normalizedDays;
         }
         payload.recurrence_rule = rule;
       } else if (isEditing) {
@@ -356,17 +655,58 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     }
   };
 
-  const handleDelete = async () => {
-    if (!isEditing) return;
-    
-    if (!confirm(t('task.deleteConfirm'))) return;
+  const requestClose = useCallback(() => {
+    const state = modalHistoryRef.current;
+    if (typeof window !== 'undefined' && state.hasEntry) {
+      state.ignoreNextPop = true;
+      state.hasEntry = false;
+      window.history.back();
+    }
+    onClose();
+  }, [onClose]);
 
+  const executeDelete = useCallback(async (scope = 'series') => {
+    if (!isEditing || !task) return;
     setLoading(true);
+    setError('');
     try {
-      if (task?.status === 'cancelled') {
-        await deleteTaskLocal(queryClient, task.id);
+      if (scope === 'single') {
+        const instanceID = String(task.instanceId || task.instance_id || '').trim();
+        const payload = { status: 'cancelled' };
+        const validInstanceID = /^\d+_\d{8}$/.test(instanceID);
+        if (validInstanceID) {
+          payload.instance_id = instanceID;
+        }
+        const occurrenceBase = task.occurrenceDate || task.occurrence_date || task.start_time || task.startTime || task.due_date || task.dueDate;
+        if (occurrenceBase) {
+          payload.occurrence_date = dayjs(occurrenceBase).tz(getUserTimezone()).format('YYYY-MM-DD');
+        }
+        await updateTaskStatusLocal(queryClient, task.id, payload);
       } else {
-        await cancelTaskLocal(queryClient, task.id);
+        const hasRecurrence = !!parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
+        if (hasRecurrence) {
+          const timezoneName = getUserTimezone();
+          const occurrenceStart = resolveSeriesDeleteOccurrenceStart(task, timezoneName);
+          const taskStart = parseAbsoluteInTimezone(
+            task?.start_time || task?.startTime || task?.due_date || task?.dueDate,
+            timezoneName,
+          );
+          if (occurrenceStart && taskStart && !occurrenceStart.isAfter(taskStart)) {
+            // Deleting from the very first occurrence => delete whole series.
+            await deleteTaskLocal(queryClient, task.id);
+          } else if (occurrenceStart) {
+            // Keep historical occurrences, stop current/future occurrences.
+            await updateTaskLocal(queryClient, task.id, {
+              recurrence_end_date: occurrenceStart.subtract(1, 'second').utc().toISOString(),
+            });
+          } else {
+            await deleteTaskLocal(queryClient, task.id);
+          }
+        } else if (task?.status === 'cancelled') {
+          await deleteTaskLocal(queryClient, task.id);
+        } else {
+          await cancelTaskLocal(queryClient, task.id);
+        }
       }
       onSaved(null);
       requestClose();
@@ -374,7 +714,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setError(err.response?.data?.error || t('task.deleteFailed'));
     } finally {
       setLoading(false);
+      setDeleteChoiceOpen(false);
     }
+  }, [isEditing, onSaved, queryClient, requestClose, t, task]);
+
+  const handleDelete = () => {
+    if (!isEditing || !task) return;
+    if (recurrenceRule) {
+      setDeleteChoiceOpen(true);
+      return;
+    }
+    void executeDelete('series');
   };
 
   const handleToggleCompleted = async () => {
@@ -383,7 +733,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     setError('');
     try {
       const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
-      const savedTask = await updateTaskStatusLocal(queryClient, task.id, nextStatus);
+      const recurrenceRule = parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
+      let statusPayload = nextStatus;
+      if (recurrenceRule) {
+        const instanceID = String(task.instanceId || task.instance_id || '').trim();
+        const validInstanceID = /^\d+_\d{8}$/.test(instanceID);
+        if (validInstanceID) {
+          statusPayload = { status: nextStatus, instance_id: instanceID };
+        }
+        const occurrenceBase = task.occurrenceDate || task.occurrence_date || task.start_time || task.startTime || task.due_date || task.dueDate;
+        statusPayload = {
+          ...(typeof statusPayload === 'string' ? { status: nextStatus } : statusPayload),
+          occurrence_date: dayjs(occurrenceBase || undefined).tz(getUserTimezone()).format('YYYY-MM-DD'),
+        };
+      }
+      const savedTask = await updateTaskStatusLocal(queryClient, task.id, statusPayload);
       onSaved(savedTask || { ...task, status: nextStatus });
       requestClose();
     } catch (err) {
@@ -410,16 +774,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   ];
   const workDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR'];
   const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
-
-  const requestClose = useCallback(() => {
-    const state = modalHistoryRef.current;
-    if (typeof window !== 'undefined' && state.hasEntry) {
-      state.ignoreNextPop = true;
-      state.hasEntry = false;
-      window.history.back();
-    }
-    onClose();
-  }, [onClose]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -455,12 +809,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       if (isEscape && !loading) {
         event.preventDefault();
         event.stopPropagation();
+        if (deleteChoiceOpen) {
+          setDeleteChoiceOpen(false);
+          return;
+        }
         requestClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [loading, requestClose]);
+  }, [deleteChoiceOpen, loading, requestClose]);
 
   return (
     <div className="modal-overlay" onClick={requestClose}>
@@ -468,7 +826,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         className="modal-content task-modal-shell"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex h-[86vh] flex-col">
+        <div className="relative flex h-[86vh] flex-col">
           <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
@@ -482,17 +840,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 md:text-xl"
                   placeholder={t('task.title')}
                 />
-                <div className="mt-1 flex h-5 items-center justify-between gap-2">
-                  <p className={`min-w-0 truncate text-xs leading-4 ${parsePreview ? 'text-emerald-600' : 'text-transparent'}`}>
-                    {parsePreview || '\u00A0'}
-                  </p>
-                  <span
-                    title={priorityIndicator.title}
-                    className={`shrink-0 text-[10px] font-semibold leading-4 ${priorityIndicator.className}`}
-                  >
-                    {priorityIndicator.text}
-                  </span>
-                </div>
               </div>
               <button onClick={requestClose} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700">
                 ✕
@@ -517,69 +864,47 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 <input type="hidden" {...register('end_time')} />
                 <input type="hidden" {...register('description')} />
                 <input type="hidden" {...register('category_ids')} />
-                <div ref={basicPanelRef} className="relative flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
+                <div ref={basicPanelRef} className="relative flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setBasicPanel(basicPanel === 'priority' ? '' : 'priority')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        basicPanel === 'priority'
-                          ? 'bg-amber-50 text-amber-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.priority')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${priorityButtonClass}`}
+                      title={priorityButtonTitle}
                     >
                       <IconFlag className="h-4 w-4" />
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBasicPanel(basicPanel === 'time' ? '' : 'time')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        basicPanel === 'time'
-                          ? 'bg-rose-50 text-rose-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.startTime')}
-                    >
-                      <IconClock className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setBasicPanel(basicPanel === 'category' ? '' : 'category')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        basicPanel === 'category'
-                          ? 'bg-indigo-50 text-indigo-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.categories')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${categoryButtonClass}`}
+                      title={categorySummaryLabel}
                     >
                       <IconTag className="h-4 w-4" />
                     </button>
                     <button
                       type="button"
                       onClick={() => setBasicPanel(basicPanel === 'recurrence' ? '' : 'recurrence')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        basicPanel === 'recurrence' || showRecurrence
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.repeat')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${recurrenceButtonClass}`}
+                      title={recurrenceSummaryLabel}
                     >
-                      <IconRepeat className="h-4 w-4" />
+                      {(showRecurrence || basicPanel === 'recurrence')
+                        ? <IconRepeat className="h-4 w-4" />
+                        : <IconRepeatOff className="h-4 w-4" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBasicPanel(basicPanel === 'time' ? '' : 'time')}
+                      className={`relative inline-flex h-8 min-w-0 items-center gap-1 rounded-md px-2 text-sm ${timeButtonClass}`}
+                      title={timeButtonTitle}
+                    >
+                      <IconClock className="h-4 w-4" />
+                      <span className="w-20 truncate text-left text-[11px] leading-4">{timeSummaryLabel}</span>
+                      {hasParsedTimeHint && (
+                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                      )}
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setValue('all_day', !isAllDay)}
-                    className={`rounded-full border px-2.5 py-1 text-xs ${
-                      isAllDay
-                        ? 'border-blue-300 bg-blue-50 text-blue-700'
-                        : 'border-slate-200 bg-white text-slate-500'
-                    }`}
-                  >
-                    {t('task.allDay')}
-                  </button>
-
                     {basicPanel === 'priority' && (
                     <div className="absolute left-0 top-10 z-20 w-[min(22rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
                       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
@@ -701,6 +1026,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   ? asArray.filter((id) => id !== String(cat.id))
                                   : [...asArray, String(cat.id)];
                                 setValue('category_ids', next);
+                                setBasicPanel('');
                               }}
                               className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
                                 active
@@ -747,7 +1073,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             type="button"
                             onClick={() => {
                               setShowRecurrence(true);
-                              if (recurrenceType === 'weekly' && selectedDays.length === 0) {
+                              if ((recurrenceType === 'weekly' || recurrenceType === 'biweekly') && selectedDays.length === 0) {
                                 setSelectedDays(workDayKeys);
                               }
                             }}
@@ -776,11 +1102,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 type="button"
                                 onClick={() => {
                                   setRecurrenceType(option.value);
-                                  if (option.value === 'weekly' && selectedDays.length === 0) {
+                                  setShowCustomRecurrenceMenu(false);
+                                  if ((option.value === 'weekly' || option.value === 'biweekly') && selectedDays.length === 0) {
                                     setSelectedDays(workDayKeys);
                                   }
-                                  if (option.value !== 'weekly') {
+                                  if (option.value !== 'weekly' && option.value !== 'biweekly') {
                                     setSelectedDays([]);
+                                  }
+                                  if (option.value === 'monthly') {
+                                    const start = parseLocalInput(startInputValue || getValues('start_time') || '');
+                                    if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
                                   }
                                 }}
                                 className={`rounded-full border px-3 py-1 text-xs ${
@@ -792,9 +1123,51 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 {option.label}
                               </button>
                             ))}
+                            <button
+                              type="button"
+                              onClick={() => setShowCustomRecurrenceMenu((prev) => !prev)}
+                              className={`rounded-full border px-3 py-1 text-xs ${
+                                isCustomRecurrenceType || showCustomRecurrenceMenu
+                                  ? 'border-sky-300 bg-sky-50 text-sky-700'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.customRepeat')}
+                            </button>
                           </div>
+                          {(showCustomRecurrenceMenu || isCustomRecurrenceType) && (
+                            <div className="space-y-2 rounded-xl border border-sky-100 bg-sky-50/40 p-2.5">
+                              <div className="text-[11px] font-medium uppercase tracking-wide text-sky-700">{t('task.customRepeat')}</div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRecurrenceType('biweekly');
+                                    if (selectedDays.length === 0) {
+                                      setSelectedDays(workDayKeys);
+                                    }
+                                  }}
+                                  className={`rounded-full border px-3 py-1 text-xs ${
+                                    recurrenceType === 'biweekly'
+                                      ? 'border-sky-300 bg-sky-100 text-sky-800'
+                                      : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
+                                  }`}
+                                >
+                                  {t('task.biweekly')}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled
+                                  title={t('task.lunarRepeatPending')}
+                                  className="cursor-not-allowed rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-400"
+                                >
+                                  {t('task.lunarDay')}
+                                </button>
+                              </div>
+                            </div>
+                          )}
 
-                          {recurrenceType === 'weekly' && (
+                          {(recurrenceType === 'weekly' || recurrenceType === 'biweekly') && (
                             <div>
                               <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
                               <div className="mb-2 flex flex-wrap gap-2">
@@ -836,6 +1209,44 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   </button>
                                 ))}
                               </div>
+                            </div>
+                          )}
+                          {recurrenceType === 'monthly' && (
+                            <div className="space-y-2">
+                              <button
+                                type="button"
+                                onClick={() => setShowMonthlyDatePicker((prev) => !prev)}
+                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                              >
+                                <span>{t('task.monthlyOnDate')}</span>
+                                <span className="rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700">{clampMonthlyDate(monthlyDate)}</span>
+                              </button>
+                              {showMonthlyDatePicker && (
+                                <div className="rounded-xl border border-slate-200 bg-white p-2">
+                                  <div className="grid grid-cols-7 gap-1">
+                                    {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => {
+                                      const active = clampMonthlyDate(monthlyDate) === day;
+                                      return (
+                                        <button
+                                          key={day}
+                                          type="button"
+                                          onClick={() => {
+                                            setMonthlyDate(day);
+                                            setShowMonthlyDatePicker(false);
+                                          }}
+                                          className={`h-8 rounded-md text-xs font-medium ${
+                                            active
+                                              ? 'bg-sky-600 text-white'
+                                              : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                                          }`}
+                                        >
+                                          {day}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -903,6 +1314,46 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             </div>
           </form>
         </div>
+        {deleteChoiceOpen && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/25 p-4"
+            onClick={() => {
+              if (!loading) setDeleteChoiceOpen(false);
+            }}
+          >
+            <div
+              className="w-full max-w-[18rem] rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  onClick={() => { void executeDelete('single'); }}
+                  disabled={loading}
+                  className="btn-secondary w-full"
+                >
+                  {t('task.deleteOnlyThis')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { void executeDelete('series'); }}
+                  disabled={loading}
+                  className="btn-danger w-full"
+                >
+                  {t('task.deleteAllSeries')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteChoiceOpen(false)}
+                  disabled={loading}
+                  className="btn-secondary w-full"
+                >
+                  {t('common.cancel')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,9 +1,34 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
+import * as RRuleModule from 'rrule';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
+const RRuleLegacyDefault = typeof Reflect !== 'undefined'
+  ? Reflect.get(RRuleModule, 'default')
+  : undefined;
+const RRuleLegacyNamed = typeof Reflect !== 'undefined'
+  ? Reflect.get(RRuleModule, 'rrule')
+  : undefined;
+const RRule = RRuleModule.RRule || RRuleLegacyDefault?.RRule || RRuleLegacyNamed?.RRule;
+
+const RECURRENCE_FREQ_MAP = {
+  daily: RRule.DAILY,
+  weekly: RRule.WEEKLY,
+  monthly: RRule.MONTHLY,
+  yearly: RRule.YEARLY,
+};
+
+const RECURRENCE_WEEKDAY_MAP = {
+  MO: RRule.MO,
+  TU: RRule.TU,
+  WE: RRule.WE,
+  TH: RRule.TH,
+  FR: RRule.FR,
+  SA: RRule.SA,
+  SU: RRule.SU,
+};
 
 function isTaskInRange(task, rangeStartISO, rangeEndISO) {
   if (!task || !rangeStartISO || !rangeEndISO) return false;
@@ -25,6 +50,204 @@ function isTaskInRange(task, rangeStartISO, rangeEndISO) {
   return taskStart.isBefore(rangeEnd) && taskEnd.isAfter(rangeStart);
 }
 
+function parseRecurrenceRule(rawRule) {
+  if (!rawRule) return null;
+  if (typeof rawRule === 'object') return rawRule;
+  if (typeof rawRule !== 'string') return null;
+  try {
+    return JSON.parse(rawRule);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeByDayList(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .map((day) => String(day || '').trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function normalizeNumberList(rawList, min, max) {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isFinite(value) && value >= min && value <= max);
+}
+
+function toDateObject(value) {
+  if (value == null) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
+  const parsed = dayjs(value);
+  if (!parsed.isValid()) return null;
+  return parsed.toDate();
+}
+
+function resolveTaskDurationMs(rawStart, rawEnd) {
+  const start = dayjs(rawStart);
+  const end = dayjs(rawEnd);
+  if (!start.isValid() || !end.isValid()) return null;
+  const diff = end.diff(start);
+  if (!Number.isFinite(diff) || diff <= 0) return null;
+  return diff;
+}
+
+function isRecurringTaskPotentiallyInRange(task, rangeStartISO, rangeEndISO) {
+  if (!task || !rangeStartISO || !rangeEndISO) return false;
+  const rangeStart = dayjs(rangeStartISO);
+  const rangeEnd = dayjs(rangeEndISO);
+  if (!rangeStart.isValid() || !rangeEnd.isValid()) return false;
+
+  const startCandidate = task.start_time || task.startTime || task.due_date || task.dueDate;
+  if (!startCandidate) return false;
+  const taskStart = dayjs(startCandidate);
+  if (!taskStart.isValid()) return false;
+  if (!taskStart.isBefore(rangeEnd)) return false;
+
+  const recurrenceEndCandidate = task.recurrence_end_date || task.recurrenceEndDate;
+  if (recurrenceEndCandidate) {
+    const recurrenceEnd = dayjs(recurrenceEndCandidate);
+    if (recurrenceEnd.isValid() && recurrenceEnd.isBefore(rangeStart)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function buildProjectedEvent(task, {
+  id,
+  start,
+  end,
+  allDay,
+  isRecurring,
+  instanceId,
+  timezone,
+}) {
+  return {
+    id,
+    title: task.title || '',
+    start: start || dayjs().tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]'),
+    end,
+    allDay,
+    editable: !task.read_only,
+    extendedProps: {
+      taskId: Number(task.id),
+      status: task.status || 'pending',
+      priority: Number.parseInt(task.priority, 10) || 0,
+      isRecurring,
+      instanceId: instanceId || undefined,
+      syncState: task.sync_state || 'synced',
+      readOnly: !!task.read_only,
+      source: task.source || 'local_projection',
+      externalId: task.external_ref || '',
+    },
+  };
+}
+
+function buildRecurringProjectedEvents(task, options) {
+  const {
+    rangeStart,
+    rangeEnd,
+    rawStart,
+    rawEnd,
+    timezone,
+    toCalendarISO,
+  } = options;
+
+  const rule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
+  if (!rule) return [];
+
+  const dtStart = toDateObject(rawStart);
+  const rangeStartDate = toDateObject(rangeStart);
+  const rangeEndDate = toDateObject(rangeEnd);
+  if (!dtStart || !rangeStartDate || !rangeEndDate) return [];
+
+  const freqKey = String(rule.freq || '').trim().toLowerCase();
+  const freq = RECURRENCE_FREQ_MAP[freqKey];
+  if (typeof freq === 'undefined') return [];
+
+  const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
+  const rruleOptions = {
+    freq,
+    interval,
+    dtstart: dtStart,
+  };
+
+  const byDay = normalizeByDayList(rule.byday || rule.byDay);
+  const byWeekday = byDay
+    .map((day) => RECURRENCE_WEEKDAY_MAP[day])
+    .filter(Boolean);
+  if (byWeekday.length > 0) {
+    rruleOptions.byweekday = byWeekday;
+  }
+
+  const byMonth = normalizeNumberList(rule.bymonth || rule.byMonth, 1, 12);
+  if (byMonth.length > 0) {
+    rruleOptions.bymonth = byMonth;
+  }
+
+  const byMonthDay = normalizeNumberList(
+    rule.bydate || rule.byDate || rule.bymonthday || rule.byMonthDay,
+    1,
+    31,
+  );
+  if (byMonthDay.length > 0) {
+    rruleOptions.bymonthday = byMonthDay;
+  }
+
+  const count = Number.parseInt(rule.count, 10);
+  if (Number.isFinite(count) && count > 0) {
+    rruleOptions.count = count;
+  }
+
+  const untilCandidate = task?.recurrence_end_date || task?.recurrenceEndDate || rule?.until;
+  const until = toDateObject(untilCandidate);
+  if (until) {
+    rruleOptions.until = until;
+  }
+
+  let recurrence;
+  try {
+    recurrence = new RRule(rruleOptions);
+  } catch {
+    return [];
+  }
+
+  let occurrences = [];
+  try {
+    occurrences = recurrence.between(rangeStartDate, rangeEndDate, true);
+  } catch {
+    occurrences = [];
+  }
+  if (!Array.isArray(occurrences) || occurrences.length === 0) return [];
+
+  const durationMs = resolveTaskDurationMs(rawStart, rawEnd);
+  const seen = new Set();
+  const projected = [];
+  occurrences.forEach((occurrenceDate) => {
+    const startISO = occurrenceDate.toISOString();
+    const dayToken = dayjs(startISO).utc().format('YYYYMMDD');
+    const instanceId = `${task.id}_${dayToken}`;
+    if (seen.has(instanceId)) return;
+    seen.add(instanceId);
+    const eventEndISO = (Number.isFinite(durationMs) && durationMs > 0)
+      ? new Date(occurrenceDate.getTime() + durationMs).toISOString()
+      : undefined;
+    projected.push(buildProjectedEvent(task, {
+      id: instanceId,
+      start: toCalendarISO(startISO) || startISO,
+      end: eventEndISO ? (toCalendarISO(eventEndISO) || eventEndISO) : undefined,
+      allDay: !!(task.all_day || task.allDay),
+      isRecurring: true,
+      instanceId,
+      timezone,
+    }));
+  });
+
+  return projected;
+}
+
 export function buildProjectedEventsFromTasks(tasks, options) {
   const {
     rangeStart,
@@ -37,33 +260,47 @@ export function buildProjectedEventsFromTasks(tasks, options) {
   return list
     .filter((task) => (task?.status || 'pending') !== 'cancelled')
     .filter((task) => !(task?.read_only || String(task?.source || '') === 'caldav'))
-    .filter((task) => isTaskInRange(task, rangeStart, rangeEnd))
-    .map((task) => {
+    .filter((task) => {
+      const isRecurring = !!(task?.recurrence_rule || task?.recurrenceRule);
+      if (isRecurring) {
+        return isRecurringTaskPotentiallyInRange(task, rangeStart, rangeEnd);
+      }
+      return isTaskInRange(task, rangeStart, rangeEnd);
+    })
+    .flatMap((task) => {
       const rawStart = task.start_time || task.startTime || task.due_date || task.dueDate;
       const rawEnd = task.end_time || task.endTime || null;
       const allDay = !!(task.all_day || task.allDay);
+      const isRecurring = !!(task?.recurrence_rule || task?.recurrenceRule);
+      if (isRecurring) {
+        const recurringProjected = buildRecurringProjectedEvents(task, {
+          rangeStart,
+          rangeEnd,
+          rawStart,
+          rawEnd,
+          timezone,
+          toCalendarISO,
+        });
+        if (recurringProjected.length > 0) {
+          return recurringProjected;
+        }
+      }
 
-      const start = rawStart ? toCalendarISO(rawStart) : null;
-      const end = rawEnd ? toCalendarISO(rawEnd) : undefined;
+      if (!rawStart) return [];
+      if (!isTaskInRange(task, rangeStart, rangeEnd)) return [];
+      const projectedInstanceID = isRecurring
+        ? `${task.id}_${dayjs(rawStart).utc().format('YYYYMMDD')}`
+        : '';
 
-      return {
-        id: `task-${task.id}`,
-        title: task.title || '',
-        start: start || dayjs().tz(timezone).format('YYYY-MM-DDTHH:mm:ss[Z]'),
-        end,
+      return [buildProjectedEvent(task, {
+        id: projectedInstanceID || `task-${task.id}`,
+        start: toCalendarISO(rawStart) || rawStart,
+        end: rawEnd ? (toCalendarISO(rawEnd) || rawEnd) : undefined,
         allDay,
-        editable: !task.read_only,
-        extendedProps: {
-          taskId: Number(task.id),
-          status: task.status || 'pending',
-          priority: Number.parseInt(task.priority, 10) || 0,
-          isRecurring: false,
-          syncState: task.sync_state || 'synced',
-          readOnly: !!task.read_only,
-          source: task.source || 'local_projection',
-          externalId: task.external_ref || '',
-        },
-      };
+        isRecurring,
+        instanceId: projectedInstanceID || '',
+        timezone,
+      })];
     });
 }
 
@@ -85,14 +322,23 @@ export function buildTaskStatusIndex(tasks) {
 export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusIndex = { cancelled: new Set(), present: null }) {
   const base = Array.isArray(serverEvents) ? serverEvents : [];
   const projected = Array.isArray(projectedEvents) ? projectedEvents : [];
-  const projectedByTaskID = new Map();
-  const consumedTaskIDs = new Set();
+  const projectedNonRecurringByTaskID = new Map();
+  const projectedRecurringByTaskID = new Map();
+  const consumedNonRecurringTaskIDs = new Set();
+  const serverRecurringTaskIDs = new Set();
   const merged = [];
 
   projected.forEach((event) => {
     const taskID = Number(event?.extendedProps?.taskId || 0);
     if (!taskID) return;
-    projectedByTaskID.set(taskID, event);
+    const isRecurring = !!event?.extendedProps?.isRecurring;
+    if (isRecurring) {
+      const list = projectedRecurringByTaskID.get(taskID) || [];
+      list.push(event);
+      projectedRecurringByTaskID.set(taskID, list);
+      return;
+    }
+    projectedNonRecurringByTaskID.set(taskID, event);
   });
 
   base.forEach((event) => {
@@ -102,12 +348,18 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
       return;
     }
     const isRecurring = !!event?.extendedProps?.isRecurring;
-    if (!taskID || isRecurring) {
+    if (!taskID) {
+      merged.push(event);
+      return;
+    }
+    if (isRecurring) {
+      // Server recurring instances are authoritative for this task.
+      serverRecurringTaskIDs.add(taskID);
       merged.push(event);
       return;
     }
 
-    const projectedEvent = projectedByTaskID.get(taskID);
+    const projectedEvent = projectedNonRecurringByTaskID.get(taskID);
     const eventSource = String(event?.extendedProps?.source || '');
     const isReadOnly = !!event?.extendedProps?.readOnly || eventSource === 'caldav';
     if (!projectedEvent) {
@@ -115,16 +367,16 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
       return;
     }
     if (isReadOnly) {
-      consumedTaskIDs.add(taskID);
+      consumedNonRecurringTaskIDs.add(taskID);
       merged.push(event);
       return;
     }
-    if (consumedTaskIDs.has(taskID)) {
+    if (consumedNonRecurringTaskIDs.has(taskID)) {
       merged.push(event);
       return;
     }
 
-    consumedTaskIDs.add(taskID);
+    consumedNonRecurringTaskIDs.add(taskID);
     merged.push({
       ...event,
       ...projectedEvent,
@@ -136,9 +388,15 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
     });
   });
 
-  projectedByTaskID.forEach((event, taskID) => {
-    if (consumedTaskIDs.has(taskID)) return;
+  projectedNonRecurringByTaskID.forEach((event, taskID) => {
+    if (consumedNonRecurringTaskIDs.has(taskID)) return;
+    if (serverRecurringTaskIDs.has(taskID)) return;
     merged.push(event);
+  });
+
+  projectedRecurringByTaskID.forEach((eventsForTask, taskID) => {
+    if (serverRecurringTaskIDs.has(taskID)) return;
+    eventsForTask.forEach((event) => merged.push(event));
   });
 
   return merged;

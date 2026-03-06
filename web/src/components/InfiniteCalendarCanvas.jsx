@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { flushSync } from 'react-dom';
 import { commitOffsetFromWheelSession, resolvePanDelta, shouldCommitWheelSession } from './canvasMotionMath';
@@ -13,6 +13,8 @@ const TIMEGRID_BODY_GAP = 8;
 const TIMEGRID_BODY_TOP = TIMEGRID_HEADER_HEIGHT + TIMEGRID_BODY_GAP;
 const TIMEGRID_BODY_HEIGHT = 24 * HOUR_HEIGHT;
 const TIME_AXIS_WIDTH = 46;
+const TIMELINE_BOTTOM_SPACER_DESKTOP = 24;
+const TIMELINE_BOTTOM_SPACER_MOBILE = 100;
 const COMMIT_IDLE_MS = 120;
 const WHEEL_COMMIT_IDLE_MS = 72;
 const WINDOW_BUFFER_LEADING = 5;
@@ -22,9 +24,12 @@ const CLICK_CANCEL_DISTANCE_PX = 8;
 const LONG_PRESS_TO_DRAG_MS = 260;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 14;
 const HORIZONTAL_DRAG_GAIN = 1.24;
+const NON_MONTH_SMALL_DRAG_BOOST = 0.42;
 const INERTIA_MIN_VELOCITY = 0.008; // px/ms
 const INERTIA_STOP_VELOCITY = 0.0025; // px/ms
 const INERTIA_DECAY_PER_16MS = 0.955;
+const SNAP_TRANSITION_MS = 110;
+const NON_MONTH_MIN_SWITCH_PX = 22;
 
 function clampDurationMinutes(start, end) {
   const s = dayjs(start);
@@ -98,6 +103,10 @@ export default function InfiniteCalendarCanvas({
   const wheelSessionRef = useRef({ active: false, startOffset: 0, delta: 0 });
   const offsetPxRef = useRef(0);
   const panLayerRef = useRef(null);
+  const timeGridHeaderPanLayerRef = useRef(null);
+  const timeGridSwipeMaskRef = useRef(null);
+  const panSnapTimerRef = useRef(0);
+  const panSnapFinishRef = useRef(null);
   const panFrameRef = useRef(0);
   const monthScrollFrameRef = useRef(0);
   const pendingPanDeltaRef = useRef(Number.NaN);
@@ -132,10 +141,14 @@ export default function InfiniteCalendarCanvas({
     lastAxisDelta: 0,
     requiresLongPress: false,
     longPressTriggered: false,
+    suppressShortSnap: false,
     ignoreClickTarget: false,
     captured: false,
   });
-  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 0,
+    height: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }));
   const [offsetPx, setOffsetPx] = useState(0);
   const [dragVisual, setDragVisual] = useState(null);
   const [eventGestureLocked, setEventGestureLocked] = useState(false);
@@ -150,8 +163,12 @@ export default function InfiniteCalendarCanvas({
     return Math.max(84, usable / dayColumns);
   }, [dayColumns, viewportSize.width]);
   const stepPx = view === 'dayGridMonth' ? MONTH_WEEK_HEIGHT : dayWidth;
+  const snapUnitSteps = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const isMonthView = view === 'dayGridMonth';
+  const isMobileViewport = (viewportSize.width || 0) <= 768;
+  const timelineBottomSpacer = isMobileViewport ? TIMELINE_BOTTOM_SPACER_MOBILE : TIMELINE_BOTTOM_SPACER_DESKTOP;
   const timelineHeight = TIMEGRID_BODY_TOP + TIMEGRID_BODY_HEIGHT;
+  const timelineScrollableHeight = timelineHeight + timelineBottomSpacer;
   const snapMinutes = Math.max(5, Number.parseInt(timeGranularity, 10) || 30);
   const todayDateKey = useMemo(
     () => dayjs(nowTick).tz(timezone).format('YYYY-MM-DD'),
@@ -213,6 +230,28 @@ export default function InfiniteCalendarCanvas({
     wheelSessionRef.current.delta = 0;
   }, [clearWheelCommitTimer]);
 
+  const flushPanSnapAnimation = useCallback(() => {
+    const finish = panSnapFinishRef.current;
+    if (!finish) return false;
+    panSnapFinishRef.current = null;
+    if (panSnapTimerRef.current) {
+      window.clearTimeout(panSnapTimerRef.current);
+      panSnapTimerRef.current = 0;
+    }
+    finish();
+    return true;
+  }, []);
+
+  const mapHorizontalGestureDelta = useCallback((dx) => {
+    const base = (Number.isFinite(dx) ? dx : 0) * HORIZONTAL_DRAG_GAIN;
+    if (isMonthView) return base;
+    const boostWindowPx = Math.max(28, Math.min(72, stepPx * 0.55));
+    const absDx = Math.abs(dx || 0);
+    if (absDx >= boostWindowPx) return base;
+    const boost = 1 + (((boostWindowPx - absDx) / boostWindowPx) * NON_MONTH_SMALL_DRAG_BOOST);
+    return base * boost;
+  }, [isMonthView, stepPx]);
+
   useEffect(() => () => {
     unlockTextSelection();
     clearLongPressTimer();
@@ -225,6 +264,11 @@ export default function InfiniteCalendarCanvas({
       window.cancelAnimationFrame(panFrameRef.current);
       panFrameRef.current = 0;
     }
+    if (panSnapTimerRef.current) {
+      window.clearTimeout(panSnapTimerRef.current);
+      panSnapTimerRef.current = 0;
+    }
+    panSnapFinishRef.current = null;
     if (monthScrollFrameRef.current) {
       window.cancelAnimationFrame(monthScrollFrameRef.current);
       monthScrollFrameRef.current = 0;
@@ -247,7 +291,17 @@ export default function InfiniteCalendarCanvas({
     inertiaRef.current.lastTs = 0;
     const layer = panLayerRef.current;
     if (layer) {
+      layer.style.transition = 'none';
       layer.style.transform = 'translate3d(0, 0, 0)';
+    }
+    const headerLayer = timeGridHeaderPanLayerRef.current;
+    if (headerLayer) {
+      headerLayer.style.transition = 'none';
+      headerLayer.style.transform = 'translate3d(0, 0, 0)';
+    }
+    const mask = timeGridSwipeMaskRef.current;
+    if (mask) {
+      mask.style.opacity = '0';
     }
   }, [clearLongPressTimer, clearWheelCommitTimer, unlockTextSelection]);
 
@@ -267,16 +321,25 @@ export default function InfiniteCalendarCanvas({
   const flushPanLayer = useCallback((delta = 0) => {
     const layer = panLayerRef.current;
     if (!layer) return;
-    const moveDelta = Number.isFinite(delta) ? delta : 0;
+    const headerLayer = timeGridHeaderPanLayerRef.current;
+    const mask = timeGridSwipeMaskRef.current;
+    const rawDelta = Number.isFinite(delta) ? delta : 0;
+    const moveDelta = isMonthView ? rawDelta : Math.round(rawDelta);
     currentPanDeltaRef.current = moveDelta;
     if (Math.abs(moveDelta) < 0.01) {
       layer.style.transform = 'translate3d(0, 0, 0)';
+      if (headerLayer) headerLayer.style.transform = 'translate3d(0, 0, 0)';
+      if (mask) mask.style.opacity = '0';
       return;
     }
     if (isMonthView) {
       layer.style.transform = `translate3d(0, ${moveDelta}px, 0)`;
+      if (headerLayer) headerLayer.style.transform = 'translate3d(0, 0, 0)';
+      if (mask) mask.style.opacity = '0';
     } else {
       layer.style.transform = `translate3d(${moveDelta}px, 0, 0)`;
+      if (headerLayer) headerLayer.style.transform = `translate3d(${moveDelta}px, 0, 0)`;
+      if (mask) mask.style.opacity = '0';
     }
   }, [isMonthView]);
 
@@ -297,6 +360,15 @@ export default function InfiniteCalendarCanvas({
       window.cancelAnimationFrame(panFrameRef.current);
       panFrameRef.current = 0;
     }
+    if (panSnapTimerRef.current) {
+      window.clearTimeout(panSnapTimerRef.current);
+      panSnapTimerRef.current = 0;
+    }
+    panSnapFinishRef.current = null;
+    const layer = panLayerRef.current;
+    if (layer) layer.style.transition = 'none';
+    const headerLayer = timeGridHeaderPanLayerRef.current;
+    if (headerLayer) headerLayer.style.transition = 'none';
     flushPanLayer(0);
   }, [flushPanLayer]);
 
@@ -332,18 +404,76 @@ export default function InfiniteCalendarCanvas({
     }
   }, []);
 
+  const animatePanLayerTo = useCallback((targetDelta, durationMs, onDone) => {
+    const layer = panLayerRef.current;
+    const headerLayer = timeGridHeaderPanLayerRef.current;
+    if (!layer || durationMs <= 0) {
+      flushPanLayer(targetDelta);
+      onDone?.();
+      return;
+    }
+    if (panSnapTimerRef.current) {
+      window.clearTimeout(panSnapTimerRef.current);
+      panSnapTimerRef.current = 0;
+    }
+    const transition = `transform ${durationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`;
+    panSnapFinishRef.current = () => {
+      if (layer) layer.style.transition = 'none';
+      if (headerLayer) headerLayer.style.transition = 'none';
+      onDone?.();
+    };
+    layer.style.transition = transition;
+    if (headerLayer) headerLayer.style.transition = transition;
+    flushPanLayer(targetDelta);
+    panSnapTimerRef.current = window.setTimeout(() => {
+      panSnapTimerRef.current = 0;
+      const finish = panSnapFinishRef.current;
+      panSnapFinishRef.current = null;
+      finish?.();
+    }, durationMs + 20);
+  }, [flushPanLayer]);
+
+  const commitOffsetAfterGesture = useCallback((startOffset, fallbackDelta, withSnapAnimation = false) => {
+    const finalDelta = flushPendingPanDelta(fallbackDelta);
+    if (isMonthView) {
+      flushSync(() => {
+        commitOffsetPx(startOffset - finalDelta);
+      });
+      resetPanLayer();
+      emitCommittedViewportRef.current?.();
+      return;
+    }
+
+    const rawOffset = startOffset - finalDelta;
+    const unitPx = Math.max(1, stepPx * snapUnitSteps);
+    const startUnit = Math.round(startOffset / unitPx);
+    let snappedUnit = Math.round(rawOffset / unitPx);
+    if (snappedUnit === startUnit && Math.abs(finalDelta) >= NON_MONTH_MIN_SWITCH_PX) {
+      snappedUnit = startUnit + (finalDelta > 0 ? -1 : 1);
+    }
+    const snappedOffset = snappedUnit * unitPx;
+    const snapDelta = startOffset - snappedOffset;
+    const finish = () => {
+      flushSync(() => {
+        commitOffsetPx(snappedOffset);
+      });
+      resetPanLayer();
+      emitCommittedViewportRef.current?.();
+    };
+    if (withSnapAnimation && Math.abs(snapDelta - finalDelta) > 0.6) {
+      animatePanLayerTo(snapDelta, SNAP_TRANSITION_MS, finish);
+      return;
+    }
+    finish();
+  }, [animatePanLayerTo, commitOffsetPx, flushPendingPanDelta, isMonthView, resetPanLayer, snapUnitSteps, stepPx]);
+
   const settleInertia = useCallback((commit = true) => {
     const snapshot = { ...inertiaRef.current };
     if (!snapshot.active && !snapshot.mode) return;
     cancelInertia();
     if (!commit) return;
     if (snapshot.mode === 'offset') {
-      const finalDelta = flushPendingPanDelta(snapshot.delta);
-      flushSync(() => {
-        commitOffsetPx(snapshot.startOffset - finalDelta);
-      });
-      resetPanLayer();
-      emitCommittedViewportRef.current?.();
+      commitOffsetAfterGesture(snapshot.startOffset, snapshot.delta, false);
       return;
     }
     if (snapshot.mode === 'scroll') {
@@ -353,7 +483,7 @@ export default function InfiniteCalendarCanvas({
       }
       emitCommittedViewportRef.current?.();
     }
-  }, [cancelInertia, commitOffsetPx, flushPendingPanDelta, resetPanLayer]);
+  }, [cancelInertia, commitOffsetAfterGesture]);
 
   const startInertia = useCallback(({
     mode,
@@ -367,18 +497,16 @@ export default function InfiniteCalendarCanvas({
 
     if (Math.abs(initialVelocity) < INERTIA_MIN_VELOCITY) {
       if (mode === 'offset') {
-        const finalDelta = flushPendingPanDelta(initialDelta);
-        flushSync(() => {
-          commitOffsetPx(startOffset - finalDelta);
-        });
-        resetPanLayer();
+        commitOffsetAfterGesture(startOffset, initialDelta, !isMonthView);
       } else {
         const scroller = timeGridScrollRef.current;
         if (scroller) {
           scroller.scrollTop = Math.max(0, startScrollTop - initialDelta);
         }
       }
-      emitCommittedViewportRef.current?.();
+      if (mode !== 'offset') {
+        emitCommittedViewportRef.current?.();
+      }
       return;
     }
 
@@ -407,6 +535,23 @@ export default function InfiniteCalendarCanvas({
       state.velocity *= Math.pow(INERTIA_DECAY_PER_16MS, dt / 16);
 
       if (state.mode === 'offset') {
+        if (!isMonthView) {
+          const maxVisualDelta = stepPx * Math.max(3, WINDOW_BUFFER_LEADING - 1);
+          if (Math.abs(state.delta) > maxVisualDelta) {
+            const overflow = state.delta > 0
+              ? (state.delta - maxVisualDelta)
+              : (state.delta + maxVisualDelta);
+            const shiftSteps = overflow > 0
+              ? Math.floor(overflow / stepPx)
+              : Math.ceil(overflow / stepPx);
+            if (shiftSteps) {
+              const shiftPx = shiftSteps * stepPx;
+              state.startOffset -= shiftPx;
+              state.delta -= shiftPx;
+              commitOffsetPx(state.startOffset);
+            }
+          }
+        }
         flushPanLayer(state.delta);
       } else {
         const scroller = timeGridScrollRef.current;
@@ -423,7 +568,7 @@ export default function InfiniteCalendarCanvas({
     };
 
     inertiaFrameRef.current = window.requestAnimationFrame(tick);
-  }, [commitOffsetPx, flushPanLayer, flushPendingPanDelta, resetPanLayer, settleInertia]);
+  }, [commitOffsetAfterGesture, commitOffsetPx, flushPanLayer, isMonthView, settleInertia, stepPx]);
 
   const reference = useMemo(() => {
     const base = anchorDate ? dayjs(anchorDate).tz(timezone) : dayjs().tz(timezone);
@@ -476,6 +621,19 @@ export default function InfiniteCalendarCanvas({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    setViewportSize((prev) => {
+      if (Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5) {
+        return prev;
+      }
+      return { width: rect.width, height: rect.height };
+    });
+  }, [view]);
 
   const cameraSteps = offsetPx / stepPx;
 
@@ -724,11 +882,15 @@ export default function InfiniteCalendarCanvas({
 
   const handlePointerDown = useCallback((event) => {
     if (event.button !== 0) return;
+    flushPanSnapAnimation();
     if (event.target.closest('.canvas-ui-action')) return;
     const existingDrag = dragRef.current;
     if (existingDrag.active && existingDrag.pointerId !== event.pointerId) {
       return;
     }
+    const hadInertiaOffset = !isMonthView
+      && inertiaRef.current.active
+      && inertiaRef.current.mode === 'offset';
     if (finalizeWheelSession(true)) {
       emitCommittedViewportRef.current?.();
     }
@@ -761,6 +923,7 @@ export default function InfiniteCalendarCanvas({
       lastAxisDelta: 0,
       requiresLongPress,
       longPressTriggered: false,
+      suppressShortSnap: hadInertiaOffset,
       ignoreClickTarget: false,
       captured: false,
     };
@@ -788,7 +951,7 @@ export default function InfiniteCalendarCanvas({
     if (targetEvent && !isReadonly) {
       dragRef.current.ignoreClickTarget = false;
     }
-  }, [clearLongPressTimer, eventByKey, finalizeWheelSession, isMonthView, lockTextSelection, settleInertia]);
+  }, [clearLongPressTimer, eventByKey, finalizeWheelSession, flushPanSnapAnimation, isMonthView, lockTextSelection, settleInertia]);
 
   const handlePointerMove = useCallback((event) => {
     const drag = dragRef.current;
@@ -849,10 +1012,13 @@ export default function InfiniteCalendarCanvas({
           drag.axis = 'y';
           lockTextSelection();
         }
-      } else {
-        const hasIntent = absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX;
-        if (hasIntent) {
-          // In time-grid views, rely on native scrolling instead of JS-controlled swipe navigation.
+      } else if (absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX) {
+        if (absX >= absY * 0.92) {
+          drag.moved = true;
+          drag.axis = 'x';
+          drag.ignoreClickTarget = true;
+          lockTextSelection();
+        } else if (absY > absX * 0.92) {
           drag.moved = true;
           drag.axis = 'y-native';
           drag.ignoreClickTarget = true;
@@ -865,12 +1031,12 @@ export default function InfiniteCalendarCanvas({
     }
     if (!drag.moved) return;
     if (drag.mode === 'navigate') {
-      if (!isMonthView) {
-        // Let browser native scrolling/inertia run on all gestures in time-grid views.
+      if (!isMonthView && drag.axis === 'y-native') {
+        // Keep native vertical scroll for time-grid body.
         return;
       }
       const axisDelta = drag.axis === 'x'
-        ? (dx * HORIZONTAL_DRAG_GAIN)
+        ? mapHorizontalGestureDelta(dx)
         : dy;
       const nowTs = Number.isFinite(event.timeStamp) ? event.timeStamp : performance.now();
       const dt = Math.max(1, nowTs - (drag.lastMoveTs || nowTs));
@@ -892,7 +1058,7 @@ export default function InfiniteCalendarCanvas({
       }
       if (event.cancelable) event.preventDefault();
     }
-  }, [clearLongPressTimer, isMonthView, lockTextSelection, schedulePanLayer]);
+  }, [clearLongPressTimer, isMonthView, lockTextSelection, mapHorizontalGestureDelta, schedulePanLayer]);
 
   const handlePointerUp = useCallback((event) => {
     const drag = dragRef.current;
@@ -963,9 +1129,18 @@ export default function InfiniteCalendarCanvas({
         return;
       }
       const gestureDelta = drag.axis === 'x'
-        ? ((endX - drag.startX) * HORIZONTAL_DRAG_GAIN)
+        ? mapHorizontalGestureDelta(endX - drag.startX)
         : (endY - drag.startY);
       if (drag.axis === 'x' || isMonthView) {
+        if (!isMonthView && drag.axis === 'x') {
+          if (drag.suppressShortSnap) {
+            resetPanLayer();
+            emitCommittedViewportRef.current?.();
+            return;
+          }
+          commitOffsetAfterGesture(drag.startOffset, gestureDelta, true);
+          return;
+        }
         const releaseVelocity = Math.abs(drag.lastInstantVelocity || 0) > Math.abs(drag.velocity || 0)
           ? (drag.lastInstantVelocity || 0)
           : (drag.velocity || 0);
@@ -995,6 +1170,8 @@ export default function InfiniteCalendarCanvas({
     onMoveEvent,
     onOpenEvent,
     openCreateAtPoint,
+    commitOffsetAfterGesture,
+    mapHorizontalGestureDelta,
     startInertia,
     unlockTextSelection,
     clearLongPressTimer,
@@ -1308,10 +1485,19 @@ export default function InfiniteCalendarCanvas({
       );
     }
     return (
-      <div className="pointer-events-none absolute left-0 right-0 top-0 z-[72]" style={{ height: TIMEGRID_BODY_TOP }}>
+      <div className="pointer-events-none absolute left-0 right-0 top-0 z-[72] overflow-hidden" style={{ height: TIMEGRID_BODY_TOP }}>
         <div className="absolute inset-0 bg-white" />
-        <div className="absolute left-0 top-0 bottom-0 bg-white" style={{ width: TIME_AXIS_WIDTH }} />
-        {cells}
+        <div
+          className="absolute left-0 top-0 bottom-0 z-20 border-b border-blue-100 bg-white"
+          style={{ width: TIME_AXIS_WIDTH }}
+        />
+        <div
+          ref={timeGridHeaderPanLayerRef}
+          className="absolute inset-0 z-10 will-change-transform"
+          style={{ transform: 'translate3d(0, 0, 0)' }}
+        >
+          {cells}
+        </div>
       </div>
     );
   };
@@ -1524,6 +1710,15 @@ export default function InfiniteCalendarCanvas({
         <>
           {renderTimeGridHeader()}
           <div
+            ref={timeGridSwipeMaskRef}
+            className="pointer-events-none absolute bottom-0 top-0 z-[18]"
+            style={{
+              left: TIME_AXIS_WIDTH,
+              right: 0,
+              opacity: 0,
+            }}
+          />
+          <div
             ref={timeGridScrollRef}
             className="absolute inset-0 overflow-y-auto overflow-x-hidden"
             style={{
@@ -1531,7 +1726,7 @@ export default function InfiniteCalendarCanvas({
               overscrollBehaviorY: 'none',
             }}
           >
-            <div className="relative" style={{ height: timelineHeight }}>
+            <div className="relative" style={{ height: timelineScrollableHeight }}>
               {renderTimeGrid()}
             </div>
           </div>

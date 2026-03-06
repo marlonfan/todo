@@ -94,6 +94,69 @@ test('buildProjectedEventsFromTasks keeps timezone-boundary task in week/month r
   assert.equal(projected[0].title, '333');
 });
 
+test('buildProjectedEventsFromTasks expands recurring tasks in visible range with valid instance id', () => {
+  const tasks = [
+    {
+      id: 22,
+      title: 'recurring',
+      status: 'pending',
+      recurrence_rule: { freq: 'weekly', interval: 2, byday: ['MO'] },
+      start_time: '2026-03-02T06:00:00Z',
+      end_time: '2026-03-02T07:00:00Z',
+      priority: 0,
+    },
+    {
+      id: 23,
+      title: 'single',
+      status: 'pending',
+      start_time: '2026-03-02T08:00:00Z',
+      end_time: '2026-03-02T09:00:00Z',
+      priority: 0,
+    },
+  ];
+
+  const projected = buildProjectedEventsFromTasks(tasks, {
+    rangeStart: '2026-03-01T00:00:00Z',
+    rangeEnd: '2026-03-18T00:00:00Z',
+    timezone: 'UTC',
+    toCalendarISO: (v) => v,
+  });
+
+  assert.equal(projected.length, 3);
+  const recurring = projected.filter((item) => item.extendedProps.taskId === 22);
+  const single = projected.find((item) => item.extendedProps.taskId === 23);
+  assert.equal(recurring.length, 2);
+  assert.ok(single);
+  assert.ok(recurring.every((item) => item.extendedProps.isRecurring === true));
+  assert.ok(recurring.some((item) => item.extendedProps.instanceId === '22_20260302'));
+  assert.ok(recurring.some((item) => item.extendedProps.instanceId === '22_20260316'));
+});
+
+test('buildProjectedEventsFromTasks projects recurring task even when dtstart is before range', () => {
+  const tasks = [
+    {
+      id: 29,
+      title: 'weekly friday 20:00',
+      status: 'pending',
+      recurrence_rule: { freq: 'weekly', interval: 1, byday: ['FR'] },
+      start_time: '2026-03-06T12:00:00Z',
+      end_time: '2026-03-06T12:30:00Z',
+      priority: 0,
+    },
+  ];
+
+  const projected = buildProjectedEventsFromTasks(tasks, {
+    rangeStart: '2026-03-13T00:00:00Z',
+    rangeEnd: '2026-03-20T00:00:00Z',
+    timezone: 'UTC',
+    toCalendarISO: (v) => v,
+  });
+
+  assert.equal(projected.length, 1);
+  assert.equal(projected[0].id, '29_20260313');
+  assert.equal(projected[0].start, '2026-03-13T12:00:00.000Z');
+});
+
 test('mergeCalendarEvents removes cancelled server events and keeps recurring', () => {
   const server = [
     {
@@ -202,4 +265,33 @@ test('mergeCalendarEvents does not override readonly server event with projected
   assert.equal(merged.length, 1);
   assert.equal(merged[0].id, 'readonly-1');
   assert.equal(merged[0].title, 'server');
+});
+
+test('mergeCalendarEvents suppresses projected recurring fallback when server has recurring instances', () => {
+  const server = [
+    {
+      id: '22_20260302',
+      start: '2026-03-02T06:00:00Z',
+      title: 'server recurring',
+      extendedProps: { taskId: 22, status: 'pending', isRecurring: true, instanceId: '22_20260302' },
+    },
+  ];
+  const projected = [
+    {
+      id: '22_20260302',
+      start: '2026-03-02T06:00:00Z',
+      title: 'projected recurring',
+      extendedProps: { taskId: 22, status: 'pending', isRecurring: true, instanceId: '22_20260302' },
+    },
+    {
+      id: '22_20260309',
+      start: '2026-03-09T06:00:00Z',
+      title: 'projected recurring 2',
+      extendedProps: { taskId: 22, status: 'pending', isRecurring: true, instanceId: '22_20260309' },
+    },
+  ];
+
+  const merged = mergeCalendarEvents(server, projected, { cancelled: new Set(), present: new Set() });
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].title, 'server recurring');
 });

@@ -14,7 +14,7 @@ import {
   getTaskListGroupPref,
   setTaskListGroupPref,
 } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconGroup, IconRepeat, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
+import { IconClock, IconFlag, IconGroup, IconRepeat, IconRepeatOff, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
@@ -26,6 +26,9 @@ import {
   updateTaskStatusLocal,
 } from '../data/taskMutations';
 import { scheduleSync } from '../data/syncEngine';
+
+const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
+const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -52,6 +55,7 @@ function normalizeDraftForCompare(draft) {
     recurrence_enabled: !!draft.recurrence_enabled,
     recurrence_type: draft.recurrence_type || 'daily',
     recurrence_days: [...(draft.recurrence_days || [])].map(String).sort(),
+    recurrence_date: Number.parseInt(draft.recurrence_date, 10) || 1,
   };
 }
 
@@ -70,6 +74,105 @@ function getDefaultStartTimeParts() {
   } catch {
     return { hour: 9, minute: 0 };
   }
+}
+
+function parseLocalInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = dayjs(raw);
+  return parsed.isValid() ? parsed : null;
+}
+
+function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
+  const start = parseLocalInput(startInput);
+  const end = parseLocalInput(endInput);
+  if (!start && !end) return noDateLabel;
+  if (!isAllDay) {
+    if (start) return start.format('MM/DD HH:mm');
+    return end.format('MM/DD HH:mm');
+  }
+  if (!start && end) return end.format('MM/DD');
+  if (start && !end) return start.format('MM/DD');
+  if (isAllDay) {
+    return `${start.format('MM/DD')}-${end.format('MM/DD')}`;
+  }
+  return start.format('MM/DD');
+}
+
+function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, fallbackLabel) {
+  const ids = Array.isArray(selectedCategoryIDs) ? selectedCategoryIDs.map(String) : [];
+  if (ids.length === 0) return fallbackLabel;
+  const selected = categories.filter((cat) => ids.includes(String(cat.id)));
+  if (selected.length === 0) return `${fallbackLabel}+${ids.length}`;
+  const first = selected[0];
+  const firstLabel = showEmoji && first?.emoji ? `${first.emoji}${first.name}` : String(first?.name || fallbackLabel);
+  if (selected.length === 1) return firstLabel;
+  return `${firstLabel}+${selected.length - 1}`;
+}
+
+function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t) {
+  if (!enabled) return t('task.repeatOff');
+  if (recurrenceType === 'biweekly') {
+    const biweeklyLabel = t('task.biweekly');
+    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
+    return dayCount > 0 ? `${biweeklyLabel}(${dayCount})` : biweeklyLabel;
+  }
+  if (recurrenceType === 'weekly') {
+    const weeklyLabel = t('task.weekly');
+    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
+    return dayCount > 0 ? `${weeklyLabel}(${dayCount})` : weeklyLabel;
+  }
+  if (recurrenceType === 'monthly') return t('task.monthly');
+  if (recurrenceType === 'yearly') return t('task.yearly');
+  return t('task.daily');
+}
+
+function normalizeByDayList(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .map((day) => String(day || '').trim().toUpperCase())
+    .filter((day) => day.length > 0);
+}
+
+function clampMonthlyDate(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(31, Math.max(1, parsed));
+}
+
+function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
+  const rawByDate = Array.isArray(rule?.bydate)
+    ? rule.bydate
+    : Array.isArray(rule?.byDate)
+      ? rule.byDate
+      : Array.isArray(rule?.bymonthday)
+        ? rule.bymonthday
+        : [];
+  for (const raw of rawByDate) {
+    const value = Number.parseInt(raw, 10);
+    if (Number.isFinite(value) && value >= 1 && value <= 31) {
+      return value;
+    }
+  }
+  const start = parseLocalInput(fallbackStartInput);
+  if (start) return start.date();
+  return 1;
+}
+
+function parseRecurrenceSelection(rule) {
+  if (!rule) return { type: 'daily', days: [], monthDate: 1 };
+  const freq = String(rule.freq || 'daily').trim().toLowerCase();
+  const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
+  const byDay = normalizeByDayList(rule.byday || rule.byDay);
+  const monthDate = resolveMonthlyDateFromRule(rule, '');
+  if (freq === 'weekly' && interval === 2) {
+    return { type: 'biweekly', days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)), monthDate };
+  }
+  return {
+    type: freq || 'daily',
+    days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+    monthDate,
+  };
 }
 
 function getTaskPrimaryTime(task) {
@@ -271,6 +374,8 @@ function TaskList({ forcedView = '' }) {
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [detailPanel, setDetailPanel] = useState('');
   const [draftParsePreview, setDraftParsePreview] = useState('');
+  const [showDraftCustomRecurrenceMenu, setShowDraftCustomRecurrenceMenu] = useState(false);
+  const [showDraftMonthlyDatePicker, setShowDraftMonthlyDatePicker] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false
@@ -598,16 +703,78 @@ function TaskList({ forcedView = '' }) {
   const draftPriorityValue = Number.isInteger(parsedDraftPriority?.priority)
     ? parsedDraftPriority.priority
     : (Number.parseInt(draft?.priority, 10) || 0);
-  const isZh = i18n.language === 'zh-CN';
-  const draftPriorityIndicator = draftPriorityValue === 1
-    ? { text: isZh ? '高' : 'High', title: t('task.priorityHigh'), className: 'text-rose-600' }
-    : draftPriorityValue === -1
-      ? { text: isZh ? '低' : 'Low', title: t('task.priorityLow'), className: 'text-emerald-600' }
-      : { text: isZh ? '中' : 'Medium', title: t('task.priorityMedium'), className: 'text-sky-600' };
+  const draftPriorityTone = draftPriorityValue === 1 ? 'high' : (draftPriorityValue === 0 ? 'medium' : 'default');
+  const draftPriorityButtonClass = detailPanel === 'priority'
+    ? draftPriorityTone === 'high'
+      ? 'bg-rose-50 text-rose-700'
+      : draftPriorityTone === 'medium'
+        ? 'bg-sky-50 text-sky-700'
+        : 'bg-slate-100 text-slate-700'
+    : draftPriorityTone === 'high'
+      ? 'text-rose-600 hover:bg-rose-50'
+      : draftPriorityTone === 'medium'
+        ? 'text-sky-600 hover:bg-sky-50'
+        : 'text-slate-500 hover:bg-slate-100';
+  const draftPriorityTitle = draftPriorityTone === 'high'
+    ? t('task.priorityHigh')
+    : draftPriorityTone === 'medium'
+      ? t('task.priorityMedium')
+      : t('task.priorityLow');
+  const draftTimeSummaryLabel = buildTimeSummaryLabel(
+    draft?.start_time || '',
+    draft?.end_time || '',
+    !!draft?.all_day,
+    t('task.noDate')
+  );
+  const hasDraftParsedTimeHint = !!draftParsePreview;
+  const hasDraftTimeValue = !!(draft?.start_time || draft?.end_time);
+  const draftTimeButtonClass = detailPanel === 'time'
+    ? 'bg-sky-50 text-sky-700'
+    : (hasDraftParsedTimeHint || hasDraftTimeValue)
+      ? 'text-sky-600 hover:bg-sky-50'
+      : 'text-slate-500 hover:bg-slate-100';
+  const draftTimeButtonTitle = hasDraftParsedTimeHint ? draftParsePreview : draftTimeSummaryLabel;
+  const hasDraftCategoryValue = Array.isArray(draft?.category_ids) && draft.category_ids.length > 0;
+  const draftCategorySummaryLabel = buildCategorySummaryLabel(
+    draft?.category_ids || [],
+    categories,
+    showCategoryEmoji,
+    t('task.categories')
+  );
+  const draftCategoryButtonClass = detailPanel === 'category'
+    ? 'bg-indigo-50 text-indigo-700'
+    : hasDraftCategoryValue
+      ? 'text-indigo-600 hover:bg-indigo-50'
+      : 'text-slate-500 hover:bg-slate-100';
+  const draftRecurrenceSummaryLabel = buildRecurrenceSummaryLabel(
+    !!draft?.recurrence_enabled,
+    draft?.recurrence_type || 'daily',
+    draft?.recurrence_days || [],
+    t
+  );
+  const draftRecurrenceButtonClass = detailPanel === 'recurrence'
+    ? 'bg-slate-100 text-slate-700'
+    : draft?.recurrence_enabled
+      ? 'text-emerald-600 hover:bg-emerald-50'
+      : 'text-slate-500 hover:bg-slate-100';
+  const isDraftCustomRecurrenceType = (draft?.recurrence_type || 'daily') === 'biweekly' || (draft?.recurrence_type || 'daily') === 'lunar';
 
   useEffect(() => {
     setDraftParsePreview('');
+    setShowDraftCustomRecurrenceMenu(false);
+    setShowDraftMonthlyDatePicker(false);
   }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!draft?.recurrence_enabled) {
+      setShowDraftCustomRecurrenceMenu(false);
+      setShowDraftMonthlyDatePicker(false);
+      return;
+    }
+    if ((draft?.recurrence_type || 'daily') !== 'monthly') {
+      setShowDraftMonthlyDatePicker(false);
+    }
+  }, [draft?.recurrence_enabled, draft?.recurrence_type]);
 
   const buildDraftFromTask = (taskValue) => {
     if (!taskValue) return null;
@@ -615,8 +782,7 @@ function TaskList({ forcedView = '' }) {
     const startTime = taskValue.start_time || taskValue.startTime || taskValue.due_date || '';
     const endTime = taskValue.end_time || taskValue.endTime || '';
     const recurrenceRule = parseRecurrenceRule(taskValue.recurrence_rule || taskValue.recurrenceRule);
-    const recurrenceType = recurrenceRule?.freq || 'daily';
-    const byDay = recurrenceRule?.byday || recurrenceRule?.byDay;
+    const parsedRecurrence = parseRecurrenceSelection(recurrenceRule);
     return {
       title: taskValue.title || '',
       description: taskValue.description || '',
@@ -627,8 +793,9 @@ function TaskList({ forcedView = '' }) {
       end_time: endTime ? toInputFormat(endTime, null, allDay) : '',
       category_ids: (taskValue.categories || []).map((cat) => String(cat.id)),
       recurrence_enabled: !!recurrenceRule,
-      recurrence_type: recurrenceType,
-      recurrence_days: Array.isArray(byDay) ? byDay.map((day) => String(day)) : [],
+      recurrence_type: parsedRecurrence.type,
+      recurrence_days: parsedRecurrence.days,
+      recurrence_date: parsedRecurrence.monthDate,
     };
   };
 
@@ -868,6 +1035,12 @@ function TaskList({ forcedView = '' }) {
         } : prev));
       }
       const originalDraft = buildDraftFromTask(selectedTask);
+      const recurrenceChanged =
+        !!draft.recurrence_enabled !== !!originalDraft?.recurrence_enabled
+        || String(draft.recurrence_type || 'daily') !== String(originalDraft?.recurrence_type || 'daily')
+        || JSON.stringify([...(draft.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
+          !== JSON.stringify([...(originalDraft?.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
+        || clampMonthlyDate(draft.recurrence_date, 1) !== clampMonthlyDate(originalDraft?.recurrence_date, 1);
       const timeChanged =
         !!draft.all_day !== !!originalDraft?.all_day ||
         String(draft.start_time || '') !== String(originalDraft?.start_time || '') ||
@@ -882,27 +1055,40 @@ function TaskList({ forcedView = '' }) {
         category_ids: (draft.category_ids || []).map((id) => Number.parseInt(id, 10)).filter((id) => !Number.isNaN(id)),
       };
 
-      if (timeChanged) {
+      if (timeChanged || recurrenceChanged) {
+        const startInput = String(draft.start_time || originalDraft?.start_time || '');
+        const endInput = String(draft.end_time || originalDraft?.end_time || '');
         payload.all_day = !!draft.all_day;
         if (payload.all_day) {
-          payload.start_time = draft.start_time ? toISOString(`${draft.start_time} 00:00:00`) : null;
-          payload.end_time = draft.end_time ? toISOString(`${draft.end_time} 23:59:59`) : null;
+          const startDate = splitDatePart(startInput);
+          const endDate = splitDatePart(endInput);
+          payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`) : null;
+          payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`) : null;
         } else {
-          payload.start_time = draft.start_time ? toISOString(draft.start_time) : null;
-          payload.end_time = draft.end_time ? toISOString(draft.end_time) : null;
+          payload.start_time = startInput ? toISOString(startInput) : null;
+          payload.end_time = endInput ? toISOString(endInput) : null;
         }
 
-        if (draft.start_time) payload.start_time_local = draft.start_time;
-        if (draft.end_time) payload.end_time_local = draft.end_time;
+        if (startInput) payload.start_time_local = startInput;
+        if (endInput) payload.end_time_local = endInput;
       }
 
       if (draft.recurrence_enabled) {
+        const normalizedDays = (draft.recurrence_days || [])
+          .map((day) => String(day || '').toUpperCase())
+          .filter((day) => WEEKDAY_ONLY_RE.test(day));
         const rule = {
           freq: draft.recurrence_type || 'daily',
           interval: 1,
         };
-        if (rule.freq === 'weekly' && Array.isArray(draft.recurrence_days) && draft.recurrence_days.length > 0) {
-          rule.byday = draft.recurrence_days;
+        if (draft.recurrence_type === 'biweekly') {
+          rule.freq = 'weekly';
+          rule.interval = 2;
+          rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+        } else if (draft.recurrence_type === 'monthly') {
+          rule.bydate = [clampMonthlyDate(draft.recurrence_date, 1)];
+        } else if (rule.freq === 'weekly' && normalizedDays.length > 0) {
+          rule.byday = normalizedDays;
         }
         payload.recurrence_rule = rule;
       } else {
@@ -1352,17 +1538,6 @@ function TaskList({ forcedView = '' }) {
                     className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 sm:text-xl"
                     placeholder={t('task.title')}
                   />
-                  <div className="mt-1 flex h-5 items-center justify-between gap-2">
-                    <p className={`min-w-0 truncate text-xs leading-4 ${draftParsePreview ? 'text-emerald-600' : 'text-transparent'}`}>
-                      {draftParsePreview || '\u00A0'}
-                    </p>
-                    <span
-                      title={draftPriorityIndicator.title}
-                      className={`shrink-0 text-[10px] font-semibold leading-4 ${draftPriorityIndicator.className}`}
-                    >
-                      {draftPriorityIndicator.text}
-                    </span>
-                  </div>
                 </div>
                 <div className="mt-2 flex min-h-[36px] items-center justify-between gap-3">
                   <div className="order-2 flex items-center justify-end gap-2 text-xs">
@@ -1378,54 +1553,44 @@ function TaskList({ forcedView = '' }) {
                     )}
                     {lastSavedAt && <span className="text-slate-400">{t('task.lastSavedAt', { time: lastSavedAt })}</span>}
                   </div>
-                  <div ref={detailPanelRef} className="order-1 relative flex items-center gap-1.5">
+                  <div ref={detailPanelRef} className="order-1 relative flex min-w-0 items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setDetailPanel(detailPanel === 'priority' ? '' : 'priority')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        detailPanel === 'priority'
-                          ? 'bg-amber-50 text-amber-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.priority')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftPriorityButtonClass}`}
+                      title={draftPriorityTitle}
                     >
                       <IconFlag className="h-4 w-4" />
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDetailPanel(detailPanel === 'time' ? '' : 'time')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        detailPanel === 'time'
-                          ? 'bg-rose-50 text-rose-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.startTime')}
-                    >
-                      <IconClock className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setDetailPanel(detailPanel === 'category' ? '' : 'category')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        detailPanel === 'category'
-                          ? 'bg-indigo-50 text-indigo-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.categories')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftCategoryButtonClass}`}
+                      title={draftCategorySummaryLabel}
                     >
                       <IconTag className="h-4 w-4" />
                     </button>
                     <button
                       type="button"
                       onClick={() => setDetailPanel(detailPanel === 'recurrence' ? '' : 'recurrence')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        detailPanel === 'recurrence' || draft.recurrence_enabled
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.repeat')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftRecurrenceButtonClass}`}
+                      title={draftRecurrenceSummaryLabel}
                     >
-                      <IconRepeat className="h-4 w-4" />
+                      {(draft.recurrence_enabled || detailPanel === 'recurrence')
+                        ? <IconRepeat className="h-4 w-4" />
+                        : <IconRepeatOff className="h-4 w-4" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDetailPanel(detailPanel === 'time' ? '' : 'time')}
+                      className={`relative inline-flex h-8 min-w-0 items-center gap-1 rounded-md px-2 text-sm ${draftTimeButtonClass}`}
+                      title={draftTimeButtonTitle}
+                    >
+                      <IconClock className="h-4 w-4" />
+                      <span className="w-20 truncate text-left text-[11px] leading-4">{draftTimeSummaryLabel}</span>
+                      {hasDraftParsedTimeHint && (
+                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                      )}
                     </button>
                     {detailPanel === 'priority' && (
                       <div className="md-popover absolute right-0 top-10 z-20 w-[22rem] p-3">
@@ -1547,7 +1712,10 @@ function TaskList({ forcedView = '' }) {
                               <button
                                 key={cat.id}
                                 type="button"
-                                onClick={() => toggleDraftCategory(cat.id)}
+                                onClick={() => {
+                                  toggleDraftCategory(cat.id);
+                                  setDetailPanel('');
+                                }}
                                 className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
                                   active ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                                 }`}
@@ -1576,6 +1744,7 @@ function TaskList({ forcedView = '' }) {
                                 handleDraftFieldChange('recurrence_enabled', false);
                                 handleDraftFieldChange('recurrence_type', 'daily');
                                 handleDraftFieldChange('recurrence_days', []);
+                                handleDraftFieldChange('recurrence_date', 1);
                               }}
                               className={`rounded-full px-2.5 py-1 text-xs ${
                                 !draft.recurrence_enabled
@@ -1589,7 +1758,11 @@ function TaskList({ forcedView = '' }) {
                               type="button"
                               onClick={() => {
                                 handleDraftFieldChange('recurrence_enabled', true);
-                                if ((draft.recurrence_type || 'daily') === 'weekly' && (draft.recurrence_days || []).length === 0) {
+                                if (
+                                  ((draft.recurrence_type || 'daily') === 'weekly'
+                                    || (draft.recurrence_type || 'daily') === 'biweekly')
+                                  && (draft.recurrence_days || []).length === 0
+                                ) {
                                   handleDraftFieldChange('recurrence_days', workDayKeys);
                                 }
                               }}
@@ -1618,11 +1791,18 @@ function TaskList({ forcedView = '' }) {
                                   type="button"
                                   onClick={() => {
                                     handleDraftFieldChange('recurrence_type', option.value);
-                                    if (option.value === 'weekly' && (draft.recurrence_days || []).length === 0) {
+                                    setShowDraftCustomRecurrenceMenu(false);
+                                    if ((option.value === 'weekly' || option.value === 'biweekly') && (draft.recurrence_days || []).length === 0) {
                                       handleDraftFieldChange('recurrence_days', workDayKeys);
                                     }
-                                    if (option.value !== 'weekly') {
+                                    if (option.value !== 'weekly' && option.value !== 'biweekly') {
                                       handleDraftFieldChange('recurrence_days', []);
+                                    }
+                                    if (option.value === 'monthly') {
+                                      const start = parseLocalInput(draft.start_time || '');
+                                      if (start) {
+                                        handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
+                                      }
                                     }
                                   }}
                                   className={`rounded-full border px-3 py-1 text-xs ${
@@ -1634,9 +1814,51 @@ function TaskList({ forcedView = '' }) {
                                   {option.label}
                                 </button>
                               ))}
+                              <button
+                                type="button"
+                                onClick={() => setShowDraftCustomRecurrenceMenu((prev) => !prev)}
+                                className={`rounded-full border px-3 py-1 text-xs ${
+                                  isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu
+                                    ? 'border-sky-300 bg-sky-50 text-sky-700'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.customRepeat')}
+                              </button>
                             </div>
+                            {(showDraftCustomRecurrenceMenu || isDraftCustomRecurrenceType) && (
+                              <div className="space-y-2 rounded-xl border border-sky-100 bg-sky-50/40 p-2.5">
+                                <div className="text-[11px] font-medium uppercase tracking-wide text-sky-700">{t('task.customRepeat')}</div>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleDraftFieldChange('recurrence_type', 'biweekly');
+                                      if ((draft.recurrence_days || []).length === 0) {
+                                        handleDraftFieldChange('recurrence_days', workDayKeys);
+                                      }
+                                    }}
+                                    className={`rounded-full border px-3 py-1 text-xs ${
+                                      (draft.recurrence_type || 'daily') === 'biweekly'
+                                        ? 'border-sky-300 bg-sky-100 text-sky-800'
+                                        : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
+                                    }`}
+                                  >
+                                    {t('task.biweekly')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled
+                                    title={t('task.lunarRepeatPending')}
+                                    className="cursor-not-allowed rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-400"
+                                  >
+                                    {t('task.lunarDay')}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
 
-                            {(draft.recurrence_type || 'daily') === 'weekly' && (
+                            {((draft.recurrence_type || 'daily') === 'weekly' || (draft.recurrence_type || 'daily') === 'biweekly') && (
                               <div>
                                 <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
                                 <div className="mb-2 flex flex-wrap gap-2">
@@ -1678,6 +1900,46 @@ function TaskList({ forcedView = '' }) {
                                     </button>
                                   ))}
                                 </div>
+                              </div>
+                            )}
+                            {(draft.recurrence_type || 'daily') === 'monthly' && (
+                              <div className="space-y-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowDraftMonthlyDatePicker((prev) => !prev)}
+                                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                                >
+                                  <span>{t('task.monthlyOnDate')}</span>
+                                  <span className="rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700">
+                                    {clampMonthlyDate(draft.recurrence_date, 1)}
+                                  </span>
+                                </button>
+                                {showDraftMonthlyDatePicker && (
+                                  <div className="rounded-xl border border-slate-200 bg-white p-2">
+                                    <div className="grid grid-cols-7 gap-1">
+                                      {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => {
+                                        const active = clampMonthlyDate(draft.recurrence_date, 1) === day;
+                                        return (
+                                          <button
+                                            key={day}
+                                            type="button"
+                                            onClick={() => {
+                                              handleDraftFieldChange('recurrence_date', day);
+                                              setShowDraftMonthlyDatePicker(false);
+                                            }}
+                                            className={`h-8 rounded-md text-xs font-medium ${
+                                              active
+                                                ? 'bg-sky-600 text-white'
+                                                : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                                            }`}
+                                          >
+                                            {day}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>

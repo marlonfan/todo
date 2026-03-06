@@ -245,19 +245,22 @@ function MainLayout({ user, setUser }) {
   }, [location.pathname, location.search, t]);
 
   const navItemClass = (active) => `md-nav-item ${active ? 'md-nav-item-active' : 'md-nav-item-idle'}`;
+  const hideMobileHeader = location.pathname === '/';
 
   return (
     <div className="h-screen bg-[#eaf2ff] flex flex-col md:flex-row">
-      <div className="md:hidden flex h-12 items-center justify-between border-b border-blue-100 bg-white/95 px-4 backdrop-blur">
-        <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
-        <button
-          type="button"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-100 bg-blue-50/70 text-blue-700"
-        >
-          {mobileMenuOpen ? '✕' : '☰'}
-        </button>
-      </div>
+      {!hideMobileHeader && (
+        <div className="md:hidden flex h-12 items-center justify-between border-b border-blue-100 bg-white/95 px-4 backdrop-blur">
+          <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-100 bg-blue-50/70 text-blue-700"
+          >
+            {mobileMenuOpen ? '✕' : '☰'}
+          </button>
+        </div>
+      )}
 
       {mobileMenuOpen && (
         <button

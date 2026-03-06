@@ -41,7 +41,7 @@ async function invalidateCalendarCaches(queryClient, taskID = null, options = {}
     await invalidateCalendarRangesByTask(taskID);
   }
   if (revalidateQuery) {
-    await queryClient.invalidateQueries({ queryKey: ['calendar', 'events'] });
+    await queryClient.invalidateQueries({ queryKey: ['calendar'] });
   }
 }
 
@@ -71,6 +71,9 @@ function applyTaskPatch(currentTask, payload, queryClient) {
     end_time: typeof payload.end_time !== 'undefined' ? payload.end_time : currentTask.end_time,
     due_date: typeof payload.due_date !== 'undefined' ? payload.due_date : currentTask.due_date,
     recurrence_rule: typeof payload.recurrence_rule !== 'undefined' ? payload.recurrence_rule : currentTask.recurrence_rule,
+    recurrence_end_date: typeof payload.recurrence_end_date !== 'undefined'
+      ? payload.recurrence_end_date
+      : currentTask.recurrence_end_date,
     revision: currentRevision + 1,
     sync_state: 'pending',
     last_error: '',
@@ -97,6 +100,9 @@ export async function createTaskLocal(queryClient, payload) {
     due_date: payload?.due_date || null,
     all_day: !!payload?.all_day,
     recurrence_rule: payload?.recurrence_rule || null,
+    recurrence_end_date: typeof payload?.recurrence_end_date !== 'undefined'
+      ? payload.recurrence_end_date
+      : null,
     revision: 1,
     categories: resolveCategoriesFromIDs(queryClient, payload?.category_ids || []),
     sync_state: 'pending',
@@ -114,7 +120,7 @@ export async function createTaskLocal(queryClient, payload) {
     op_type: 'create',
     payload,
   });
-  await invalidateCalendarCaches(queryClient, null, { revalidateQuery: false });
+  await invalidateCalendarCaches(queryClient, null, { revalidateQuery: true });
 
   return optimisticTask;
 }
@@ -142,7 +148,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
     payload,
     if_match_revision: baseRevision || undefined,
   }, { schedule: shouldScheduleSync });
-  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: false });
+  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
 
   return nextTask;
 }
@@ -186,7 +192,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput) {
     payload,
     if_match_revision: shouldPatchBaseTask ? (baseRevision || undefined) : undefined,
   });
-  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: false });
+  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
 
   return nextTask;
 }
@@ -223,7 +229,7 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload) {
     payload,
     if_match_revision: baseRevision || undefined,
   });
-  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: false });
+  await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
 
   return nextTask;
 }
@@ -261,5 +267,5 @@ export async function deleteTaskLocal(queryClient, taskID) {
     });
   }
 
-  await invalidateCalendarCaches(queryClient, numericID, { revalidateQuery: false });
+  await invalidateCalendarCaches(queryClient, numericID, { revalidateQuery: true });
 }
