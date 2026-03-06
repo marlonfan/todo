@@ -536,11 +536,27 @@ body {
 .live-md-toast .vditor-reset ul,
 .live-md-toast .vditor-reset ol {
   margin: 0.28rem 0;
-  padding-left: 1.18rem;
+  padding-left: 1.32rem;
 }
 
 .live-md-toast .vditor-reset li {
   margin: 0.12rem 0;
+}
+
+.live-md-toast .vditor-reset li p {
+  margin: 0.18rem 0;
+}
+
+.live-md-toast .vditor-reset li.vditor-task {
+  list-style: none !important;
+}
+
+.live-md-toast .vditor-reset li.vditor-task input {
+  margin: 0 0.42em 0 0 !important;
+  width: 0.86rem;
+  height: 0.86rem;
+  vertical-align: -0.08em;
+  accent-color: #2563eb;
 }
 
 .live-md-toast .vditor-reset blockquote {
@@ -562,6 +578,30 @@ body {
 .live-md-toast .vditor-reset pre code {
   background: transparent;
   padding: 0;
+}
+
+.live-md-toast .vditor-reset pre {
+  margin: 0.52rem 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.45rem;
+  background: #f8fafc;
+}
+
+.live-md-toast .vditor-reset hr {
+  margin: 0.7rem 0;
+  border-color: #e2e8f0;
+}
+
+.live-md-toast .vditor-reset table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  margin: 0.55rem 0;
+}
+
+.live-md-toast .vditor-reset th,
+.live-md-toast .vditor-reset td {
+  white-space: nowrap;
 }
 
 .live-md-toast .vditor-ir pre.vditor-reset:empty::before {
