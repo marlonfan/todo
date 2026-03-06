@@ -568,23 +568,35 @@ body {
   color: #475569;
 }
 
-.live-md-toast .vditor-reset code {
+.live-md-toast .vditor-reset p > code,
+.live-md-toast .vditor-reset li > code,
+.live-md-toast .vditor-reset blockquote > code,
+.live-md-toast .vditor-reset td > code,
+.live-md-toast .vditor-reset th > code,
+.live-md-toast .vditor-reset h1 > code,
+.live-md-toast .vditor-reset h2 > code,
+.live-md-toast .vditor-reset h3 > code,
+.live-md-toast .vditor-reset h4 > code,
+.live-md-toast .vditor-reset h5 > code,
+.live-md-toast .vditor-reset h6 > code {
   font-size: 0.88em;
   border-radius: 0.28rem;
   background: #f1f5f9;
   padding: 0.04em 0.3em;
 }
 
-.live-md-toast .vditor-reset pre code {
-  background: transparent;
-  padding: 0;
+.live-md-toast .vditor-ir pre.vditor-reset pre,
+.live-md-toast .vditor-ir .vditor-ir__preview pre {
+  margin: 0.52rem 0;
 }
 
-.live-md-toast .vditor-reset pre {
-  margin: 0.52rem 0;
+.live-md-toast .vditor-ir pre.vditor-reset pre > code,
+.live-md-toast .vditor-ir .vditor-ir__preview pre > code {
+  display: block;
   border: 1px solid #e2e8f0;
   border-radius: 0.45rem;
   background: #f8fafc;
+  padding: 0.52rem 0.56rem 0.38rem 0.78rem;
 }
 
 .live-md-toast .vditor-reset hr {
