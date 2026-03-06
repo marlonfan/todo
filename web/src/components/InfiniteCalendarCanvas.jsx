@@ -5,7 +5,13 @@ import { commitOffsetFromWheelSession, resolvePanDelta, shouldCommitWheelSession
 
 const HOUR_HEIGHT = 56;
 const MONTH_WEEK_HEIGHT = 164;
-const HEADER_HEIGHT = 36;
+const MONTH_NATIVE_WEEKS_BEFORE = 24;
+const MONTH_NATIVE_WEEKS_AFTER = 36;
+const MONTH_HEADER_HEIGHT = 36;
+const TIMEGRID_HEADER_HEIGHT = 60;
+const TIMEGRID_BODY_GAP = 8;
+const TIMEGRID_BODY_TOP = TIMEGRID_HEADER_HEIGHT + TIMEGRID_BODY_GAP;
+const TIMEGRID_BODY_HEIGHT = 24 * HOUR_HEIGHT;
 const TIME_AXIS_WIDTH = 46;
 const COMMIT_IDLE_MS = 120;
 const WHEEL_COMMIT_IDLE_MS = 72;
@@ -82,6 +88,7 @@ export default function InfiniteCalendarCanvas({
 }) {
   const viewportRef = useRef(null);
   const timeGridScrollRef = useRef(null);
+  const monthScrollRef = useRef(null);
   const longPressTimerRef = useRef(0);
   const userSelectPrevRef = useRef('');
   const commitTimerRef = useRef(0);
@@ -92,6 +99,7 @@ export default function InfiniteCalendarCanvas({
   const offsetPxRef = useRef(0);
   const panLayerRef = useRef(null);
   const panFrameRef = useRef(0);
+  const monthScrollFrameRef = useRef(0);
   const pendingPanDeltaRef = useRef(Number.NaN);
   const currentPanDeltaRef = useRef(0);
   const inertiaFrameRef = useRef(0);
@@ -143,8 +151,12 @@ export default function InfiniteCalendarCanvas({
   }, [dayColumns, viewportSize.width]);
   const stepPx = view === 'dayGridMonth' ? MONTH_WEEK_HEIGHT : dayWidth;
   const isMonthView = view === 'dayGridMonth';
-  const timelineHeight = HEADER_HEIGHT + (24 * HOUR_HEIGHT) + 8;
+  const timelineHeight = TIMEGRID_BODY_TOP + TIMEGRID_BODY_HEIGHT;
   const snapMinutes = Math.max(5, Number.parseInt(timeGranularity, 10) || 30);
+  const todayDateKey = useMemo(
+    () => dayjs(nowTick).tz(timezone).format('YYYY-MM-DD'),
+    [nowTick, timezone],
+  );
   const eventEntries = useMemo(() => {
     const list = Array.isArray(events) ? events : [];
     const seen = new Map();
@@ -212,6 +224,10 @@ export default function InfiniteCalendarCanvas({
     if (panFrameRef.current) {
       window.cancelAnimationFrame(panFrameRef.current);
       panFrameRef.current = 0;
+    }
+    if (monthScrollFrameRef.current) {
+      window.cancelAnimationFrame(monthScrollFrameRef.current);
+      monthScrollFrameRef.current = 0;
     }
     if (inertiaFrameRef.current) {
       window.cancelAnimationFrame(inertiaFrameRef.current);
@@ -412,8 +428,14 @@ export default function InfiniteCalendarCanvas({
   const reference = useMemo(() => {
     const base = anchorDate ? dayjs(anchorDate).tz(timezone) : dayjs().tz(timezone);
     if (view === 'dayGridMonth') return base.startOf('week');
+    if (view === 'timeGridWeek') return base.startOf('week');
     return base.startOf('day');
   }, [anchorDate, timezone, view]);
+  const monthNativeStartWeek = useMemo(
+    () => reference.subtract(MONTH_NATIVE_WEEKS_BEFORE, 'week').startOf('week'),
+    [reference],
+  );
+  const monthNativeWeeksCount = MONTH_NATIVE_WEEKS_BEFORE + MONTH_NATIVE_WEEKS_AFTER + 1;
 
   useEffect(() => {
     offsetPxRef.current = offsetPx;
@@ -526,7 +548,68 @@ export default function InfiniteCalendarCanvas({
     return true;
   }, [clearWheelCommitTimer, commitOffsetPx, resetPanLayer]);
 
+  const emitMonthViewportFromScroll = useCallback((scrollTopValue = Number.NaN) => {
+    if (!isMonthView) return;
+    const scroller = monthScrollRef.current;
+    if (!scroller) return;
+
+    const rawScrollTop = Number.isFinite(scrollTopValue) ? scrollTopValue : scroller.scrollTop;
+    const topInRows = Math.max(0, rawScrollTop - MONTH_HEADER_HEIGHT);
+    const rowsViewportHeight = Math.max(1, (scroller.clientHeight || 1) - MONTH_HEADER_HEIGHT);
+    const startWeekOffset = Math.max(0, Math.min(
+      monthNativeWeeksCount - 1,
+      Math.floor(topInRows / MONTH_WEEK_HEIGHT),
+    ));
+    const visibleWeeks = Math.max(1, Math.ceil(rowsViewportHeight / MONTH_WEEK_HEIGHT));
+    const rangeStartOffset = Math.max(0, startWeekOffset - WINDOW_BUFFER_LEADING);
+    const rangeEndOffset = Math.min(
+      monthNativeWeeksCount - 1,
+      startWeekOffset + visibleWeeks + WINDOW_BUFFER_TRAILING,
+    );
+    const rangeStart = monthNativeStartWeek.add(rangeStartOffset, 'week').startOf('week');
+    const rangeEnd = monthNativeStartWeek.add(rangeEndOffset, 'week').endOf('week');
+    const displayStart = monthNativeStartWeek.add(startWeekOffset, 'week').startOf('week');
+    const displayEnd = displayStart.add(42, 'day').endOf('day');
+    const rangeStartISO = rangeStart.toISOString();
+    const rangeEndISO = rangeEnd.toISOString();
+
+    if (onRangeChange) {
+      const sameRange = lastCommitRef.current.rangeStart === rangeStartISO
+        && lastCommitRef.current.rangeEnd === rangeEndISO;
+      if (!sameRange) {
+        onRangeChange(rangeStartISO, rangeEndISO, {
+          displayStart: displayStart.toISOString(),
+          displayEnd: displayEnd.toISOString(),
+          phase: 'commit',
+        });
+        lastCommitRef.current.rangeStart = rangeStartISO;
+        lastCommitRef.current.rangeEnd = rangeEndISO;
+      }
+    }
+
+    const centerInRows = Math.max(0, topInRows + (rowsViewportHeight / 2));
+    const centerWeekOffset = Math.max(0, Math.min(
+      monthNativeWeeksCount - 1,
+      Math.floor(centerInRows / MONTH_WEEK_HEIGHT),
+    ));
+    const centerDate = monthNativeStartWeek.add(centerWeekOffset, 'week').add(3, 'day').format('YYYY-MM-DD');
+    if (onCenterDateChange && lastCommitRef.current.centerDate !== centerDate) {
+      onCenterDateChange(centerDate);
+      lastCommitRef.current.centerDate = centerDate;
+    }
+  }, [isMonthView, monthNativeStartWeek, monthNativeWeeksCount, onCenterDateChange, onRangeChange]);
+
+  const handleMonthScroll = useCallback(() => {
+    if (!isMonthView) return;
+    if (monthScrollFrameRef.current) return;
+    monthScrollFrameRef.current = window.requestAnimationFrame(() => {
+      monthScrollFrameRef.current = 0;
+      emitMonthViewportFromScroll();
+    });
+  }, [emitMonthViewportFromScroll, isMonthView]);
+
   useEffect(() => {
+    if (isMonthView) return undefined;
     if (!onRangeChange && !onCenterDateChange) return undefined;
     if (commitTimerRef.current) {
       window.clearTimeout(commitTimerRef.current);
@@ -542,7 +625,26 @@ export default function InfiniteCalendarCanvas({
         commitTimerRef.current = 0;
       }
     };
-  }, [cameraSteps, emitCommittedViewport, onCenterDateChange, onRangeChange]);
+  }, [cameraSteps, emitCommittedViewport, isMonthView, onCenterDateChange, onRangeChange]);
+
+  useEffect(() => {
+    if (!isMonthView) return;
+    const scroller = monthScrollRef.current;
+    if (scroller) {
+      // Keep the target week just below the sticky weekday header.
+      scroller.scrollTop = Math.max(0, (MONTH_NATIVE_WEEKS_BEFORE * MONTH_WEEK_HEIGHT) - 6);
+    }
+    const raf = window.requestAnimationFrame(() => {
+      emitMonthViewportFromScroll(scroller?.scrollTop);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [
+    emitMonthViewportFromScroll,
+    isMonthView,
+    monthNativeStartWeek,
+    monthNativeWeeksCount,
+    todayJumpToken,
+  ]);
 
   useEffect(() => {
     if (isMonthView) return;
@@ -550,7 +652,7 @@ export default function InfiniteCalendarCanvas({
     if (!scroller) return;
     const nowLocal = dayjs().tz(timezone);
     const targetMinute = nowLocal.hour() * 60 + nowLocal.minute();
-    const targetTop = Math.max(0, HEADER_HEIGHT + (targetMinute / 60) * HOUR_HEIGHT - (HOUR_HEIGHT * 2));
+    const targetTop = Math.max(0, TIMEGRID_BODY_TOP + (targetMinute / 60) * HOUR_HEIGHT - (HOUR_HEIGHT * 2));
     scroller.scrollTop = targetTop;
   }, [isMonthView, timezone, todayJumpToken]);
 
@@ -571,7 +673,7 @@ export default function InfiniteCalendarCanvas({
     const dayFloat = (localX - TIME_AXIS_WIDTH) / dayWidth + cameraSteps;
     const dayIndex = Math.floor(dayFloat);
     const date = reference.add(dayIndex, 'day').startOf('day');
-    const minuteRaw = Math.max(0, Math.min(23 * 60 + 59, Math.round(((localY - HEADER_HEIGHT) / HOUR_HEIGHT) * 60)));
+    const minuteRaw = Math.max(0, Math.min(23 * 60 + 59, Math.round(((localY - TIMEGRID_BODY_TOP) / HOUR_HEIGHT) * 60)));
     const minute = Math.floor(minuteRaw / snapMinutes) * snapMinutes;
     const start = date.add(minute, 'minute');
     const end = start.add(snapMinutes, 'minute');
@@ -705,53 +807,19 @@ export default function InfiniteCalendarCanvas({
       if (absX <= LONG_PRESS_MOVE_TOLERANCE_PX && absY <= LONG_PRESS_MOVE_TOLERANCE_PX) {
         return;
       }
-      clearLongPressTimer();
       if (!isMonthView && absY >= absX * 0.9) {
-        drag.mode = 'navigate';
-        drag.dragEvent = null;
-        drag.eventCandidate = null;
-        drag.axis = 'y-manual';
-        drag.moved = true;
-        drag.ignoreClickTarget = true;
-        lockTextSelection();
-        if (!drag.captured) {
-          event.currentTarget.setPointerCapture?.(drag.pointerId);
-          drag.captured = true;
-        }
-        setEventGestureLocked(false);
-        return;
-      }
-      if (drag.mode === 'event' && absX > absY * 1.35) {
-        drag.mode = 'navigate';
-        drag.dragEvent = null;
-        drag.eventCandidate = null;
-        drag.axis = 'x';
-        drag.moved = true;
-        drag.ignoreClickTarget = true;
-        lockTextSelection();
-        if (!drag.captured) {
-          event.currentTarget.setPointerCapture?.(drag.pointerId);
-          drag.captured = true;
-        }
-        setEventGestureLocked(false);
-      } else {
-        return;
-      }
-    }
-    if (drag.mode === 'event' || drag.mode === 'resize') {
-      // On editable cards, prioritize horizontal swipe navigation over event drag.
-      if (
-        drag.mode === 'event'
-        && !drag.moved
-        && absX > GESTURE_ACTIVATE_PX
-        && absX > absY * 1.35
-      ) {
         clearLongPressTimer();
         drag.mode = 'navigate';
         drag.dragEvent = null;
         drag.eventCandidate = null;
+        drag.axis = 'y-native';
+        drag.moved = true;
+        drag.ignoreClickTarget = true;
         setEventGestureLocked(false);
+        return;
       }
+      // Keep waiting long-press for event drag on non-month views.
+      return;
     }
     if (drag.mode === 'event' || drag.mode === 'resize') {
       if (!drag.moved && (absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX)) {
@@ -784,16 +852,10 @@ export default function InfiniteCalendarCanvas({
       } else {
         const hasIntent = absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX;
         if (hasIntent) {
-          if (absX >= absY * 0.92) {
-            drag.moved = true;
-            drag.axis = 'x';
-            lockTextSelection();
-          } else if (absY > absX * 1.1) {
-            // Let native vertical scroll handle this gesture in time-grid views.
-            drag.moved = true;
-            drag.axis = 'y-native';
-            drag.ignoreClickTarget = true;
-          }
+          // In time-grid views, rely on native scrolling instead of JS-controlled swipe navigation.
+          drag.moved = true;
+          drag.axis = 'y-native';
+          drag.ignoreClickTarget = true;
         }
       }
       if (drag.moved && !drag.captured && (isMonthView || drag.axis === 'x')) {
@@ -803,8 +865,8 @@ export default function InfiniteCalendarCanvas({
     }
     if (!drag.moved) return;
     if (drag.mode === 'navigate') {
-      if (!isMonthView && drag.axis === 'y-native') {
-        // Let browser native scrolling/inertia run on vertical gestures.
+      if (!isMonthView) {
+        // Let browser native scrolling/inertia run on all gestures in time-grid views.
         return;
       }
       const axisDelta = drag.axis === 'x'
@@ -939,25 +1001,10 @@ export default function InfiniteCalendarCanvas({
   ]);
 
   const handleWheel = useCallback((event) => {
+    if (!isMonthView) return;
     const axis = isMonthView ? 'y' : 'x';
     const absX = Math.abs(event.deltaX || 0);
     const absY = Math.abs(event.deltaY || 0);
-    if (!isMonthView) {
-      const horizontalIntent = event.shiftKey || absX > (absY * 1.2);
-      if (!horizontalIntent) {
-        if (finalizeWheelSession(true)) {
-          emitCommittedViewportRef.current?.();
-        }
-        settleInertia(true);
-        const scroller = timeGridScrollRef.current;
-        if (scroller && Number.isFinite(event.deltaY) && Math.abs(event.deltaY) > 0) {
-          if (event.cancelable) event.preventDefault();
-          event.stopPropagation();
-          scroller.scrollTop = Math.max(0, scroller.scrollTop + event.deltaY);
-        }
-        return;
-      }
-    }
     const delta = axis === 'y'
       ? event.deltaY
       : (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : (event.shiftKey ? event.deltaY : 0));
@@ -990,20 +1037,19 @@ export default function InfiniteCalendarCanvas({
     const endIndex = visibleWindow.endIndex;
     const columns = [];
     for (let i = startIndex; i < endIndex; i += 1) {
-      const day = reference.add(i, 'day');
       const x = TIME_AXIS_WIDTH + (i - cameraSteps) * dayWidth;
       columns.push(
-        <div key={`day-${i}`} className="pointer-events-none absolute top-0 bottom-0 border-l border-blue-100" style={{ left: x, width: dayWidth }}>
-          <div className="pointer-events-none sticky top-0 z-50 flex h-9 items-center justify-center border-b border-blue-100 bg-white/95 px-1 text-center text-xs font-semibold text-slate-700 backdrop-blur" style={{ zIndex: 70 }}>
-            {day.format('M/D')} / 周{weekDayLabels[day.day()]}
-          </div>
-        </div>
+        <div
+          key={`day-${i}`}
+          className="pointer-events-none absolute bottom-0 border-l border-blue-100"
+          style={{ left: x, width: dayWidth, top: TIMEGRID_BODY_TOP }}
+        />
       );
     }
 
     const hourLines = [];
-    for (let h = 0; h <= 24; h += 1) {
-      const y = HEADER_HEIGHT + h * HOUR_HEIGHT;
+    for (let h = 1; h <= 24; h += 1) {
+      const y = TIMEGRID_BODY_TOP + h * HOUR_HEIGHT;
       hourLines.push(
         <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-blue-100" style={{ top: y }} />
       );
@@ -1011,7 +1057,7 @@ export default function InfiniteCalendarCanvas({
 
     const timeAxis = [];
     for (let h = 0; h < 24; h += 1) {
-      const y = HEADER_HEIGHT + h * HOUR_HEIGHT;
+      const y = TIMEGRID_BODY_TOP + h * HOUR_HEIGHT;
       timeAxis.push(
         <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-500" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
           {String(h).padStart(2, '0')}:00
@@ -1025,7 +1071,7 @@ export default function InfiniteCalendarCanvas({
     const showNowLine = (nowLocal.isAfter(displayStart) || nowLocal.isSame(displayStart))
       && nowLocal.isBefore(displayEndExclusive);
     const nowMinuteOfDay = nowLocal.hour() * 60 + nowLocal.minute() + (nowLocal.second() / 60);
-    const nowLineY = HEADER_HEIGHT + (nowMinuteOfDay / 60) * HOUR_HEIGHT;
+    const nowLineY = TIMEGRID_BODY_TOP + (nowMinuteOfDay / 60) * HOUR_HEIGHT;
     const nowDayIndex = nowLocal.startOf('day').diff(reference, 'day');
     const nowDotX = TIME_AXIS_WIDTH + (nowDayIndex - cameraSteps) * dayWidth;
     const currentTimeLabel = nowLocal.format('HH:mm');
@@ -1098,7 +1144,9 @@ export default function InfiniteCalendarCanvas({
       const x = columnBaseLeft + col * colWidth;
       const width = Math.max(18, colWidth - 2);
       const minuteOfDay = allDay ? 0 : (start.hour() * 60 + start.minute());
-      const y = allDay ? HEADER_HEIGHT + 2 : (HEADER_HEIGHT + (minuteOfDay / 60) * HOUR_HEIGHT + 1);
+      const y = allDay
+        ? TIMEGRID_BODY_TOP + 2
+        : (TIMEGRID_BODY_TOP + (minuteOfDay / 60) * HOUR_HEIGHT + 1);
       const durationMin = allDay ? 30 : clampDurationMinutes(event.start, event.end);
       const h = Math.max(18, (durationMin / 60) * HOUR_HEIGHT - 2);
       const contentHeight = Math.max(12, h - 4);
@@ -1145,7 +1193,7 @@ export default function InfiniteCalendarCanvas({
     return (
       <>
         <div
-          className="pointer-events-none absolute left-0 top-0 bottom-0 z-30 border-r border-blue-100 bg-white/95"
+          className="pointer-events-none absolute left-0 top-0 bottom-0 z-30 bg-white"
           style={{ width: TIME_AXIS_WIDTH }}
         />
         {hourLines}
@@ -1163,6 +1211,7 @@ export default function InfiniteCalendarCanvas({
                   left: TIME_AXIS_WIDTH,
                   right: 0,
                   top: nowLineY,
+                  zIndex: 112,
                   boxShadow: '0 0 8px rgba(244,63,94,0.45)',
                 }}
               />
@@ -1171,6 +1220,7 @@ export default function InfiniteCalendarCanvas({
                 style={{
                   left: nowDotX - 5,
                   top: nowLineY - 5,
+                  zIndex: 113,
                   boxShadow: '0 0 0 3px rgba(244,63,94,0.2)',
                 }}
               />
@@ -1215,7 +1265,7 @@ export default function InfiniteCalendarCanvas({
         {showNowLine && (
           <div
             className="pointer-events-none absolute left-0"
-            style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 60 }}
+            style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 114 }}
           >
             <span className="inline-flex h-5 items-center rounded-r-full bg-rose-500 px-2 text-[10px] font-semibold text-white shadow-sm">
               {currentTimeLabel}
@@ -1226,27 +1276,102 @@ export default function InfiniteCalendarCanvas({
     );
   };
 
-  const renderMonthGrid = () => {
+  const renderTimeGridHeader = () => {
     const startIndex = visibleWindow.startIndex;
     const endIndex = visibleWindow.endIndex;
+    const cells = [];
+    for (let i = startIndex; i < endIndex; i += 1) {
+      const day = reference.add(i, 'day');
+      const x = TIME_AXIS_WIDTH + (i - cameraSteps) * dayWidth;
+      const isTodayColumn = day.format('YYYY-MM-DD') === todayDateKey;
+      cells.push(
+        <div
+          key={`hdr-${i}`}
+          className="pointer-events-none absolute top-0 flex flex-col items-center justify-center border-b border-l border-blue-100 bg-white px-1 text-center"
+          style={{ left: x, width: dayWidth, height: TIMEGRID_BODY_TOP }}
+        >
+          <span className={`text-[10px] font-semibold tracking-[0.08em] ${
+            isTodayColumn ? 'text-blue-700' : 'text-slate-500'
+          }`}
+          >
+            周{weekDayLabels[day.day()]}
+          </span>
+          <span className={`mt-1.5 inline-flex min-w-[40px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+            isTodayColumn
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'bg-slate-100 text-slate-700'
+          }`}
+          >
+            {day.format('M/D')}
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div className="pointer-events-none absolute left-0 right-0 top-0 z-[72]" style={{ height: TIMEGRID_BODY_TOP }}>
+        <div className="absolute inset-0 bg-white" />
+        <div className="absolute left-0 top-0 bottom-0 bg-white" style={{ width: TIME_AXIS_WIDTH }} />
+        {cells}
+      </div>
+    );
+  };
+
+  const renderMonthGrid = () => {
     const dayCellWidth = monthDayCellWidth;
+    const dayCellPercent = 100 / 7;
     const rows = [];
 
-    for (let w = startIndex; w < endIndex; w += 1) {
-      const weekStart = reference.add(w, 'week');
-      const y = HEADER_HEIGHT + (w - cameraSteps) * MONTH_WEEK_HEIGHT;
+    for (let w = 0; w < monthNativeWeeksCount; w += 1) {
+      const weekStart = monthNativeStartWeek.add(w, 'week');
+      const y = w * MONTH_WEEK_HEIGHT;
       rows.push(
-        <div key={`w-${w}`} className="pointer-events-none absolute left-0 right-0 border-t border-blue-100" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
+        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-blue-100" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
           {Array.from({ length: 7 }).map((_, d) => {
             const day = weekStart.add(d, 'day');
+            const dayKey = day.format('YYYY-MM-DD');
+            const isToday = dayKey === todayDateKey;
             return (
-              <div
+              <button
                 key={`${w}-${d}`}
-                className="pointer-events-none absolute border-l border-blue-100 text-left"
-                style={{ left: d * dayCellWidth, width: dayCellWidth, height: MONTH_WEEK_HEIGHT }}
+                type="button"
+                className={`absolute flex items-start justify-start border-0 border-l border-blue-100 p-0 text-left focus:outline-none focus-visible:outline-none ${
+                  isToday ? 'bg-blue-50/55' : 'bg-transparent'
+                }`}
+                style={{
+                  top: 0,
+                  left: `${d * dayCellPercent}%`,
+                  width: `${dayCellPercent}%`,
+                  height: MONTH_WEEK_HEIGHT,
+                  outline: 'none',
+                  WebkitTapHighlightColor: 'transparent',
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.blur();
+                  onCreateRange?.({
+                    allDay: true,
+                    start: day.startOf('day').toISOString(),
+                    end: day.endOf('day').toISOString(),
+                  });
+                }}
               >
-                <span className="pointer-events-none block px-1.5 pt-1 text-xs font-semibold text-slate-700">{day.format('M/D')}</span>
-              </div>
+                <span
+                  className={`pointer-events-none absolute left-1.5 top-1 inline-flex items-center rounded-full text-xs font-semibold ${
+                    isToday
+                      ? 'bg-blue-600 px-2 py-0.5 text-white shadow-sm'
+                      : 'px-0 text-slate-700'
+                  }`}
+                >
+                  {day.format('M/D')}
+                </span>
+                {isToday && (
+                  <span
+                    className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500/90 shadow"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
             );
           })}
         </div>
@@ -1257,7 +1382,8 @@ export default function InfiniteCalendarCanvas({
     eventEntries.forEach(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return;
-      const weekIndex = start.startOf('week').diff(reference, 'week');
+      const weekIndex = start.startOf('week').diff(monthNativeStartWeek, 'week');
+      if (weekIndex < 0 || weekIndex >= monthNativeWeeksCount) return;
       const day = start.day();
       const key = `${weekIndex}|${day}`;
       const list = byCell.get(key) || [];
@@ -1277,34 +1403,53 @@ export default function InfiniteCalendarCanvas({
       const hidden = sorted.slice(6);
 
       visible.forEach((item, slotIndex) => {
-        const y = HEADER_HEIGHT + (weekIndex - cameraSteps) * MONTH_WEEK_HEIGHT + 22 + slotIndex * 19;
-        const x = day * dayCellWidth + 2;
+        const y = (weekIndex * MONTH_WEEK_HEIGHT) + 28 + slotIndex * 19;
+        const x = `calc(${day * dayCellPercent}% + 2px)`;
         const readonly = isReadonlyEvent(item.event);
         monthEvents.push(
-          <div
+          <button
             key={item.eventKey}
+            type="button"
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
-            className={`canvas-event absolute h-5 overflow-hidden rounded px-1 text-[10px] ${
+            className={`canvas-event absolute h-5 overflow-hidden rounded border-0 px-1 text-left text-[10px] focus:outline-none focus-visible:outline-none ${
               readonly ? 'bg-slate-500/85 text-white' : 'bg-blue-600/80 text-white'
             }`}
-            style={{ left: x, top: y, width: dayCellWidth - 5 }}
+            style={{
+              left: x,
+              top: y,
+              width: `calc(${dayCellPercent}% - 5px)`,
+              outline: 'none',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.blur();
+              onOpenEvent?.(item.event);
+            }}
           >
             {item.event.title || 'Untitled'}
-          </div>
+          </button>
         );
       });
 
       if (hidden.length > 0) {
-        const dayDate = reference.add(weekIndex, 'week').add(day, 'day');
-        const y = HEADER_HEIGHT + (weekIndex - cameraSteps) * MONTH_WEEK_HEIGHT + 22 + 6 * 19;
-        const x = day * dayCellWidth + 2;
+        const dayDate = monthNativeStartWeek.add(weekIndex, 'week').add(day, 'day');
+        const y = (weekIndex * MONTH_WEEK_HEIGHT) + 28 + 6 * 19;
+        const x = `calc(${day * dayCellPercent}% + 2px)`;
         moreIndicators.push(
           <button
             key={`more-${key}`}
             type="button"
-            className="canvas-ui-action absolute h-5 rounded px-1 text-left text-[10px] font-semibold text-blue-700 hover:bg-blue-50"
-            style={{ left: x, top: y, width: dayCellWidth - 5 }}
+            className="canvas-ui-action absolute h-5 rounded px-1 text-left text-[10px] font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+            style={{
+              left: x,
+              top: y,
+              width: `calc(${dayCellPercent}% - 5px)`,
+              outline: 'none',
+              WebkitTapHighlightColor: 'transparent',
+            }}
             onPointerDown={(event) => {
               event.stopPropagation();
             }}
@@ -1314,6 +1459,7 @@ export default function InfiniteCalendarCanvas({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
+              event.currentTarget.blur();
               onOpenMore?.({
                 date: dayDate.toISOString(),
                 events: sorted.map((item) => item.event),
@@ -1328,16 +1474,19 @@ export default function InfiniteCalendarCanvas({
 
     return (
       <>
-        <div className="pointer-events-none sticky top-0 z-20 flex h-9 border-b border-blue-100 bg-white/95 text-xs font-semibold text-slate-600 backdrop-blur">
+        <div
+          className="pointer-events-none sticky top-0 z-20 grid grid-cols-7 border-b border-blue-100 bg-white/95 text-xs font-semibold text-slate-600 backdrop-blur"
+          style={{ height: MONTH_HEADER_HEIGHT }}
+        >
           {weekDayLabels.map((label) => (
-            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-blue-100" style={{ width: dayCellWidth }}>
+            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-blue-100">
               周{label}
             </div>
           ))}
         </div>
         <div
-          ref={panLayerRef}
-          className="absolute inset-x-0 top-0 bottom-0 will-change-transform"
+          className="relative"
+          style={{ height: monthNativeWeeksCount * MONTH_WEEK_HEIGHT }}
         >
           {rows}
           {monthEvents}
@@ -1351,31 +1500,42 @@ export default function InfiniteCalendarCanvas({
     <div
       ref={viewportRef}
       className="relative h-full overflow-hidden bg-white"
-      onWheel={handleWheel}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onWheel={isMonthView ? undefined : handleWheel}
+      onPointerDown={isMonthView ? undefined : handlePointerDown}
+      onPointerMove={isMonthView ? undefined : handlePointerMove}
+      onPointerUp={isMonthView ? undefined : handlePointerUp}
+      onPointerCancel={isMonthView ? undefined : handlePointerUp}
       style={{
-        touchAction: isMonthView ? 'none' : (eventGestureLocked ? 'none' : 'pan-y'),
+        touchAction: isMonthView ? 'pan-y' : (eventGestureLocked ? 'none' : 'pan-y'),
         overscrollBehaviorX: 'none',
-        overscrollBehaviorY: isMonthView ? 'none' : 'contain',
+        overscrollBehaviorY: 'contain',
       }}
     >
       {isMonthView ? (
-        <div className="absolute inset-0">
+        <div
+          ref={monthScrollRef}
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+          style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+          onScroll={handleMonthScroll}
+        >
           {renderMonthGrid()}
         </div>
       ) : (
-        <div
-          ref={timeGridScrollRef}
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden"
-          style={{ touchAction: eventGestureLocked ? 'none' : 'pan-y' }}
-        >
-          <div className="relative" style={{ height: timelineHeight }}>
-            {renderTimeGrid()}
+        <>
+          {renderTimeGridHeader()}
+          <div
+            ref={timeGridScrollRef}
+            className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+            style={{
+              touchAction: eventGestureLocked ? 'none' : 'pan-y',
+              overscrollBehaviorY: 'none',
+            }}
+          >
+            <div className="relative" style={{ height: timelineHeight }}>
+              {renderTimeGrid()}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

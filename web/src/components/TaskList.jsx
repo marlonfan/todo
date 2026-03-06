@@ -149,10 +149,10 @@ const TaskRow = React.memo(function TaskRow({
   const isReadOnly = !!task.read_only;
   const priorityValue = Number.parseInt(task.priority, 10) || 0;
   const priority = priorityValue === 1
-    ? { text: labels.priorityHigh, class: 'text-rose-600' }
+    ? { text: labels.priorityHighShort, title: labels.priorityHigh, className: 'text-rose-600' }
     : priorityValue === -1
-      ? { text: labels.priorityLow, class: 'text-emerald-600' }
-      : { text: labels.priorityMedium, class: 'text-sky-600' };
+      ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-emerald-600' }
+      : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-sky-600' };
   const primaryTime = getTaskPrimaryTime(task);
 
   return (
@@ -221,7 +221,7 @@ const TaskRow = React.memo(function TaskRow({
             </span>
             {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
             {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
-            <span className={`${priority.class}`}>{priority.text}</span>
+            <span title={priority.title} className={priority.className}>{priority.text}</span>
             {task.categories?.slice(0, 2).map((cat) => (
               <span
                 key={cat.id}
@@ -248,7 +248,7 @@ const TaskRow = React.memo(function TaskRow({
 ));
 
 function TaskList({ forcedView = '' }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
@@ -270,6 +270,7 @@ function TaskList({ forcedView = '' }) {
   const [listToolbarPanel, setListToolbarPanel] = useState('');
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [detailPanel, setDetailPanel] = useState('');
+  const [draftParsePreview, setDraftParsePreview] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false
@@ -593,6 +594,20 @@ function TaskList({ forcedView = '' }) {
     () => filteredTasks.find((task) => task.id === selectedTaskID) || null,
     [filteredTasks, selectedTaskID]
   );
+  const parsedDraftPriority = parsePriorityFromTitle(String(draft?.title || ''));
+  const draftPriorityValue = Number.isInteger(parsedDraftPriority?.priority)
+    ? parsedDraftPriority.priority
+    : (Number.parseInt(draft?.priority, 10) || 0);
+  const isZh = i18n.language === 'zh-CN';
+  const draftPriorityIndicator = draftPriorityValue === 1
+    ? { text: isZh ? '高' : 'High', title: t('task.priorityHigh'), className: 'text-rose-600' }
+    : draftPriorityValue === -1
+      ? { text: isZh ? '低' : 'Low', title: t('task.priorityLow'), className: 'text-emerald-600' }
+      : { text: isZh ? '中' : 'Medium', title: t('task.priorityMedium'), className: 'text-sky-600' };
+
+  useEffect(() => {
+    setDraftParsePreview('');
+  }, [selectedTask?.id]);
 
   const buildDraftFromTask = (taskValue) => {
     if (!taskValue) return null;
@@ -840,6 +855,18 @@ function TaskList({ forcedView = '' }) {
     const targetTaskID = selectedTask.id;
     setSavingDraft(true);
     try {
+      const parsedPriority = parsePriorityFromTitle(title);
+      const normalizedTitle = parsedPriority?.cleanedTitle?.trim() || title;
+      const normalizedPriority = Number.isInteger(parsedPriority?.priority)
+        ? parsedPriority.priority
+        : (Number.parseInt(draft.priority, 10) || 0);
+      if (normalizedTitle !== title || String(normalizedPriority) !== String(draft.priority)) {
+        setDraft((prev) => (prev ? {
+          ...prev,
+          title: normalizedTitle,
+          priority: String(normalizedPriority),
+        } : prev));
+      }
       const originalDraft = buildDraftFromTask(selectedTask);
       const timeChanged =
         !!draft.all_day !== !!originalDraft?.all_day ||
@@ -847,9 +874,9 @@ function TaskList({ forcedView = '' }) {
         String(draft.end_time || '') !== String(originalDraft?.end_time || '');
 
       const payload = {
-        title,
+        title: normalizedTitle,
         description: draft.description || '',
-        priority: Number.parseInt(draft.priority, 10) || 0,
+        priority: normalizedPriority,
         status: draft.status || selectedTask.status || 'pending',
         client_timezone: timezone,
         category_ids: (draft.category_ids || []).map((id) => Number.parseInt(id, 10)).filter((id) => !Number.isNaN(id)),
@@ -969,9 +996,12 @@ function TaskList({ forcedView = '' }) {
     priorityHigh: t('task.priorityHigh'),
     priorityMedium: t('task.priorityMedium'),
     priorityLow: t('task.priorityLow'),
+    priorityHighShort: i18n.language === 'zh-CN' ? '高' : 'High',
+    priorityMediumShort: i18n.language === 'zh-CN' ? '中' : 'Medium',
+    priorityLowShort: i18n.language === 'zh-CN' ? '低' : 'Low',
     statusCancelled: t('task.statusCancelled'),
     markPending: t('task.markPending'),
-  }), [t]);
+  }), [i18n.language, t]);
 
   const handleSelectTask = useCallback((task) => {
     setSelectedTaskID(task.id);
@@ -999,12 +1029,12 @@ function TaskList({ forcedView = '' }) {
   const showListHeader = !isCompactMobile || showMobileSearchBar;
 
   return (
-    <div className="md-page h-full p-1.5 md:p-2">
-      <div className="grid h-full grid-cols-1 gap-2.5 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
+    <div className="md-page h-full">
+      <div className="grid h-full grid-cols-1 gap-0 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
         <section className="md-pane flex h-full min-h-0 flex-col">
           {showListHeader && (
             <div className="border-b border-blue-100 px-3 py-2.5">
-              <div className="flex items-center justify-end gap-2 md:gap-3">
+              <div className="flex min-h-[36px] items-center justify-end gap-2 md:gap-3">
                 <div className="hidden min-w-0 md:block md:flex-none">
                   <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
                   <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
@@ -1271,16 +1301,71 @@ function TaskList({ forcedView = '' }) {
           )}
         </section>
 
-        <section className="md-pane hidden h-full min-h-0 flex-col lg:flex">
+        <section className="md-pane hidden h-full min-h-0 flex-col lg:flex lg:border-l lg:border-blue-100">
           {!selectedTask || !draft ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-400">
               {t('task.selectTaskHint')}
             </div>
           ) : (
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-blue-100 px-4 py-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2 text-xs">
+              <div className="border-b border-blue-100 px-3 py-2.5">
+                <div className="px-1 py-0.5">
+                  <input
+                    value={draft.title}
+                    onChange={(e) => {
+                      setDraftParsePreview('');
+                      handleDraftFieldChange('title', e.target.value);
+                    }}
+                    onBlur={(e) => {
+                      const rawTitle = String(e.target.value || '');
+                      const parsedPriority = parsePriorityFromTitle(rawTitle);
+                      const priorityNormalizedTitle = typeof parsedPriority?.cleanedTitle === 'string'
+                        ? parsedPriority.cleanedTitle
+                        : rawTitle;
+                      if (Number.isInteger(parsedPriority?.priority)) {
+                        handleDraftFieldChange('priority', String(parsedPriority.priority));
+                      }
+                      const parsed = parseNaturalTimeFromTitle(
+                        priorityNormalizedTitle,
+                        timezone,
+                        getNaturalTimeOptionsFromUser((() => {
+                          try {
+                            return JSON.parse(localStorage.getItem('user') || '{}');
+                          } catch {
+                            return {};
+                          }
+                        })())
+                      );
+                      if (!parsed) {
+                        if (priorityNormalizedTitle !== rawTitle) {
+                          handleDraftFieldChange('title', priorityNormalizedTitle);
+                        }
+                        setDraftParsePreview('');
+                        return;
+                      }
+                      const cleanedTitle = parsed.cleanedTitle || priorityNormalizedTitle;
+                      if (cleanedTitle !== rawTitle) {
+                        handleDraftFieldChange('title', cleanedTitle);
+                      }
+                      setDraftParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
+                    }}
+                    className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 sm:text-xl"
+                    placeholder={t('task.title')}
+                  />
+                  <div className="mt-1 flex h-5 items-center justify-between gap-2">
+                    <p className={`min-w-0 truncate text-xs leading-4 ${draftParsePreview ? 'text-emerald-600' : 'text-transparent'}`}>
+                      {draftParsePreview || '\u00A0'}
+                    </p>
+                    <span
+                      title={draftPriorityIndicator.title}
+                      className={`shrink-0 text-[10px] font-semibold leading-4 ${draftPriorityIndicator.className}`}
+                    >
+                      {draftPriorityIndicator.text}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 flex min-h-[36px] items-center justify-between gap-3">
+                  <div className="order-2 flex items-center justify-end gap-2 text-xs">
                     {selectedTask.read_only && (
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">CalDAV Read-only</span>
                     )}
@@ -1293,7 +1378,7 @@ function TaskList({ forcedView = '' }) {
                     )}
                     {lastSavedAt && <span className="text-slate-400">{t('task.lastSavedAt', { time: lastSavedAt })}</span>}
                   </div>
-                  <div ref={detailPanelRef} className="relative flex items-center gap-1.5">
+                  <div ref={detailPanelRef} className="order-1 relative flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setDetailPanel(detailPanel === 'priority' ? '' : 'priority')}
@@ -1604,14 +1689,6 @@ function TaskList({ forcedView = '' }) {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
-                <div className="px-1 py-1">
-                  <input
-                    value={draft.title}
-                    onChange={(e) => handleDraftFieldChange('title', e.target.value)}
-                    className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 sm:text-xl"
-                    placeholder={t('task.title')}
-                  />
-                </div>
                 <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor

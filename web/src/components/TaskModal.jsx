@@ -58,7 +58,7 @@ function getDefaultStartParts() {
 }
 
 function TaskModal({ task, initialRange, onClose, onSaved }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const { register, handleSubmit, watch, setValue, getValues } = useForm();
   const { data: categories = [] } = useCategoriesQuery();
@@ -69,7 +69,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [selectedDays, setSelectedDays] = useState([]);
   const [timeTouched, setTimeTouched] = useState(false);
   const [parsePreview, setParsePreview] = useState('');
-  const [parseSnapshot, setParseSnapshot] = useState(null);
   const [basicPanel, setBasicPanel] = useState('');
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const basicPanelRef = useRef(null);
@@ -79,6 +78,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
   const isEditing = !!task;
   const isAllDay = watch('all_day');
+  const titleValue = watch('title') || '';
   const priorityValue = watch('priority') || '0';
   const startInputValue = watch('start_time');
   const endInputValue = watch('end_time');
@@ -89,6 +89,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       : watchedCategoryIDs
       ? [String(watchedCategoryIDs)]
       : [];
+  const parsedPriorityFromTitle = parsePriorityFromTitle(titleValue || '');
+  const displayPriorityValue = Number.isInteger(parsedPriorityFromTitle?.priority)
+    ? parsedPriorityFromTitle.priority
+    : (Number.parseInt(priorityValue, 10) || 0);
+  const isZh = i18n.language === 'zh-CN';
+  const priorityIndicator = displayPriorityValue === 1
+    ? { text: isZh ? '高' : 'High', title: t('task.priorityHigh'), className: 'text-rose-600' }
+    : displayPriorityValue === -1
+      ? { text: isZh ? '低' : 'Low', title: t('task.priorityLow'), className: 'text-emerald-600' }
+      : { text: isZh ? '中' : 'Medium', title: t('task.priorityMedium'), className: 'text-sky-600' };
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
   useEffect(() => {
@@ -139,7 +149,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   useEffect(() => {
     setTimeTouched(false);
     setParsePreview('');
-    setParseSnapshot(null);
     
     if (task) {
       // 编辑模式：填充表单数据
@@ -227,42 +236,36 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   }, [isAllDay, getValues, setValue]);
 
   const applyNaturalTimeFromTitle = (titleValue, shouldUpdateTime) => {
-    const originalTitle = String(titleValue || '');
+    const rawTitle = String(titleValue || '');
+    const parsedPriority = parsePriorityFromTitle(rawTitle);
+    const priorityNormalizedTitle = typeof parsedPriority?.cleanedTitle === 'string'
+      ? parsedPriority.cleanedTitle
+      : rawTitle;
     const originalStartTime = getValues('start_time') || '';
-    const parsed = parseNaturalTimeFromTitle(titleValue, getUserTimezone(), getNaturalTimeOptionsFromUser(getStoredUser()));
+    const parsed = parseNaturalTimeFromTitle(
+      priorityNormalizedTitle,
+      getUserTimezone(),
+      getNaturalTimeOptionsFromUser(getStoredUser())
+    );
+    if (Number.isInteger(parsedPriority?.priority)) {
+      setValue('priority', String(parsedPriority.priority), { shouldDirty: true });
+    }
     if (!parsed) {
+      if (priorityNormalizedTitle !== rawTitle) {
+        setValue('title', priorityNormalizedTitle, { shouldDirty: true });
+      }
       setParsePreview('');
-      setParseSnapshot(null);
       return null;
     }
-
-    let changed = false;
-    if (parsed.cleanedTitle && parsed.cleanedTitle !== titleValue) {
-      setValue('title', parsed.cleanedTitle);
-      changed = true;
+    const cleanedTitle = parsed.cleanedTitle || priorityNormalizedTitle;
+    if (cleanedTitle !== rawTitle) {
+      setValue('title', cleanedTitle, { shouldDirty: true });
     }
     if (shouldUpdateTime && parsed.parsedAtInput !== originalStartTime) {
       setValue('start_time', parsed.parsedAtInput);
-      changed = true;
     }
     setParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
-    if (changed) {
-      setParseSnapshot({
-        originalTitle,
-        originalStartTime,
-      });
-    } else {
-      setParseSnapshot(null);
-    }
     return parsed;
-  };
-
-  const handleUndoNaturalParse = () => {
-    if (!parseSnapshot) return;
-    setValue('title', parseSnapshot.originalTitle || '');
-    setValue('start_time', parseSnapshot.originalStartTime || '');
-    setParsePreview('');
-    setParseSnapshot(null);
   };
 
   const onSubmit = async (data) => {
@@ -272,7 +275,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     try {
       const clientTimezone = getUserTimezone();
       const rawTitle = (data.title || '').trim();
-      const parsedPriority = !isEditing ? parsePriorityFromTitle(rawTitle) : null;
+      const parsedPriority = parsePriorityFromTitle(rawTitle);
       const priorityNormalizedTitle = parsedPriority?.cleanedTitle?.trim() || rawTitle;
       const parsedNaturalTime = applyNaturalTimeFromTitle(priorityNormalizedTitle, !timeTouched);
       const normalizedTitle = parsedNaturalTime?.cleanedTitle?.trim() || priorityNormalizedTitle;
@@ -468,13 +471,28 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         <div className="flex h-[86vh] flex-col">
           <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4">
             <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900 md:text-xl">
-                  {isEditing ? t('task.editTask') : t('task.newTask')}
-                </h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  {isEditing ? t('task.advancedEditHint') : t('task.quickCreateHint')}
-                </p>
+              <div className="min-w-0 flex-1">
+                <input
+                  value={titleValue}
+                  onChange={(e) => {
+                    setParsePreview('');
+                    setValue('title', e.target.value, { shouldDirty: true });
+                  }}
+                  onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
+                  className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 md:text-xl"
+                  placeholder={t('task.title')}
+                />
+                <div className="mt-1 flex h-5 items-center justify-between gap-2">
+                  <p className={`min-w-0 truncate text-xs leading-4 ${parsePreview ? 'text-emerald-600' : 'text-transparent'}`}>
+                    {parsePreview || '\u00A0'}
+                  </p>
+                  <span
+                    title={priorityIndicator.title}
+                    className={`shrink-0 text-[10px] font-semibold leading-4 ${priorityIndicator.className}`}
+                  >
+                    {priorityIndicator.text}
+                  </span>
+                </div>
               </div>
               <button onClick={requestClose} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700">
                 ✕
@@ -493,6 +511,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               <div className="border-b border-slate-200 px-3 py-2.5 md:px-4 md:py-3">
                 <input type="hidden" {...register('priority')} />
                 {isEditing && <input type="hidden" {...register('status')} />}
+                <input type="hidden" {...register('title', { required: true })} />
                 <input type="checkbox" {...register('all_day')} className="hidden" />
                 <input type="hidden" {...register('start_time')} />
                 <input type="hidden" {...register('end_time')} />
@@ -827,34 +846,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               </div>
 
               <div className="flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <input
-                    {...register('title', { required: true })}
-                    type="text"
-                    className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 md:text-xl"
-                    placeholder={t('task.title')}
-                    onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
-                  />
-                  <p className="mt-1 text-xs text-slate-500">{t('task.titleNaturalHint')}</p>
-                  {parsePreview && (
-                    <div className="mt-1 flex items-center gap-2">
-                      <p className="text-xs text-emerald-600">{parsePreview}</p>
-                      {parseSnapshot && (
-                        <button
-                          type="button"
-                          onClick={handleUndoNaturalParse}
-                          className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
-                        >
-                          {t('task.naturalTimeUndo')}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  <p className="mt-1 text-xs text-slate-500">
-                    {startInputValue ? `${t('task.startTime')}: ${startInputValue}` : t('task.noDate')}
-                  </p>
-                </div>
-
                 <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor

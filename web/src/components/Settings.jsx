@@ -634,8 +634,8 @@ function Settings() {
         <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-3xl mx-auto">
+      <div className="flex-1 overflow-auto p-4 md:p-5">
+        <div className="w-full">
           {/* Tab Navigation */}
           <div className="settings-tabs">
             <button
@@ -682,7 +682,7 @@ function Settings() {
 
           {/* General Settings */}
           {activeTab === 'general' && (
-            <div className="md-card p-6">
+            <div className="p-6">
               <h3 className="text-lg font-medium mb-4">{t('settings.title')}</h3>
 
               <div className="space-y-6">
@@ -892,7 +892,7 @@ function Settings() {
 
           {/* Sync Settings */}
           {activeTab === 'sync' && (
-            <div className="md-card space-y-6 p-6">
+            <div className="space-y-6 p-6">
               <div>
                 <h3 className="text-lg font-medium text-gray-900">{t('settings.syncSettings')}</h3>
                 <p className="mt-1 text-sm text-gray-500">{t('settings.syncSettingsHint')}</p>
@@ -953,7 +953,7 @@ function Settings() {
           )}
 
           {activeTab === 'caldav' && (
-            <div className="md-card space-y-4 p-6">
+            <div className="space-y-4 p-6">
               <div>
                 <h3 className="text-lg font-medium text-gray-900">{t('settings.caldav.title')}</h3>
                 <p className="mt-1 text-sm text-gray-500">{t('settings.caldav.hint')}</p>
