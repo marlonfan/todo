@@ -111,6 +111,9 @@ jwt:
 notify:
   check_interval: 60s  # 通知检查间隔
 
+caldav:
+  check_interval: 15m  # CalDAV 拉取间隔
+
 plugins:
   telegram:
     enabled: true

@@ -14,7 +14,7 @@ notify:
   check_interval: 60s  # 通知检查间隔
 
 caldav:
-  check_interval: 10m  # CalDAV 拉取间隔
+  check_interval: 15m  # CalDAV 拉取间隔
 
 plugins:
   telegram:

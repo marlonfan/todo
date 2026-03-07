@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,13 @@ import (
 	rrule "github.com/teambition/rrule-go"
 )
 
-const caldavSourceName = "caldav"
+const (
+	caldavSourceName         = "caldav"
+	caldavHTTPTimeout        = 90 * time.Second
+	caldavWindowPastMonths   = 3
+	caldavWindowFutureMonths = 6
+	feishuRangeSpanDays      = 28
+)
 
 type CaldavService struct {
 	repo       *repository.CaldavRepository
@@ -38,7 +45,7 @@ func NewCaldavService(repo *repository.CaldavRepository, secret string) *CaldavS
 	return &CaldavService{
 		repo: repo,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: caldavHTTPTimeout,
 		},
 		secret:     secret,
 		sourceLock: make(map[string]*sync.Mutex),
@@ -416,6 +423,7 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 	} else if hasLegacyRecurrence {
 		forceReplace = true
 	}
+	isFeishuProvider := detectCaldavProvider(source.BaseURL) == "feishu"
 
 	if !forceReplace {
 		if token := strings.TrimSpace(calendar.SyncToken); token != "" {
@@ -446,6 +454,12 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 				if nextToken != "" {
 					calendar.SyncToken = nextToken
 				}
+				if isFeishuProvider {
+					if err := s.reconcileFeishuCacheConsistency(ctx, source, password, calendar); err != nil {
+						return err
+					}
+					return nil
+				}
 				return s.extendCalendarCacheCoverage(ctx, source, password, calendar)
 			}
 			if !isSyncTokenRecoverableError(err) {
@@ -457,6 +471,12 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 	remoteCTag, remoteSyncToken, stateErr := s.fetchCalendarState(ctx, source, password, calendar.CalendarURL)
 	if !forceReplace && stateErr == nil && remoteCTag != "" && remoteCTag == strings.TrimSpace(calendar.CTag) {
 		calendar.SyncToken = remoteSyncToken
+		if isFeishuProvider {
+			if err := s.reconcileFeishuCacheConsistency(ctx, source, password, calendar); err != nil {
+				return err
+			}
+			return nil
+		}
 		return s.extendCalendarCacheCoverage(ctx, source, password, calendar)
 	}
 
@@ -497,6 +517,27 @@ func (s *CaldavService) replaceCalendarCacheFromRemote(
 		return err
 	}
 	return nil
+}
+
+func (s *CaldavService) reconcileFeishuCacheConsistency(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+) error {
+	windowStart, windowEnd := defaultCaldavExpansionWindow()
+	remoteHrefs, err := s.fetchCalendarRemoteHrefs(ctx, source, password, calendar, windowStart, windowEnd)
+	if err != nil {
+		return err
+	}
+	localHrefs, err := s.repo.ListDistinctEventHrefsInRange(source.UserID, source.ID, calendar.ID, windowStart, windowEnd)
+	if err != nil {
+		return err
+	}
+	if sameCaldavHrefSet(remoteHrefs, localHrefs) {
+		return nil
+	}
+	return s.replaceCalendarCacheFromRemote(ctx, source, password, calendar)
 }
 
 func (s *CaldavService) extendCalendarCacheCoverage(
@@ -558,22 +599,31 @@ func (s *CaldavService) mergeCalendarRemoteRange(
 		return nil
 	}
 	if detectCaldavProvider(source.BaseURL) == "feishu" {
-		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, time.Time{}, time.Time{}, false)
-		if err != nil {
-			return err
+		windows := buildCaldavSyncWindows(start.UTC(), end.UTC(), feishuRangeSpanDays)
+		if len(windows) == 0 {
+			windows = append(windows, [2]time.Time{start.UTC(), end.UTC()})
 		}
-		buffer := make([]models.CaldavEventCache, 0, len(items))
-		for _, item := range items {
-			if item.EventUID == "" {
-				continue
+		for _, segment := range windows {
+			items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, segment[0], segment[1], true)
+			if err != nil {
+				return err
 			}
-			event := item
-			event.UserID = source.UserID
-			event.SourceID = source.ID
-			event.CalendarID = calendar.ID
-			buffer = append(buffer, event)
+			buffer := make([]models.CaldavEventCache, 0, len(items))
+			for _, item := range items {
+				if item.EventUID == "" {
+					continue
+				}
+				event := item
+				event.UserID = source.UserID
+				event.SourceID = source.ID
+				event.CalendarID = calendar.ID
+				buffer = append(buffer, event)
+			}
+			if err := s.repo.UpsertEvents(buffer); err != nil {
+				return err
+			}
 		}
-		return s.repo.UpsertEvents(buffer)
+		return nil
 	}
 
 	windows := buildCaldavSyncWindows(start.UTC(), end.UTC(), 90)
@@ -610,11 +660,20 @@ func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
 	calendar *models.CaldavCalendar,
 ) ([]models.CaldavEventCache, error) {
 	if detectCaldavProvider(source.BaseURL) == "feishu" {
-		items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, time.Time{}, time.Time{}, false)
-		if err != nil {
-			return nil, err
+		windowStart, windowEnd := defaultCaldavExpansionWindow()
+		windows := buildCaldavSyncWindows(windowStart, windowEnd, feishuRangeSpanDays)
+		if len(windows) == 0 {
+			windows = append(windows, [2]time.Time{windowStart, windowEnd})
 		}
-		return dedupeCaldavEvents(items), nil
+		merged := make([]models.CaldavEventCache, 0, 1024)
+		for _, segment := range windows {
+			items, _, err := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, segment[0], segment[1], true)
+			if err != nil {
+				return nil, err
+			}
+			merged = append(merged, items...)
+		}
+		return dedupeCaldavEvents(merged), nil
 	}
 
 	windowStart, windowEnd := defaultCaldavExpansionWindow()
@@ -640,6 +699,170 @@ func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
 		merged = append(merged, items...)
 	}
 	return dedupeCaldavEvents(merged), nil
+}
+
+func (s *CaldavService) fetchCalendarRemoteHrefs(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendar *models.CaldavCalendar,
+	start, end time.Time,
+) ([]string, error) {
+	if detectCaldavProvider(source.BaseURL) == "feishu" {
+		windows := buildCaldavSyncWindows(start.UTC(), end.UTC(), feishuRangeSpanDays)
+		if len(windows) == 0 {
+			windows = append(windows, [2]time.Time{start.UTC(), end.UTC()})
+		}
+		merged := make([]string, 0, 1024)
+		seen := make(map[string]struct{}, 1024)
+		for _, segment := range windows {
+			hrefs, err := s.fetchCalendarRemoteHrefsAtURL(ctx, source, password, calendar.CalendarURL, segment[0], segment[1])
+			if err != nil {
+				return nil, err
+			}
+			for _, href := range hrefs {
+				key := normalizeCaldavHrefKey(href)
+				if key == "" {
+					continue
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				merged = append(merged, key)
+			}
+		}
+		sort.Strings(merged)
+		return merged, nil
+	}
+
+	hrefs, err := s.fetchCalendarRemoteHrefsAtURL(ctx, source, password, calendar.CalendarURL, start, end)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(calendar.CalendarURL)
+	if len(hrefs) == 0 && trimmed != "" && !strings.HasSuffix(trimmed, "/") {
+		fallbackURL := trimmed + "/"
+		retried, retryErr := s.fetchCalendarRemoteHrefsAtURL(ctx, source, password, fallbackURL, start, end)
+		if retryErr == nil && len(retried) > 0 {
+			return retried, nil
+		}
+	}
+	return hrefs, nil
+}
+
+func (s *CaldavService) fetchCalendarRemoteHrefsAtURL(
+	ctx context.Context,
+	source *models.CaldavSource,
+	password string,
+	calendarURL string,
+	start, end time.Time,
+) ([]string, error) {
+	startUTC := start.UTC()
+	endUTC := end.UTC()
+	useRange := !startUTC.IsZero() && !endUTC.IsZero() && endUTC.After(startUTC)
+	if !useRange {
+		startUTC, endUTC = defaultCaldavExpansionWindow()
+	}
+	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:prop>
+    <d:getetag/>
+  </d:prop>
+  <c:filter>
+    <c:comp-filter name="VCALENDAR">
+      <c:comp-filter name="VEVENT">
+        <c:time-range start="%s" end="%s"/>
+      </c:comp-filter>
+    </c:comp-filter>
+  </c:filter>
+</c:calendar-query>`, formatCalDAVTime(startUTC), formatCalDAVTime(endUTC))
+	req, err := http.NewRequestWithContext(ctx, "REPORT", calendarURL, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(source.Username, password)
+	req.Header.Set("Depth", "1")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("calendar href sync failed: %s (%s)", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var parsed multistatus
+	if err := xml.Unmarshal(raw, &parsed); err != nil {
+		return nil, err
+	}
+	hrefs := collectResponseHrefs(&parsed)
+	out := make([]string, 0, len(hrefs))
+	seen := make(map[string]struct{}, len(hrefs))
+	for _, href := range hrefs {
+		key := normalizeCaldavHrefKey(href)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func sameCaldavHrefSet(remoteHrefs, localHrefs []string) bool {
+	remoteSet := make(map[string]struct{}, len(remoteHrefs))
+	for _, href := range remoteHrefs {
+		key := normalizeCaldavHrefKey(href)
+		if key == "" {
+			continue
+		}
+		remoteSet[key] = struct{}{}
+	}
+	localSet := make(map[string]struct{}, len(localHrefs))
+	for _, href := range localHrefs {
+		key := normalizeCaldavHrefKey(href)
+		if key == "" {
+			continue
+		}
+		localSet[key] = struct{}{}
+	}
+	if len(remoteSet) != len(localSet) {
+		return false
+	}
+	for key := range remoteSet {
+		if _, ok := localSet[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeCaldavHrefKey(input string) string {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil && (parsed.Scheme != "" || parsed.Host != "") {
+		path := strings.TrimSpace(parsed.EscapedPath())
+		if path == "" {
+			return value
+		}
+		if strings.TrimSpace(parsed.RawQuery) != "" {
+			return path + "?" + parsed.RawQuery
+		}
+		return path
+	}
+	return value
 }
 
 func (s *CaldavService) syncCalendarIncremental(
@@ -909,7 +1132,7 @@ func parseHTTPStatusCode(statusLine string) int {
 
 func defaultCaldavExpansionWindow() (time.Time, time.Time) {
 	now := time.Now().UTC()
-	return now.AddDate(-1, 0, 0), now.AddDate(2, 0, 0)
+	return now.AddDate(0, -caldavWindowPastMonths, 0), now.AddDate(0, caldavWindowFutureMonths, 0)
 }
 
 func buildCaldavSyncWindows(start, end time.Time, spanDays int) [][2]time.Time {

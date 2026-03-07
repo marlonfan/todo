@@ -240,3 +240,15 @@ func (r *CaldavRepository) ListEventsInRange(userID int64, start, end time.Time)
 		Find(&events).Error
 	return events, err
 }
+
+func (r *CaldavRepository) ListDistinctEventHrefsInRange(userID, sourceID, calendarID int64, start, end time.Time) ([]string, error) {
+	var hrefs []string
+	err := r.db.Model(&models.CaldavEventCache{}).
+		Distinct("raw_href").
+		Where("user_id = ? AND source_id = ? AND calendar_id = ?", userID, sourceID, calendarID).
+		Where("raw_href <> ''").
+		Where("start_time < ?", end).
+		Where("(end_time IS NULL AND start_time >= ?) OR (end_time IS NOT NULL AND end_time > ?)", start, start).
+		Pluck("raw_href", &hrefs).Error
+	return hrefs, err
+}

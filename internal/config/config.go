@@ -86,7 +86,7 @@ func Load(path string) (*Config, error) {
 		cfg.Notify.CheckInterval = 60 * time.Second
 	}
 	if cfg.Caldav.CheckInterval == 0 {
-		cfg.Caldav.CheckInterval = 10 * time.Minute
+		cfg.Caldav.CheckInterval = 15 * time.Minute
 	}
 
 	return &cfg, nil
@@ -110,7 +110,7 @@ func Default() *Config {
 			CheckInterval: 60 * time.Second,
 		},
 		Caldav: CaldavConfig{
-			CheckInterval: 10 * time.Minute,
+			CheckInterval: 15 * time.Minute,
 		},
 		Plugins: PluginsConfig{
 			Telegram: TelegramConfig{Enabled: true},
