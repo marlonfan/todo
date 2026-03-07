@@ -880,7 +880,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         className="modal-content task-modal-shell"
         onClick={e => e.stopPropagation()}
       >
-        <div className="relative flex h-[86vh] flex-col">
+        <div className="task-modal-frame relative flex min-h-0 flex-col">
           <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">

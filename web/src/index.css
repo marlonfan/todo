@@ -4,6 +4,8 @@
 
 html {
   font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -374,19 +376,42 @@ body {
 /* Modal Styles */
 .modal-overlay {
   @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-[2px];
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
 }
 
 .modal-content {
-  @apply mx-4 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-blue-100 bg-white shadow-xl;
+  @apply w-full max-w-lg overflow-y-auto rounded-3xl border border-blue-100 bg-white shadow-xl;
+  max-height: calc(100vh - 1.5rem);
+  overscroll-behavior: contain;
 }
 
 .task-modal-shell {
   @apply max-w-5xl;
 }
 
+.task-modal-frame {
+  height: min(56rem, calc(100vh - 1.5rem));
+  max-height: calc(100vh - 1.5rem);
+}
+
+@supports (height: 100dvh) {
+  .modal-content {
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 0.75rem);
+  }
+
+  .task-modal-frame {
+    height: min(56rem, calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 0.75rem));
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 0.75rem);
+  }
+}
+
 /* Form Styles */
 .form-input {
-  @apply w-full rounded-xl border border-blue-100 bg-slate-50 px-3 py-2 text-sm text-slate-800 transition-all focus:border-blue-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-200;
+  @apply w-full rounded-xl border border-blue-100 bg-slate-50 px-3 py-2 text-slate-800 transition-all focus:border-blue-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-200;
+  font-size: 16px;
 }
 
 .form-label {
@@ -394,7 +419,30 @@ body {
 }
 
 .form-select {
-  @apply w-full rounded-xl border border-blue-100 bg-slate-50 px-3 py-2 text-sm text-slate-800 transition-all focus:border-blue-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-200;
+  @apply w-full rounded-xl border border-blue-100 bg-slate-50 px-3 py-2 text-slate-800 transition-all focus:border-blue-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-200;
+  font-size: 16px;
+}
+
+@media (min-width: 768px) {
+  .form-input,
+  .form-select {
+    font-size: 0.875rem;
+  }
+}
+
+@media (pointer: coarse) {
+  @supports (-webkit-touch-callout: none) {
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+
+    .live-md-toast .vditor-ir pre.vditor-reset,
+    .live-md-toast .vditor-ir .vditor-reset {
+      font-size: 16px !important;
+    }
+  }
 }
 
 .btn-primary {
