@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   ALLOWED_TIME_GRANULARITIES,
   getUserTimezone,
+  logTimeDebug,
   normalizeTimeGranularity,
   setUserTimezone,
 } from '../utils/time';
@@ -307,11 +308,22 @@ function Settings() {
 
   const handleTimezoneChange = async (tz) => {
     const prevTimezone = timezone;
+    logTimeDebug('settings.timezone.change.start', {
+      previous_timezone: prevTimezone,
+      next_timezone: tz,
+    });
     setTimezone(tz);
     setUserTimezone(tz, true, 'settings');
     await persistProfile({ timezone: tz }, () => {
       setTimezone(prevTimezone);
       setUserTimezone(prevTimezone, true, 'settings');
+      logTimeDebug('settings.timezone.change.rollback', {
+        previous_timezone: prevTimezone,
+        attempted_timezone: tz,
+      });
+    });
+    logTimeDebug('settings.timezone.change.done', {
+      next_timezone: tz,
     });
   };
 

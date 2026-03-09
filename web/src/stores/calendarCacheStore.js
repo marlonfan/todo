@@ -303,6 +303,65 @@ const useCalendarCacheStore = create(
         state.metadata.loadedRanges = [];
       });
     },
+
+    /**
+     * Patch recurring instance status in-memory so cross-view state stays in sync
+     * before background sync completes.
+     * @param {Object} params
+     * @param {number|string} params.taskID
+     * @param {string} params.status
+     * @param {string} params.instanceID
+     * @param {string} params.occurrenceDate - YYYY-MM-DD in user timezone
+     * @returns {number} changed event count
+     */
+    patchTaskOccurrenceStatus: (params = {}) => {
+      const numericTaskID = Number(params?.taskID || 0);
+      const nextStatus = String(params?.status || '').trim();
+      const normalizedInstanceID = String(params?.instanceID || '').trim();
+      const normalizedDate = String(params?.occurrenceDate || '').trim();
+      if (!numericTaskID || !nextStatus) return 0;
+
+      let changed = 0;
+      set((state) => {
+        const buckets = state.eventsByDateByTimezone || {};
+        Object.keys(buckets).forEach((timezoneName) => {
+          const bucket = buckets[timezoneName];
+          if (!bucket || typeof bucket !== 'object') return;
+          Object.keys(bucket).forEach((dateKey) => {
+            const events = Array.isArray(bucket[dateKey]) ? bucket[dateKey] : [];
+            if (events.length === 0) return;
+            let dateChanged = false;
+            const patched = events.map((event) => {
+              const ext = event?.extendedProps || {};
+              if (Number(ext?.taskId || 0) !== numericTaskID) return event;
+              if (!ext?.isRecurring) return event;
+              if (normalizedInstanceID && String(ext?.instanceId || '').trim() !== normalizedInstanceID) {
+                return event;
+              }
+              if (!normalizedInstanceID && normalizedDate) {
+                const eventDate = dayjs(event?.start || '').tz(timezoneName).format('YYYY-MM-DD');
+                if (eventDate !== normalizedDate) return event;
+              }
+              const currentStatus = String(ext?.status || 'pending').trim() || 'pending';
+              if (currentStatus === nextStatus) return event;
+              dateChanged = true;
+              changed += 1;
+              return {
+                ...event,
+                extendedProps: {
+                  ...ext,
+                  status: nextStatus,
+                },
+              };
+            });
+            if (dateChanged) {
+              bucket[dateKey] = patched;
+            }
+          });
+        });
+      });
+      return changed;
+    },
   }))
 );
 

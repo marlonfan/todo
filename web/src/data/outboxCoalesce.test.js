@@ -124,6 +124,32 @@ test('does not coalesce recurring instance status operation', () => {
   assert.equal(plan.normalized.op_type, 'status');
 });
 
+test('does not coalesce recurring instance update operation', () => {
+  const existing = [
+    {
+      op_id: 'u1',
+      entity_type: 'task',
+      entity_id: 33,
+      op_type: 'update',
+      payload: { title: 'a' },
+      created_at: 1,
+    },
+  ];
+  const incoming = {
+    op_id: 'u2',
+    entity_type: 'task',
+    entity_id: 33,
+    op_type: 'update',
+    payload: { description: 'instance note', occurrence_date: '2026-03-10' },
+    created_at: 2,
+  };
+
+  const plan = getCoalescePlan(existing, incoming);
+  assert.equal(plan.mode, 'enqueue');
+  assert.deepEqual(plan.removeOpIDs, []);
+  assert.equal(plan.normalized.op_type, 'update');
+});
+
 test('delete drops pending create chain for same temp entity', () => {
   const existing = [
     {

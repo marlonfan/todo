@@ -80,9 +80,8 @@ func (h *CalendarHandler) GetEvents(c *gin.Context) {
 
 	// Add recurring instances
 	for _, instance := range instances {
-		if instance.Status == models.TaskStatusCancelled {
-			continue
-		}
+		// Keep cancelled recurring instances in calendar payload as tombstones.
+		// Frontend merge uses them to suppress projected fallback instances.
 		event := instanceToEvent(&instance)
 		events = append(events, event)
 	}

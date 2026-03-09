@@ -14,6 +14,76 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.extend(customParseFormat);
 
+const LOCAL_PARSE_LAYOUTS = [
+  'YYYY-MM-DD HH:mm:ss',
+  'YYYY-MM-DD HH:mm',
+  'YYYY-MM-DD',
+];
+
+function isTimeDebugEnabled() {
+  if (typeof window === 'undefined') return false;
+  if (window.__TODO_TIME_DEBUG__ === true) return true;
+  try {
+    return localStorage.getItem('todo_time_debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function readTimezoneSnapshot() {
+  if (typeof window === 'undefined') {
+    return {
+      default_timezone: DEFAULT_TIMEZONE,
+      stored_timezone: '',
+      stored_source: '',
+      stored_version: '',
+      user_timezone: '',
+    };
+  }
+
+  let userTimezone = '';
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    userTimezone = typeof user?.timezone === 'string' ? user.timezone : '';
+  } catch {
+    userTimezone = '';
+  }
+
+  return {
+    default_timezone: DEFAULT_TIMEZONE,
+    stored_timezone: localStorage.getItem('user_timezone') || '',
+    stored_source: localStorage.getItem('user_timezone_source') || '',
+    stored_version: localStorage.getItem('user_timezone_version') || '',
+    user_timezone: userTimezone,
+  };
+}
+
+export function getTimezoneDebugInfo() {
+  const snapshot = readTimezoneSnapshot();
+  return {
+    ...snapshot,
+    resolved_timezone: getUserTimezone(),
+  };
+}
+
+export function logTimeDebug(scope, payload = {}) {
+  if (!isTimeDebugEnabled()) return;
+  const snapshot = readTimezoneSnapshot();
+  let resolvedTimezone = '';
+  try {
+    resolvedTimezone = getUserTimezone();
+  } catch (error) {
+    resolvedTimezone = '';
+    console.warn('[time-debug] failed to resolve timezone', error);
+  }
+  console.info('[time-debug]', {
+    scope,
+    ...snapshot,
+    resolved_timezone: resolvedTimezone,
+    ...payload,
+  });
+}
+
 function parseStoredUser() {
   if (typeof window === 'undefined') return {};
   try {
@@ -104,14 +174,47 @@ export function toISOString(localDate, timezoneName = null) {
 
   const tz = timezoneName || getUserTimezone();
   const normalized = String(localDate).trim().replace('T', ' ');
-  const parsed = dayjs.tz(
-    normalized,
-    ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'],
-    tz
-  );
+  let parsed = null;
+  let matchedLayout = '';
 
-  if (!parsed.isValid()) return null;
-  return parsed.toISOString();
+  for (const layout of LOCAL_PARSE_LAYOUTS) {
+    try {
+      const candidate = dayjs.tz(normalized, layout, tz);
+      if (candidate.isValid()) {
+        parsed = candidate;
+        matchedLayout = layout;
+        break;
+      }
+    } catch (error) {
+      logTimeDebug('toISOString.parse_error', {
+        input: String(localDate),
+        normalized,
+        timezone: tz,
+        parse_format: layout,
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  if (!parsed || !parsed.isValid()) {
+    logTimeDebug('toISOString.invalid', {
+      input: String(localDate),
+      normalized,
+      timezone: tz,
+      parse_formats: LOCAL_PARSE_LAYOUTS,
+    });
+    return null;
+  }
+
+  const iso = parsed.toISOString();
+  logTimeDebug('toISOString.converted', {
+    input: String(localDate),
+    normalized,
+    timezone: tz,
+    parse_format: matchedLayout,
+    output: iso,
+  });
+  return iso;
 }
 
 export function fromISOString(isoString, format = DATE_TIME_FORMAT, timezoneName = null) {
@@ -123,7 +226,25 @@ export function fromISOString(isoString, format = DATE_TIME_FORMAT, timezoneName
 export function toInputFormat(isoString, timezoneName = null, allDay = false) {
   if (!isoString) return '';
   const tz = timezoneName || getUserTimezone();
-  return dayjs(isoString).tz(tz).format(allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm');
+  const parsed = dayjs(isoString);
+  if (!parsed.isValid()) {
+    logTimeDebug('toInputFormat.invalid', {
+      input: String(isoString),
+      timezone: tz,
+      all_day: !!allDay,
+    });
+    return '';
+  }
+  const localized = parsed.tz(tz);
+  if (!localized.isValid()) {
+    logTimeDebug('toInputFormat.invalid_localized', {
+      input: String(isoString),
+      timezone: tz,
+      all_day: !!allDay,
+    });
+    return '';
+  }
+  return localized.format(allDay ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm');
 }
 
 export function nowInTimezone(timezoneName = null) {

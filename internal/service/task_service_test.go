@@ -80,14 +80,14 @@ func TestRequiresRecurringOccurrenceContext(t *testing.T) {
 	}
 	nonRecurring := &models.Task{}
 
-	if !requiresRecurringOccurrenceContext(recurring, models.TaskStatusCompleted, false) {
-		t.Fatalf("expected recurring completed status without context to require occurrence context")
+	if requiresRecurringOccurrenceContext(recurring, models.TaskStatusCompleted, false) {
+		t.Fatalf("series-level completed should not require occurrence context")
 	}
-	if !requiresRecurringOccurrenceContext(recurring, models.TaskStatusPending, false) {
-		t.Fatalf("expected recurring pending status without context to require occurrence context")
+	if requiresRecurringOccurrenceContext(recurring, models.TaskStatusPending, false) {
+		t.Fatalf("series-level pending should not require occurrence context")
 	}
 	if requiresRecurringOccurrenceContext(recurring, models.TaskStatusCancelled, false) {
-		t.Fatalf("cancelled should still allow series-level updates without occurrence context")
+		t.Fatalf("series-level cancelled should not require occurrence context")
 	}
 	if requiresRecurringOccurrenceContext(recurring, models.TaskStatusCompleted, true) {
 		t.Fatalf("status with occurrence context should not be blocked")

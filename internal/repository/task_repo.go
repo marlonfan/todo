@@ -6,6 +6,7 @@ import (
 	"todo-app/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TaskRepository struct {
@@ -89,6 +90,15 @@ func (r *TaskRepository) Delete(id int64) error {
 		if err := tx.Exec("DELETE FROM task_categories WHERE task_id = ?", id).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("task_id = ?", id).Delete(&models.TaskOccurrenceStatus{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id = ?", id).Delete(&models.TaskOccurrenceOverride{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id = ?", id).Delete(&models.TaskOccurrence{}).Error; err != nil {
+			return err
+		}
 
 		// 2. 删除任务
 		if err := tx.Delete(&models.Task{}, id).Error; err != nil {
@@ -109,6 +119,15 @@ func (r *TaskRepository) DeleteWithDeleteLog(userID, taskID int64, deletedAt tim
 			return err
 		}
 		if err := tx.Exec("DELETE FROM task_categories WHERE task_id = ?", taskID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id = ?", taskID).Delete(&models.TaskOccurrenceStatus{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id = ?", taskID).Delete(&models.TaskOccurrenceOverride{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("task_id = ?", taskID).Delete(&models.TaskOccurrence{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Delete(&models.Task{}, taskID).Error; err != nil {
@@ -188,6 +207,27 @@ func (r *TaskRepository) GetRecurringTasks(userID int64, start, end time.Time) (
 	return tasks, err
 }
 
+func (r *TaskRepository) ListRecurringTasks(userID int64) ([]models.Task, error) {
+	var tasks []models.Task
+	err := r.db.Preload("Categories").
+		Where("user_id = ?", userID).
+		Where("recurrence_rule IS NOT NULL").
+		Order("start_time ASC, due_date ASC, id ASC").
+		Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *TaskRepository) GetTasksByIDsAndUser(userID int64, taskIDs []int64) ([]models.Task, error) {
+	if len(taskIDs) == 0 {
+		return []models.Task{}, nil
+	}
+	var tasks []models.Task
+	err := r.db.Preload("Categories").
+		Where("user_id = ? AND id IN ?", userID, taskIDs).
+		Find(&tasks).Error
+	return tasks, err
+}
+
 func (r *TaskRepository) GetReminderTasks(userID int64) ([]models.Task, error) {
 	var tasks []models.Task
 	err := r.db.
@@ -246,4 +286,164 @@ func (r *TaskRepository) GetOccurrenceStatuses(userID int64, start, end time.Tim
 		Where("user_id = ? AND occurrence_date >= ? AND occurrence_date <= ?", userID, startDate, endDate).
 		Find(&statuses).Error
 	return statuses, err
+}
+
+func (r *TaskRepository) GetOccurrenceOverride(userID, taskID int64, occurrenceDate time.Time) (*models.TaskOccurrenceOverride, error) {
+	var override models.TaskOccurrenceOverride
+	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)
+	err := r.db.
+		Where("user_id = ? AND task_id = ? AND occurrence_date = ?", userID, taskID, dateOnly).
+		First(&override).Error
+	if err != nil {
+		return nil, err
+	}
+	return &override, nil
+}
+
+func (r *TaskRepository) UpsertOccurrenceDescription(userID, taskID int64, occurrenceDate time.Time, description string) error {
+	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)
+	existing, err := r.GetOccurrenceOverride(userID, taskID, dateOnly)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return r.db.Create(&models.TaskOccurrenceOverride{
+			UserID:         userID,
+			TaskID:         taskID,
+			OccurrenceDate: dateOnly,
+			Description:    description,
+		}).Error
+	}
+
+	return r.db.Model(&models.TaskOccurrenceOverride{}).
+		Where("id = ?", existing.ID).
+		Update("description", description).Error
+}
+
+func (r *TaskRepository) DeleteOccurrenceOverride(userID, taskID int64, occurrenceDate time.Time) error {
+	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)
+	return r.db.
+		Where("user_id = ? AND task_id = ? AND occurrence_date = ?", userID, taskID, dateOnly).
+		Delete(&models.TaskOccurrenceOverride{}).Error
+}
+
+func (r *TaskRepository) GetOccurrenceOverrides(userID int64, start, end time.Time) ([]models.TaskOccurrenceOverride, error) {
+	var overrides []models.TaskOccurrenceOverride
+	startDate := start.UTC().Truncate(24 * time.Hour)
+	endDate := end.UTC().Truncate(24 * time.Hour)
+
+	err := r.db.
+		Where("user_id = ? AND occurrence_date >= ? AND occurrence_date <= ?", userID, startDate, endDate).
+		Find(&overrides).Error
+	return overrides, err
+}
+
+func (r *TaskRepository) GetTaskOccurrence(userID, taskID int64, occurrenceDate time.Time) (*models.TaskOccurrence, error) {
+	var occurrence models.TaskOccurrence
+	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)
+	err := r.db.
+		Where("user_id = ? AND task_id = ? AND occurrence_date = ?", userID, taskID, dateOnly).
+		First(&occurrence).Error
+	if err != nil {
+		return nil, err
+	}
+	return &occurrence, nil
+}
+
+func (r *TaskRepository) UpsertTaskOccurrence(occurrence *models.TaskOccurrence) error {
+	if occurrence == nil {
+		return nil
+	}
+	occurrence.OccurrenceDate = occurrence.OccurrenceDate.UTC().Truncate(24 * time.Hour)
+	if occurrence.Status == "" {
+		occurrence.Status = models.TaskStatusPending
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "user_id"},
+			{Name: "task_id"},
+			{Name: "occurrence_date"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"instance_id",
+			"status",
+			"description",
+			"start_time",
+			"end_time",
+			"all_day",
+			"updated_at",
+		}),
+	}).Create(occurrence).Error
+}
+
+func (r *TaskRepository) DeleteTaskOccurrence(userID, taskID int64, occurrenceDate time.Time) error {
+	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)
+	return r.db.
+		Where("user_id = ? AND task_id = ? AND occurrence_date = ?", userID, taskID, dateOnly).
+		Delete(&models.TaskOccurrence{}).Error
+}
+
+func (r *TaskRepository) ListTaskOccurrencesInRange(userID int64, start, end time.Time) ([]models.TaskOccurrence, error) {
+	startDate := start.UTC().Truncate(24 * time.Hour)
+	endDate := end.UTC().Truncate(24 * time.Hour)
+	var rows []models.TaskOccurrence
+	err := r.db.
+		Where("user_id = ? AND occurrence_date >= ? AND occurrence_date <= ?", userID, startDate, endDate).
+		Order("occurrence_date ASC, id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+func (r *TaskRepository) ListTaskOccurrencesForTasksInRange(
+	userID int64,
+	taskIDs []int64,
+	start,
+	end time.Time,
+) ([]models.TaskOccurrence, error) {
+	if len(taskIDs) == 0 {
+		return []models.TaskOccurrence{}, nil
+	}
+	startDate := start.UTC().Truncate(24 * time.Hour)
+	endDate := end.UTC().Truncate(24 * time.Hour)
+	var rows []models.TaskOccurrence
+	err := r.db.
+		Where("user_id = ? AND task_id IN ? AND occurrence_date >= ? AND occurrence_date <= ?", userID, taskIDs, startDate, endDate).
+		Order("occurrence_date ASC, id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+func (r *TaskRepository) ListTaskOccurrencesByStatus(
+	userID int64,
+	statuses []models.TaskStatus,
+	limit,
+	offset int,
+) ([]models.TaskOccurrence, bool, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query := r.db.Where("user_id = ?", userID)
+	if len(statuses) > 0 {
+		query = query.Where("status IN ?", statuses)
+	}
+	var rows []models.TaskOccurrence
+	err := query.
+		Order("occurrence_date DESC, id DESC").
+		Offset(offset).
+		Limit(limit + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	return rows, hasMore, nil
 }

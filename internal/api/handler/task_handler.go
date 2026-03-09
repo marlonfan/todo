@@ -60,6 +60,36 @@ func parseTaskActivityMeta(c *gin.Context) *service.TaskActivityMeta {
 	return meta
 }
 
+func parseOccurrenceStatuses(raw string) ([]models.TaskStatus, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return []models.TaskStatus{
+			models.TaskStatusCompleted,
+			models.TaskStatusCancelled,
+		}, nil
+	}
+	parts := strings.Split(trimmed, ",")
+	seen := make(map[models.TaskStatus]struct{})
+	statuses := make([]models.TaskStatus, 0, len(parts))
+	for _, part := range parts {
+		value := models.TaskStatus(strings.TrimSpace(part))
+		switch value {
+		case models.TaskStatusPending, models.TaskStatusCompleted, models.TaskStatusCancelled:
+		default:
+			return nil, errors.New("invalid status filter")
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		statuses = append(statuses, value)
+	}
+	if len(statuses) == 0 {
+		return nil, errors.New("status filter cannot be empty")
+	}
+	return statuses, nil
+}
+
 func respondTaskError(c *gin.Context, err error) {
 	var conflict *service.RevisionConflictError
 	if errors.As(err, &conflict) {
@@ -67,6 +97,10 @@ func respondTaskError(c *gin.Context, err error) {
 			"error":  "revision conflict",
 			"latest": conflict.Latest,
 		})
+		return
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "task not found") {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
 		return
 	}
 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -149,6 +183,72 @@ func (h *TaskHandler) List(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, tasks)
+}
+
+func (h *TaskHandler) ListOccurrences(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	statuses, err := parseOccurrenceStatuses(c.Query("status"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		if parsed > 500 {
+			parsed = 500
+		}
+		limit = parsed
+	}
+
+	cursor := 0
+	if raw := strings.TrimSpace(c.Query("cursor")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor"})
+			return
+		}
+		cursor = parsed
+	}
+
+	items, nextCursor, hasMore, err := h.taskService.ListOccurrences(userID, statuses, limit, cursor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items":       items,
+		"next_cursor": nextCursor,
+		"has_more":    hasMore,
+	})
+}
+
+func (h *TaskHandler) ListNextOccurrences(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	from := time.Now().UTC()
+	if raw := strings.TrimSpace(c.Query("from")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date format"})
+			return
+		}
+		from = parsed.UTC()
+	}
+
+	items, err := h.taskService.ListNextPendingOccurrences(userID, from)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, items)
 }
 
 func (h *TaskHandler) ListActivities(c *gin.Context) {

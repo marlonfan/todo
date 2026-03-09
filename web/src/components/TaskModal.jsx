@@ -3,7 +3,13 @@ import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
-import { getUserTimeGranularity, toInputFormat, toISOString, getUserTimezone } from '../utils/time';
+import {
+  getUserTimeGranularity,
+  getUserTimezone,
+  logTimeDebug,
+  toInputFormat,
+  toISOString,
+} from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { IconClock, IconFlag, IconHistory, IconRepeat, IconRepeatOff, IconTag } from './icons/TaskIcons';
@@ -14,6 +20,7 @@ import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, upd
 
 const DEFAULT_TASK_START_TIME = '09:00';
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
+const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
 
 function getStoredUser() {
   try {
@@ -62,26 +69,76 @@ function getDefaultStartParts() {
 function parseInputInTimezone(value, timezoneName) {
   const raw = String(value || '').trim();
   if (!raw) return null;
-  const parsed = dayjs.tz(
-    raw.replace('T', ' '),
-    ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'],
-    timezoneName
-  );
-  return parsed.isValid() ? parsed : null;
+  if (/^invalid date$/i.test(raw)) return null;
+  const normalized = raw.replace('T', ' ');
+  const formats = ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'];
+  for (const format of formats) {
+    try {
+      const parsed = dayjs.tz(normalized, format, timezoneName);
+      if (parsed.isValid()) return parsed;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function parseAbsoluteInTimezone(value, timezoneName) {
   const raw = String(value || '').trim();
   if (!raw) return null;
+  if (/^invalid date$/i.test(raw)) return null;
   const direct = dayjs(raw);
-  if (direct.isValid()) return direct.tz(timezoneName);
+  if (direct.isValid()) {
+    try {
+      return direct.tz(timezoneName);
+    } catch {
+      return null;
+    }
+  }
   return parseInputInTimezone(raw, timezoneName);
+}
+
+function alignStartInputToWeekday(startInput, weekdayKeys, timezoneName) {
+  const start = parseInputInTimezone(startInput, timezoneName);
+  if (!start) return startInput || '';
+  const dayMap = {
+    SU: 0,
+    MO: 1,
+    TU: 2,
+    WE: 3,
+    TH: 4,
+    FR: 5,
+    SA: 6,
+  };
+  const targets = [...new Set(
+    (Array.isArray(weekdayKeys) ? weekdayKeys : [])
+      .map((day) => dayMap[String(day || '').toUpperCase()])
+      .filter((day) => Number.isInteger(day))
+  )];
+  if (targets.length === 0) return startInput || '';
+  const currentDay = start.day();
+  if (targets.includes(currentDay)) return start.format('YYYY-MM-DDTHH:mm');
+
+  let bestDiff = 8;
+  targets.forEach((targetDay) => {
+    let diff = (targetDay - currentDay + 7) % 7;
+    if (diff === 0) diff = 7;
+    if (diff < bestDiff) bestDiff = diff;
+  });
+  if (!Number.isFinite(bestDiff) || bestDiff <= 0 || bestDiff > 7) return start.format('YYYY-MM-DDTHH:mm');
+  return start.add(bestDiff, 'day').format('YYYY-MM-DDTHH:mm');
 }
 
 function formatInstanceDateToken(token) {
   const raw = String(token || '').trim();
   if (!/^\d{8}$/.test(raw)) return '';
   return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+}
+
+function resolveOccurrenceDate(value, timezoneName) {
+  const parsed = parseAbsoluteInTimezone(value, timezoneName);
+  if (!parsed || !parsed.isValid()) return '';
+  return parsed.format('YYYY-MM-DD');
 }
 
 function resolveSeriesDeleteOccurrenceStart(task, timezoneName) {
@@ -128,6 +185,16 @@ function shiftEndByDuration(originalStartInput, originalEndInput, nextStartInput
   const durationMinutes = originalEnd.diff(originalStart, 'minute');
   if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) return null;
   return nextStart.add(durationMinutes, 'minute').format('YYYY-MM-DDTHH:mm');
+}
+
+function coerceEndNotBeforeStart(startInput, endInput, timezoneName) {
+  const start = parseInputInTimezone(startInput, timezoneName);
+  const end = parseInputInTimezone(endInput, timezoneName);
+  if (!start || !end) return endInput || '';
+  if (end.isBefore(start)) {
+    return start.format('YYYY-MM-DDTHH:mm');
+  }
+  return endInput || '';
 }
 
 function parseLocalInput(value) {
@@ -356,10 +423,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     if (preset === 'clear') {
       setValue('start_time', '');
       setValue('end_time', '');
+      setTimeTouched(true);
       return;
     }
 
-    const now = dayjs().tz(getUserTimezone());
+    const timezoneName = getUserTimezone();
+    const now = dayjs().tz(timezoneName);
     const { hour: defaultHour, minute: defaultMinute } = getDefaultStartParts();
 
     let target = now;
@@ -376,10 +445,20 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     if (isAllDay) {
       setValue('start_time', target.format('YYYY-MM-DD'));
       setValue('end_time', '');
+      setTimeTouched(true);
       return;
     }
 
-    setValue('start_time', target.hour(hour).minute(minute).second(0).format('YYYY-MM-DDTHH:mm'));
+    const nextStartInput = target.hour(hour).minute(minute).second(0).format('YYYY-MM-DDTHH:mm');
+    const currentStartInput = getValues('start_time') || '';
+    const currentEndInput = getValues('end_time') || '';
+    const shiftedEnd = shiftEndByDuration(currentStartInput, currentEndInput, nextStartInput, timezoneName);
+    const nextEndInput = shiftedEnd || coerceEndNotBeforeStart(nextStartInput, currentEndInput, timezoneName);
+
+    setValue('start_time', nextStartInput);
+    if (nextEndInput !== currentEndInput) {
+      setValue('end_time', nextEndInput);
+    }
     setTimeTouched(true);
   };
 
@@ -397,18 +476,65 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setValue('status', task.status || 'pending');
       
       // 处理时间字段（支持 snake_case 和 camelCase）
-      const startTime = task.start_time || task.startTime;
-      const endTime = task.end_time || task.endTime;
+      const baseStartTime = task.start_time || task.startTime;
+      const baseEndTime = task.end_time || task.endTime;
       const allDay = task.all_day || task.allDay;
       const recurrenceRule = parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
-      const startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
-      
-      if (startTime) {
-        setValue('start_time', startInput);
+      const hasOccurrenceContext = !!(
+        recurrenceRule
+        && (
+          String(task?.instanceId || task?.instance_id || '').trim()
+          || String(task?.occurrenceDate || task?.occurrence_date || '').trim()
+          || String(task?.occurrenceStart || task?.occurrence_start || '').trim()
+        )
+      );
+      let startTime = baseStartTime;
+      let endTime = baseEndTime;
+      if (hasOccurrenceContext) {
+        const occurrenceStart = task?.occurrenceStart || task?.occurrence_start || '';
+        const occurrenceEnd = task?.occurrenceEnd || task?.occurrence_end || '';
+        if (occurrenceStart) {
+          startTime = occurrenceStart;
+          if (occurrenceEnd) {
+            endTime = occurrenceEnd;
+          } else {
+            const timezoneName = getUserTimezone();
+            const baseStartParsed = parseAbsoluteInTimezone(baseStartTime, timezoneName);
+            const baseEndParsed = parseAbsoluteInTimezone(baseEndTime, timezoneName);
+            const occurrenceStartParsed = parseAbsoluteInTimezone(occurrenceStart, timezoneName);
+            if (baseStartParsed && baseEndParsed && occurrenceStartParsed) {
+              const durationMinutes = baseEndParsed.diff(baseStartParsed, 'minute');
+              if (Number.isFinite(durationMinutes) && durationMinutes > 0) {
+                endTime = occurrenceStartParsed.add(durationMinutes, 'minute').toISOString();
+              }
+            }
+          }
+        }
       }
-      if (endTime) {
-        setValue('end_time', toInputFormat(endTime, null, allDay));
+      let startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
+      let endInput = endTime ? toInputFormat(endTime, null, allDay) : '';
+      const parsedSelection = parseRecurrenceSelection(recurrenceRule);
+      if (
+        !allDay
+        && (parsedSelection.type === 'weekly' || parsedSelection.type === 'biweekly')
+        && startInput
+      ) {
+        const nextStartInput = alignStartInputToWeekday(
+          startInput,
+          parsedSelection.days.length > 0 ? parsedSelection.days : DEFAULT_WORKDAY_KEYS,
+          getUserTimezone()
+        );
+        if (nextStartInput && nextStartInput !== startInput) {
+          const shiftedEnd = shiftEndByDuration(startInput, endInput, nextStartInput, getUserTimezone());
+          startInput = nextStartInput;
+          if (shiftedEnd) {
+            endInput = shiftedEnd;
+          }
+        }
+        endInput = coerceEndNotBeforeStart(startInput, endInput, getUserTimezone());
       }
+      setValue('start_time', startInput || '');
+      setValue('end_time', endInput || '');
       setValue('all_day', allDay || false);
       
       // 处理重复规则
@@ -420,7 +546,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setShowMonthlyDatePicker(false);
       if (recurrenceRule) {
         setShowRecurrence(true);
-        const parsedSelection = parseRecurrenceSelection(recurrenceRule);
         setRecurrenceType(parsedSelection.type);
         setSelectedDays(parsedSelection.days);
         setMonthlyDate(resolveMonthlyDateFromRule(recurrenceRule, startInput));
@@ -476,8 +601,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       return;
     }
 
+    const { hour: defaultHour, minute: defaultMinute } = getDefaultStartParts();
+    const defaultTime = `${String(defaultHour).padStart(2, '0')}:${String(defaultMinute).padStart(2, '0')}`;
     if (startTime && !startTime.includes('T')) {
-      setValue('start_time', `${startTime}T00:00`);
+      setValue('start_time', `${startTime}T${defaultTime}`);
     }
     if (endTime && !endTime.includes('T')) {
       setValue('end_time', `${endTime}T23:59`);
@@ -532,6 +659,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
     try {
       const clientTimezone = getUserTimezone();
+      logTimeDebug('taskModal.submit.start', {
+        task_id: Number(task?.id || 0),
+        is_editing: !!isEditing,
+        timezone: clientTimezone,
+      });
       const rawTitle = (data.title || '').trim();
       const parsedPriority = parsePriorityFromTitle(rawTitle);
       const priorityNormalizedTitle = parsedPriority?.cleanedTitle?.trim() || rawTitle;
@@ -551,6 +683,15 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       }
 
       const existingRecurrenceRule = isEditing ? parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule) : null;
+      const hasOccurrenceContext = !!(
+        isEditing
+        && existingRecurrenceRule
+        && (
+          String(task?.instanceId || task?.instance_id || '').trim()
+          || String(task?.occurrenceDate || task?.occurrence_date || '').trim()
+          || String(task?.occurrenceStart || task?.occurrence_start || '').trim()
+        )
+      );
       const existingRecurrenceSelection = parseRecurrenceSelection(existingRecurrenceRule);
       const normalizedExistingDays = (existingRecurrenceSelection.days || [])
         .map((day) => String(day || '').toUpperCase())
@@ -576,16 +717,31 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const fallbackEndInput = shouldFallbackScheduleFromTask
         ? toInputFormat(task?.end_time || task?.endTime || '', null, !!data.all_day)
         : '';
+      const resolveInputValue = (value, fallback) => {
+        const raw = typeof value === 'string' ? value : '';
+        if (raw) return raw;
+        if (shouldFallbackScheduleFromTask) return fallback || '';
+        return '';
+      };
 
       // 处理日期时间
       if (data.all_day) {
-        const startDate = splitDatePart(data.start_time || fallbackStartInput);
-        const endDate = splitDatePart(data.end_time || fallbackEndInput);
-        payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`) : null;
-        payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`) : null;
+        const startDate = splitDatePart(resolveInputValue(data.start_time, fallbackStartInput));
+        let endDate = splitDatePart(resolveInputValue(data.end_time, fallbackEndInput));
+        if (startDate && endDate) {
+          const startDay = parseLocalInput(startDate);
+          const endDay = parseLocalInput(endDate);
+          if (startDay && endDay && endDay.isBefore(startDay, 'day')) {
+            endDate = startDate;
+          }
+        }
+        payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`, clientTimezone) : null;
+        payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`, clientTimezone) : null;
+        data.start_time = startDate;
+        data.end_time = endDate;
       } else {
-        let originalStartInput = data.start_time || fallbackStartInput || '';
-        let originalEndInput = data.end_time || fallbackEndInput || '';
+        let originalStartInput = resolveInputValue(data.start_time, fallbackStartInput);
+        let originalEndInput = resolveInputValue(data.end_time, fallbackEndInput);
         if (parsedNaturalTime && !timeTouched) {
           data.start_time = parsedNaturalTime.parsedAtInput;
           const shiftedEndTime = shiftEndByDuration(
@@ -601,10 +757,34 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (!isEditing && !data.start_time) {
           data.start_time = getDefaultStartInputValue(clientTimezone);
         }
-        originalStartInput = data.start_time || originalStartInput || '';
-        originalEndInput = data.end_time || originalEndInput || '';
-        payload.start_time = originalStartInput ? toISOString(originalStartInput) : null;
-        payload.end_time = originalEndInput ? toISOString(originalEndInput) : null;
+        if (typeof data.start_time === 'string' && data.start_time) {
+          originalStartInput = data.start_time;
+        }
+        if (typeof data.end_time === 'string' && data.end_time) {
+          originalEndInput = data.end_time;
+        }
+        if (showRecurrence && (recurrenceType === 'weekly' || recurrenceType === 'biweekly')) {
+          const nextStartInput = alignStartInputToWeekday(
+            originalStartInput,
+            normalizedSelectedDays.length > 0 ? normalizedSelectedDays : workDayKeys,
+            clientTimezone
+          );
+          if (nextStartInput && nextStartInput !== originalStartInput) {
+            const shiftedEndTime = shiftEndByDuration(
+              originalStartInput,
+              originalEndInput,
+              nextStartInput,
+              clientTimezone
+            );
+            originalStartInput = nextStartInput;
+            if (shiftedEndTime) {
+              originalEndInput = shiftedEndTime;
+            }
+          }
+        }
+        originalEndInput = coerceEndNotBeforeStart(originalStartInput, originalEndInput, clientTimezone);
+        payload.start_time = originalStartInput ? toISOString(originalStartInput, clientTimezone) : null;
+        payload.end_time = originalEndInput ? toISOString(originalEndInput, clientTimezone) : null;
         data.start_time = originalStartInput;
         data.end_time = originalEndInput;
       }
@@ -619,6 +799,47 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (!payload.start_time) delete payload.start_time;
         if (!payload.end_time) delete payload.end_time;
       }
+      if (hasOccurrenceContext) {
+        const instanceID = String(task?.instanceId || task?.instance_id || '').trim();
+        if (/^\d+_\d{8}$/.test(instanceID)) {
+          payload.instance_id = instanceID;
+        }
+        const occurrenceBase = task?.occurrenceDate
+          || task?.occurrence_date
+          || task?.occurrenceStart
+          || task?.occurrence_start
+          || '';
+        const occurrenceDate = resolveOccurrenceDate(occurrenceBase, clientTimezone);
+        if (occurrenceDate) {
+          payload.occurrence_date = occurrenceDate;
+        }
+      }
+      const shouldSkipOccurrenceScheduleWrite = !!(
+        isEditing
+        && hasOccurrenceContext
+        && !timeTouched
+        && !recurrenceChanged
+      );
+      if (shouldSkipOccurrenceScheduleWrite) {
+        delete payload.start_time;
+        delete payload.end_time;
+        delete payload.start_time_local;
+        delete payload.end_time_local;
+        delete payload.all_day;
+      }
+
+      logTimeDebug('taskModal.submit.payload_time', {
+        task_id: Number(task?.id || 0),
+        is_editing: !!isEditing,
+        all_day: !!payload.all_day,
+        start_time_local: payload.start_time_local || '',
+        end_time_local: payload.end_time_local || '',
+        start_time: payload.start_time,
+        end_time: payload.end_time,
+        client_timezone: payload.client_timezone,
+        instance_id: payload.instance_id || '',
+        occurrence_date: payload.occurrence_date || '',
+      });
 
       // 处理重复规则
       if (showRecurrence) {
@@ -656,6 +877,13 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         submittedAt: new Date().toISOString(),
         submitSource: 'manual',
       };
+      const saveContext = {
+        is_occurrence_scoped: hasOccurrenceContext,
+        task_id: Number(task?.id || 0),
+        instance_id: String(payload.instance_id || '').trim(),
+        occurrence_date: String(payload.occurrence_date || '').trim(),
+        description: String(payload.description || ''),
+      };
       let savePromise;
       if (isEditing) {
         const localSavedTask = await updateTaskLocal(queryClient, task.id, payload, {
@@ -668,23 +896,24 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           skipOptimistic: true,
           submitMeta,
         });
-        onSaved(localSavedTask || null);
+        onSaved(localSavedTask || null, saveContext);
       } else {
         savePromise = createTaskLocal(queryClient, payload, { submitMeta });
-        onSaved(null);
+        onSaved(null, saveContext);
       }
 
       // Close immediately with optimistic UI; persistence/sync continues in background.
       void Promise.resolve(savePromise)
         .then((savedTask) => {
           if (savedTask?.id) {
-            onSaved(savedTask);
+            onSaved(savedTask, saveContext);
           }
         })
         .catch((err) => {
           console.error('Failed to persist task after optimistic save:', err);
         });
     } catch (err) {
+      console.error('TaskModal onSubmit failed:', err);
       setError(err.response?.data?.error || t('task.saveFailed'));
     }
   };
@@ -716,9 +945,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (validInstanceID) {
           payload.instance_id = instanceID;
         }
+        const timezoneName = getUserTimezone();
         const occurrenceBase = task.occurrenceDate || task.occurrence_date || task.start_time || task.startTime || task.due_date || task.dueDate;
-        if (occurrenceBase) {
-          payload.occurrence_date = dayjs(occurrenceBase).tz(getUserTimezone()).format('YYYY-MM-DD');
+        const occurrenceDate = resolveOccurrenceDate(occurrenceBase, timezoneName);
+        if (occurrenceDate) {
+          payload.occurrence_date = occurrenceDate;
         }
         await updateTaskStatusLocal(queryClient, task.id, payload, {
           submitMeta: {
@@ -784,16 +1015,20 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
       const recurrenceRule = parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
       let statusPayload = nextStatus;
+      let occurrenceDateForSaveContext = '';
       if (recurrenceRule) {
         const instanceID = String(task.instanceId || task.instance_id || '').trim();
         const validInstanceID = /^\d+_\d{8}$/.test(instanceID);
         if (validInstanceID) {
           statusPayload = { status: nextStatus, instance_id: instanceID };
         }
+        const timezoneName = getUserTimezone();
         const occurrenceBase = task.occurrenceDate || task.occurrence_date || task.start_time || task.startTime || task.due_date || task.dueDate;
+        const occurrenceDate = resolveOccurrenceDate(occurrenceBase, timezoneName);
+        occurrenceDateForSaveContext = occurrenceDate || '';
         statusPayload = {
           ...(typeof statusPayload === 'string' ? { status: nextStatus } : statusPayload),
-          occurrence_date: dayjs(occurrenceBase || undefined).tz(getUserTimezone()).format('YYYY-MM-DD'),
+          ...(occurrenceDate ? { occurrence_date: occurrenceDate } : {}),
         };
       }
       const savedTask = await updateTaskStatusLocal(queryClient, task.id, statusPayload, {
@@ -802,7 +1037,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           submitSource: 'manual',
         },
       });
-      onSaved(savedTask || { ...task, status: nextStatus });
+      const scopedPayload = statusPayload && typeof statusPayload === 'object' ? statusPayload : {};
+      const saveContext = (scopedPayload.instance_id || scopedPayload.occurrence_date)
+        ? {
+            is_occurrence_scoped: true,
+            task_id: Number(task.id || 0),
+            instance_id: String(scopedPayload.instance_id || '').trim(),
+            occurrence_date: String(scopedPayload.occurrence_date || occurrenceDateForSaveContext || '').trim(),
+            description: String(task.description || ''),
+          }
+        : null;
+      onSaved(savedTask || { ...task, status: nextStatus }, saveContext);
       requestClose();
     } catch (err) {
       setError(err.response?.data?.error || t('task.saveFailed'));
@@ -826,7 +1071,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     { key: 'SA', label: t('calendar.weekday.sa') },
     { key: 'SU', label: t('calendar.weekday.su') },
   ];
-  const workDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR'];
+  const workDayKeys = DEFAULT_WORKDAY_KEYS;
   const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
   useEffect(() => {
@@ -1014,6 +1259,23 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
                   {basicPanel === 'time' && (
                     <div className="absolute left-0 top-10 z-20 w-[min(30rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                      <div className="mb-3 flex items-center justify-between">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.startTime')}</div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setValue('all_day', !isAllDay, { shouldDirty: true });
+                            setTimeTouched(true);
+                          }}
+                          className={`rounded-full border px-2.5 py-1 text-xs ${
+                            isAllDay
+                              ? 'border-blue-300 bg-blue-50 text-blue-700'
+                              : 'border-slate-200 bg-white text-slate-500'
+                          }`}
+                        >
+                          {t('task.allDay')}
+                        </button>
+                      </div>
                       <div className="mb-3 flex flex-wrap gap-2">
                         <button type="button" onClick={() => applyQuickDatePreset('today')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
                           {t('task.quickToday')}
@@ -1038,7 +1300,19 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             <input
                               type="date"
                               value={splitDatePart(startInputValue)}
-                              onChange={(e) => setValue('start_time', e.target.value)}
+                              onChange={(e) => {
+                                const nextStart = e.target.value || '';
+                                const currentEnd = splitDatePart(getValues('end_time') || '');
+                                setValue('start_time', nextStart);
+                                if (nextStart && currentEnd) {
+                                  const startDay = parseLocalInput(nextStart);
+                                  const endDay = parseLocalInput(currentEnd);
+                                  if (startDay && endDay && endDay.isBefore(startDay, 'day')) {
+                                    setValue('end_time', nextStart);
+                                  }
+                                }
+                                setTimeTouched(true);
+                              }}
                               className="form-input"
                             />
                           </div>
@@ -1047,7 +1321,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             <input
                               type="date"
                               value={splitDatePart(endInputValue)}
-                              onChange={(e) => setValue('end_time', e.target.value)}
+                              onChange={(e) => {
+                                setValue('end_time', e.target.value);
+                                setTimeTouched(true);
+                              }}
                               className="form-input"
                             />
                             <p className="mt-1 text-xs text-slate-500">{t('task.endTimeHint')}</p>
@@ -1062,7 +1339,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               step={timeInputStepSeconds}
                               value={startInputValue || ''}
                               onChange={(e) => {
-                                setValue('start_time', e.target.value || '');
+                                const nextStart = e.target.value || '';
+                                const timezoneName = getUserTimezone();
+                                const currentEnd = getValues('end_time') || '';
+                                setValue('start_time', nextStart);
+                                if (nextStart && currentEnd) {
+                                  const alignedEnd = coerceEndNotBeforeStart(nextStart, currentEnd, timezoneName);
+                                  if (alignedEnd !== currentEnd) {
+                                    setValue('end_time', alignedEnd);
+                                  }
+                                }
                                 setTimeTouched(true);
                               }}
                               className="form-input"

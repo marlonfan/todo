@@ -9,9 +9,14 @@ function baseStatusPayload(payload) {
   return !body.instance_id && !body.occurrence_date;
 }
 
+function baseUpdatePayload(payload) {
+  const body = isPlainObject(payload) ? payload : {};
+  return !body.instance_id && !body.occurrence_date;
+}
+
 function isCoalescibleOp(op) {
   if (!op || !op.op_type) return false;
-  if (op.op_type === 'update' || op.op_type === 'schedule') return true;
+  if (op.op_type === 'update' || op.op_type === 'schedule') return baseUpdatePayload(op.payload);
   if (op.op_type === 'status') return baseStatusPayload(op.payload);
   return false;
 }

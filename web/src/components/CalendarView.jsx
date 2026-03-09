@@ -154,6 +154,17 @@ function expandCalendarPool(existingPool, newRangeStartISO, newRangeEndISO) {
   };
 }
 
+function buildOccurrenceInstanceKey(taskID, instanceID, occurrenceDate) {
+  const normalizedInstanceID = String(instanceID || '').trim();
+  if (/^\d+_\d{8}$/.test(normalizedInstanceID)) {
+    return normalizedInstanceID;
+  }
+  const normalizedDate = String(occurrenceDate || '').trim();
+  const normalizedTaskID = Number(taskID || 0);
+  if (!normalizedDate || !normalizedTaskID) return '';
+  return `${normalizedTaskID}_${normalizedDate.replace(/-/g, '')}`;
+}
+
 function CalendarView() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -182,6 +193,7 @@ function CalendarView() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedRange, setSelectedRange] = useState(null);
+  const [instanceDescriptionOverrides, setInstanceDescriptionOverrides] = useState({});
   const [moreEventsOpen, setMoreEventsOpen] = useState(false);
   const [moreEventsDateLabel, setMoreEventsDateLabel] = useState('');
   const [moreEvents, setMoreEvents] = useState([]);
@@ -396,6 +408,30 @@ function CalendarView() {
     if (!isoString) return null;
     return dayjs(isoString).utc().toISOString();
   }, []);
+
+  const resolveEventTaskDescription = useCallback((eventLike, cachedTask = null) => {
+    const ext = eventLike?.extendedProps || {};
+    const isRecurring = !!ext?.isRecurring;
+    const taskID = Number(ext?.taskId || cachedTask?.id || 0);
+    const occurrenceDate = eventLike?.start
+      ? dayjs(eventLike.start).tz(timezone).format('YYYY-MM-DD')
+      : '';
+    const key = buildOccurrenceInstanceKey(
+      taskID,
+      ext?.instanceId || eventLike?.id,
+      occurrenceDate,
+    );
+    if (key && Object.prototype.hasOwnProperty.call(instanceDescriptionOverrides, key)) {
+      return String(instanceDescriptionOverrides[key] ?? '');
+    }
+    if (typeof ext?.description === 'string') {
+      return ext.description;
+    }
+    if (isRecurring) {
+      return '';
+    }
+    return String(cachedTask?.description || '');
+  }, [instanceDescriptionOverrides, timezone]);
 
   // ==================== 新架构：日历数据获取 ====================
 
@@ -948,12 +984,15 @@ function CalendarView() {
       return;
     }
     const taskId = info.event.extendedProps.taskId;
-    const instanceId = info.event.id;
+    const instanceId = info.event.extendedProps.instanceId || info.event.id;
     const occurrenceDate = info?.event?.start
       ? dayjs(info.event.start).tz(timezone).format('YYYY-MM-DD')
       : '';
     const occurrenceStart = info?.event?.start
       ? dayjs(info.event.start).toISOString()
+      : '';
+    const occurrenceEnd = info?.event?.end
+      ? dayjs(info.event.end).toISOString()
       : '';
     const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
     const cachedTask = Array.isArray(cachedTasks)
@@ -964,10 +1003,12 @@ function CalendarView() {
       setSelectedTask({
         ...cachedTask,
         id: taskId,
+        description: resolveEventTaskDescription(info.event, cachedTask),
         status: info?.event?.extendedProps?.status || cachedTask.status,
         instanceId,
         occurrenceDate,
         occurrenceStart,
+        occurrenceEnd,
       });
       setSelectedRange(null);
       setModalOpen(true);
@@ -986,12 +1027,15 @@ function CalendarView() {
     }
     const taskId = Number(eventLike?.extendedProps?.taskId || 0);
     if (!taskId) return;
-    const instanceId = eventLike?.id;
+    const instanceId = eventLike?.extendedProps?.instanceId || eventLike?.id;
     const occurrenceDate = eventLike?.start
       ? dayjs(eventLike.start).tz(timezone).format('YYYY-MM-DD')
       : '';
     const occurrenceStart = eventLike?.start
       ? dayjs(eventLike.start).toISOString()
+      : '';
+    const occurrenceEnd = eventLike?.end
+      ? dayjs(eventLike.end).toISOString()
       : '';
     const cachedTasks = queryClient.getQueryData(queryKeys.tasks.all);
     const cachedTask = Array.isArray(cachedTasks)
@@ -1002,10 +1046,12 @@ function CalendarView() {
       setSelectedTask({
         ...cachedTask,
         id: taskId,
+        description: resolveEventTaskDescription(eventLike, cachedTask),
         status: eventLike?.extendedProps?.status || cachedTask.status,
         instanceId,
         occurrenceDate,
         occurrenceStart,
+        occurrenceEnd,
       });
       setSelectedRange(null);
       setModalOpen(true);
@@ -1015,7 +1061,7 @@ function CalendarView() {
     if (!cachedTask) {
       alert(t('calendar.loadTaskFailed'));
     }
-  }, [openReadonlyEventModal, queryClient, t, timezone]);
+  }, [openReadonlyEventModal, queryClient, resolveEventTaskDescription, t, timezone]);
 
   const handleMoreLinkClick = useCallback((info) => {
     const allSegs = Array.isArray(info?.allSegs) ? info.allSegs : [];
@@ -1163,21 +1209,47 @@ function CalendarView() {
     setSelectedRange(null);
   };
 
-  const handleTaskSaved = (savedTask) => {
+  const handleTaskSaved = (savedTask, saveContext = null) => {
     handleModalClose();
-    if (savedTask?.id) {
+    const hasOccurrenceScope = !!(
+      saveContext?.is_occurrence_scoped
+      || String(saveContext?.instance_id || '').trim()
+      || String(saveContext?.occurrence_date || '').trim()
+    );
+    if (hasOccurrenceScope) {
+      const fallbackTaskID = Number(saveContext?.task_id || savedTask?.id || selectedTask?.id || 0);
+      const fallbackOccurrenceDate = String(
+        saveContext?.occurrence_date
+        || selectedTask?.occurrenceDate
+        || selectedTask?.occurrence_date
+        || ''
+      ).trim();
+      const key = buildOccurrenceInstanceKey(
+        fallbackTaskID,
+        saveContext?.instance_id || selectedTask?.instanceId || selectedTask?.instance_id || '',
+        fallbackOccurrenceDate,
+      );
+      if (key) {
+        setInstanceDescriptionOverrides((prev) => ({
+          ...prev,
+          [key]: String(saveContext?.description || ''),
+        }));
+      }
+    } else if (savedTask?.id) {
       queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
         const base = Array.isArray(prev) ? prev : [];
-        const exists = base.some((task) => task.id === savedTask.id);
+        const exists = base.some((task) => Number(task?.id) === Number(savedTask.id));
         if (exists) {
-          return base.map((task) => (task.id === savedTask.id ? savedTask : task));
+          return base.map((task) => (Number(task?.id) === Number(savedTask.id) ? savedTask : task));
         }
         return [savedTask, ...base];
       });
     }
-    window.setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: ['calendar'] });
-    }, 250);
+    if (!hasOccurrenceScope) {
+      window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['calendar'] });
+      }, 250);
+    }
   };
 
   const renderEventContent = (arg) => {

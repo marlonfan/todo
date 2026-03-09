@@ -10,7 +10,13 @@ const MONTH_NATIVE_WEEKS_AFTER = 36;
 const MONTH_HEADER_HEIGHT = 36;
 const TIMEGRID_HEADER_HEIGHT = 60;
 const TIMEGRID_BODY_GAP = 8;
-const TIMEGRID_BODY_TOP = TIMEGRID_HEADER_HEIGHT + TIMEGRID_BODY_GAP;
+const ALL_DAY_VISIBLE_ROWS_DESKTOP = 4;
+const ALL_DAY_VISIBLE_ROWS_MOBILE = 3;
+const ALL_DAY_EVENT_HEIGHT_DESKTOP = 16;
+const ALL_DAY_EVENT_HEIGHT_MOBILE = 15;
+const ALL_DAY_EVENT_GAP = 2;
+const ALL_DAY_AREA_PADDING_TOP = 4;
+const ALL_DAY_AREA_PADDING_BOTTOM = 4;
 const TIMEGRID_BODY_HEIGHT = 24 * HOUR_HEIGHT;
 const TIME_AXIS_WIDTH = 46;
 const TIMELINE_BOTTOM_SPACER_DESKTOP = 24;
@@ -166,8 +172,17 @@ export default function InfiniteCalendarCanvas({
   const snapUnitSteps = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const isMonthView = view === 'dayGridMonth';
   const isMobileViewport = (viewportSize.width || 0) <= 768;
+  const allDayVisibleRows = isMobileViewport ? ALL_DAY_VISIBLE_ROWS_MOBILE : ALL_DAY_VISIBLE_ROWS_DESKTOP;
+  const allDayEventHeight = isMobileViewport ? ALL_DAY_EVENT_HEIGHT_MOBILE : ALL_DAY_EVENT_HEIGHT_DESKTOP;
+  const allDayAreaHeight = ALL_DAY_AREA_PADDING_TOP
+    + ALL_DAY_AREA_PADDING_BOTTOM
+    + (allDayVisibleRows * allDayEventHeight)
+    + (Math.max(0, allDayVisibleRows - 1) * ALL_DAY_EVENT_GAP);
+  const timeGridBodyTop = TIMEGRID_HEADER_HEIGHT + allDayAreaHeight + TIMEGRID_BODY_GAP;
+  const timeGridTopHeight = TIMEGRID_HEADER_HEIGHT + allDayAreaHeight;
+  const allDayAreaTop = TIMEGRID_HEADER_HEIGHT;
   const timelineBottomSpacer = isMobileViewport ? TIMELINE_BOTTOM_SPACER_MOBILE : TIMELINE_BOTTOM_SPACER_DESKTOP;
-  const timelineHeight = TIMEGRID_BODY_TOP + TIMEGRID_BODY_HEIGHT;
+  const timelineHeight = timeGridBodyTop + TIMEGRID_BODY_HEIGHT;
   const timelineScrollableHeight = timelineHeight + timelineBottomSpacer;
   const snapMinutes = Math.max(5, Number.parseInt(timeGranularity, 10) || 30);
   const todayDateKey = useMemo(
@@ -810,7 +825,8 @@ export default function InfiniteCalendarCanvas({
     if (!scroller) return;
     const nowLocal = dayjs().tz(timezone);
     const targetMinute = nowLocal.hour() * 60 + nowLocal.minute();
-    const targetTop = Math.max(0, TIMEGRID_BODY_TOP + (targetMinute / 60) * HOUR_HEIGHT - (HOUR_HEIGHT * 2));
+    // Keep "now" below the sticky header/all-day area by scrolling in body coordinates.
+    const targetTop = Math.max(0, ((targetMinute / 60) * HOUR_HEIGHT) - (HOUR_HEIGHT * 2));
     scroller.scrollTop = targetTop;
   }, [isMonthView, timezone, todayJumpToken]);
 
@@ -819,8 +835,9 @@ export default function InfiniteCalendarCanvas({
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const localX = clientX - rect.left;
+    const viewY = clientY - rect.top;
     const scrollTop = isMonthView ? 0 : (timeGridScrollRef.current?.scrollTop || 0);
-    const localY = clientY - rect.top + scrollTop;
+    const localY = viewY + scrollTop;
     if (isMonthView) {
       const dayInWeek = Math.max(0, Math.min(6, Math.floor(localX / monthDayCellWidth)));
       const weekIndex = Math.floor((localY / MONTH_WEEK_HEIGHT) + cameraSteps);
@@ -828,15 +845,25 @@ export default function InfiniteCalendarCanvas({
       onCreateRange?.({ allDay: true, start: day.toISOString(), end: day.endOf('day').toISOString() });
       return;
     }
+    if (localX < TIME_AXIS_WIDTH) return;
+    // Header/all-day area is sticky and does not scroll with time-grid body.
+    if (viewY >= allDayAreaTop && viewY < timeGridBodyTop) {
+      const dayFloat = (localX - TIME_AXIS_WIDTH) / dayWidth + cameraSteps;
+      const dayIndex = Math.floor(dayFloat);
+      const day = reference.add(dayIndex, 'day').startOf('day');
+      onCreateRange?.({ allDay: true, start: day.toISOString(), end: day.endOf('day').toISOString() });
+      return;
+    }
+    if (viewY < timeGridBodyTop) return;
     const dayFloat = (localX - TIME_AXIS_WIDTH) / dayWidth + cameraSteps;
     const dayIndex = Math.floor(dayFloat);
     const date = reference.add(dayIndex, 'day').startOf('day');
-    const minuteRaw = Math.max(0, Math.min(23 * 60 + 59, Math.round(((localY - TIMEGRID_BODY_TOP) / HOUR_HEIGHT) * 60)));
+    const minuteRaw = Math.max(0, Math.min(23 * 60 + 59, Math.round(((localY - timeGridBodyTop) / HOUR_HEIGHT) * 60)));
     const minute = Math.floor(minuteRaw / snapMinutes) * snapMinutes;
     const start = date.add(minute, 'minute');
     const end = start.add(snapMinutes, 'minute');
     onCreateRange?.({ allDay: false, start: start.toISOString(), end: end.toISOString() });
-  }, [cameraSteps, dayWidth, isMonthView, monthDayCellWidth, onCreateRange, reference, snapMinutes]);
+  }, [allDayAreaTop, cameraSteps, dayWidth, isMonthView, monthDayCellWidth, onCreateRange, reference, snapMinutes, timeGridBodyTop]);
 
   const computeDragRange = useCallback((drag, clientX, clientY) => {
     if (!drag?.dragEvent) return null;
@@ -1219,14 +1246,14 @@ export default function InfiniteCalendarCanvas({
         <div
           key={`day-${i}`}
           className="pointer-events-none absolute bottom-0 border-l border-blue-100"
-          style={{ left: x, width: dayWidth, top: TIMEGRID_BODY_TOP }}
+          style={{ left: x, width: dayWidth, top: timeGridBodyTop }}
         />
       );
     }
 
     const hourLines = [];
     for (let h = 1; h <= 24; h += 1) {
-      const y = TIMEGRID_BODY_TOP + h * HOUR_HEIGHT;
+      const y = timeGridBodyTop + h * HOUR_HEIGHT;
       hourLines.push(
         <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-blue-100" style={{ top: y }} />
       );
@@ -1234,7 +1261,7 @@ export default function InfiniteCalendarCanvas({
 
     const timeAxis = [];
     for (let h = 0; h < 24; h += 1) {
-      const y = TIMEGRID_BODY_TOP + h * HOUR_HEIGHT;
+      const y = timeGridBodyTop + h * HOUR_HEIGHT;
       timeAxis.push(
         <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-500" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
           {String(h).padStart(2, '0')}:00
@@ -1248,7 +1275,7 @@ export default function InfiniteCalendarCanvas({
     const showNowLine = (nowLocal.isAfter(displayStart) || nowLocal.isSame(displayStart))
       && nowLocal.isBefore(displayEndExclusive);
     const nowMinuteOfDay = nowLocal.hour() * 60 + nowLocal.minute() + (nowLocal.second() / 60);
-    const nowLineY = TIMEGRID_BODY_TOP + (nowMinuteOfDay / 60) * HOUR_HEIGHT;
+    const nowLineY = timeGridBodyTop + (nowMinuteOfDay / 60) * HOUR_HEIGHT;
     const nowDayIndex = nowLocal.startOf('day').diff(reference, 'day');
     const nowDotX = TIME_AXIS_WIDTH + (nowDayIndex - cameraSteps) * dayWidth;
     const currentTimeLabel = nowLocal.format('HH:mm');
@@ -1311,20 +1338,19 @@ export default function InfiniteCalendarCanvas({
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return [];
       const allDay = !!event?.allDay;
+      if (allDay) return [];
       const dayIndex = start.startOf('day').diff(reference, 'day');
       const columnBaseLeft = TIME_AXIS_WIDTH + (dayIndex - cameraSteps) * dayWidth + 2;
       const slotWidth = Math.max(20, dayWidth - 6);
-      const layout = allDay ? { col: 0, cols: 1 } : (layoutByEventKey.get(String(eventKey)) || { col: 0, cols: 1 });
+      const layout = layoutByEventKey.get(String(eventKey)) || { col: 0, cols: 1 };
       const cols = Math.max(1, layout.cols || 1);
       const col = Math.max(0, Math.min(cols - 1, layout.col || 0));
       const colWidth = slotWidth / cols;
       const x = columnBaseLeft + col * colWidth;
       const width = Math.max(18, colWidth - 2);
-      const minuteOfDay = allDay ? 0 : (start.hour() * 60 + start.minute());
-      const y = allDay
-        ? TIMEGRID_BODY_TOP + 2
-        : (TIMEGRID_BODY_TOP + (minuteOfDay / 60) * HOUR_HEIGHT + 1);
-      const durationMin = allDay ? 30 : clampDurationMinutes(event.start, event.end);
+      const minuteOfDay = start.hour() * 60 + start.minute();
+      const y = timeGridBodyTop + (minuteOfDay / 60) * HOUR_HEIGHT + 1;
+      const durationMin = clampDurationMinutes(event.start, event.end);
       const h = Math.max(18, (durationMin / 60) * HOUR_HEIGHT - 2);
       const contentHeight = Math.max(12, h - 4);
       const lineHeight = 14;
@@ -1388,7 +1414,7 @@ export default function InfiniteCalendarCanvas({
                   left: TIME_AXIS_WIDTH,
                   right: 0,
                   top: nowLineY,
-                  zIndex: 112,
+                  zIndex: 56,
                   boxShadow: '0 0 8px rgba(244,63,94,0.45)',
                 }}
               />
@@ -1397,7 +1423,7 @@ export default function InfiniteCalendarCanvas({
                 style={{
                   left: nowDotX - 5,
                   top: nowLineY - 5,
-                  zIndex: 113,
+                  zIndex: 57,
                   boxShadow: '0 0 0 3px rgba(244,63,94,0.2)',
                 }}
               />
@@ -1442,7 +1468,7 @@ export default function InfiniteCalendarCanvas({
         {showNowLine && (
           <div
             className="pointer-events-none absolute left-0"
-            style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 114 }}
+            style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 58 }}
           >
             <span className="inline-flex h-5 items-center rounded-r-full bg-rose-500 px-2 text-[10px] font-semibold text-white shadow-sm">
               {currentTimeLabel}
@@ -1456,16 +1482,32 @@ export default function InfiniteCalendarCanvas({
   const renderTimeGridHeader = () => {
     const startIndex = visibleWindow.startIndex;
     const endIndex = visibleWindow.endIndex;
-    const cells = [];
+    const dayHeaderCells = [];
+    const allDayColumns = [];
+    const allDayEvents = [];
+    const allDayMoreIndicators = [];
+    const allDayByDay = new Map();
+
+    eventEntries.forEach(({ key: eventKey, event }) => {
+      if (!event?.allDay) return;
+      const start = parseEventInTimezone(event?.start, timezone);
+      if (!start.isValid()) return;
+      const dayKey = start.format('YYYY-MM-DD');
+      const list = allDayByDay.get(dayKey) || [];
+      list.push({ eventKey, event, start });
+      allDayByDay.set(dayKey, list);
+    });
+
     for (let i = startIndex; i < endIndex; i += 1) {
       const day = reference.add(i, 'day');
+      const dayKey = day.format('YYYY-MM-DD');
       const x = TIME_AXIS_WIDTH + (i - cameraSteps) * dayWidth;
       const isTodayColumn = day.format('YYYY-MM-DD') === todayDateKey;
-      cells.push(
+      dayHeaderCells.push(
         <div
           key={`hdr-${i}`}
           className="pointer-events-none absolute top-0 flex flex-col items-center justify-center border-b border-l border-blue-100 bg-white px-1 text-center"
-          style={{ left: x, width: dayWidth, height: TIMEGRID_BODY_TOP }}
+          style={{ left: x, width: dayWidth, height: TIMEGRID_HEADER_HEIGHT }}
         >
           <span className={`text-[10px] font-semibold tracking-[0.08em] ${
             isTodayColumn ? 'text-blue-700' : 'text-slate-500'
@@ -1483,20 +1525,123 @@ export default function InfiniteCalendarCanvas({
           </span>
         </div>
       );
+
+      allDayColumns.push(
+        <div
+          key={`all-day-col-${i}`}
+          className="pointer-events-none absolute border-b border-l border-blue-100 bg-white/95"
+          style={{ left: x, width: dayWidth, top: allDayAreaTop, height: allDayAreaHeight }}
+        />
+      );
+
+      const sortedAllDay = [...(allDayByDay.get(dayKey) || [])].sort((a, b) => {
+        const diff = a.start.valueOf() - b.start.valueOf();
+        if (diff !== 0) return diff;
+        return String(a.event?.title || '').localeCompare(String(b.event?.title || ''));
+      });
+      const reserveMoreRow = sortedAllDay.length > allDayVisibleRows;
+      const visibleCount = reserveMoreRow ? Math.max(0, allDayVisibleRows - 1) : allDayVisibleRows;
+      const visibleItems = sortedAllDay.slice(0, visibleCount);
+      const hiddenItems = sortedAllDay.slice(visibleCount);
+
+      visibleItems.forEach((item, rowIndex) => {
+        const readonly = isReadonlyEvent(item.event);
+        const y = allDayAreaTop + ALL_DAY_AREA_PADDING_TOP + (rowIndex * (allDayEventHeight + ALL_DAY_EVENT_GAP));
+        const isDraggingThis = dragVisual && String(dragVisual.eventKey) === String(item.eventKey);
+        const style = {
+          left: x + 2,
+          top: y,
+          width: Math.max(18, dayWidth - 4),
+          height: allDayEventHeight,
+        };
+        const visualStyle = isDraggingThis && dragVisual?.mode === 'event'
+          ? {
+              ...style,
+              transform: `translate3d(${dragVisual.dx}px, 0, 0)`,
+              zIndex: 90,
+            }
+          : style;
+        allDayEvents.push(
+          <div
+            key={item.eventKey}
+            data-event-key={item.eventKey}
+            data-event-id={item.event.id}
+            className={`canvas-event absolute z-30 overflow-hidden rounded px-1 text-[10px] leading-tight ${
+              readonly
+                ? 'bg-slate-500/85 text-white'
+                : 'bg-blue-600/80 text-white'
+            } ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
+            style={{
+              ...visualStyle,
+              touchAction: readonly ? 'pan-y' : 'none',
+              WebkitUserSelect: 'none',
+            }}
+          >
+            <span className="block truncate leading-[1.25]">{item.event.title || 'Untitled'}</span>
+          </div>
+        );
+      });
+
+      if (hiddenItems.length > 0) {
+        const rowIndex = Math.max(0, allDayVisibleRows - 1);
+        const y = allDayAreaTop + ALL_DAY_AREA_PADDING_TOP + (rowIndex * (allDayEventHeight + ALL_DAY_EVENT_GAP));
+        allDayMoreIndicators.push(
+          <button
+            key={`all-day-more-${dayKey}`}
+            type="button"
+            className="canvas-ui-action absolute inline-flex items-center rounded px-1 text-[10px] font-semibold leading-tight text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+            style={{
+              left: x + 2,
+              top: y,
+              width: Math.max(18, dayWidth - 4),
+              height: allDayEventHeight,
+              outline: 'none',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
+            onPointerUp={(event) => {
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.blur();
+              onOpenMore?.({
+                date: day.startOf('day').toISOString(),
+                events: sortedAllDay.map((item) => item.event),
+              });
+            }}
+          >
+            +{hiddenItems.length}
+          </button>
+        );
+      }
     }
     return (
-      <div className="pointer-events-none absolute left-0 right-0 top-0 z-[72] overflow-hidden" style={{ height: TIMEGRID_BODY_TOP }}>
+      <div className="absolute left-0 right-0 top-0 z-[72] overflow-hidden" style={{ height: timeGridTopHeight }}>
         <div className="absolute inset-0 bg-white" />
         <div
-          className="absolute left-0 top-0 bottom-0 z-20 border-b border-blue-100 bg-white"
-          style={{ width: TIME_AXIS_WIDTH }}
-        />
+          className="pointer-events-none absolute left-0 top-0 z-20 border-b border-blue-100 bg-white"
+          style={{ width: TIME_AXIS_WIDTH, height: timeGridTopHeight }}
+        >
+          <div
+            className="absolute left-0 right-0 flex items-center justify-end pr-2 text-[10px] font-semibold tracking-[0.08em] text-blue-500"
+            style={{ top: allDayAreaTop, height: allDayAreaHeight }}
+          >
+            全天
+          </div>
+        </div>
         <div
           ref={timeGridHeaderPanLayerRef}
           className="absolute inset-0 z-10 will-change-transform"
           style={{ transform: 'translate3d(0, 0, 0)' }}
         >
-          {cells}
+          {dayHeaderCells}
+          {allDayColumns}
+          {allDayEvents}
+          {allDayMoreIndicators}
         </div>
       </div>
     );

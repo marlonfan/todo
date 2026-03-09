@@ -7,12 +7,14 @@ import (
 )
 
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&models.User{},
 		&models.Category{},
 		&models.Task{},
 		&models.TaskDeleteLog{},
 		&models.TaskOccurrenceStatus{},
+		&models.TaskOccurrenceOverride{},
+		&models.TaskOccurrence{},
 		&models.TaskActivity{},
 		&models.TaskCategory{},
 		&models.Notification{},
@@ -20,5 +22,9 @@ func Migrate(db *gorm.DB) error {
 		&models.CaldavSource{},
 		&models.CaldavCalendar{},
 		&models.CaldavEventCache{},
-	)
+	); err != nil {
+		return err
+	}
+
+	return backfillTaskOccurrences(db)
 }

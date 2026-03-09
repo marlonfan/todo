@@ -5,6 +5,7 @@ import {
   enqueueOutbox,
   getDueOutbox,
   getMeta,
+  invalidateCalendarRangesByTask,
   readCategories,
   readOutbox,
   readTasks,
@@ -22,6 +23,7 @@ import {
 import { getCoalescePlan } from './outboxCoalesce';
 import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } from './taskMerge';
 import { pushSyncConflict } from '../state/syncConflictCenter';
+import { logTimeDebug } from '../utils/time';
 
 const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
@@ -198,6 +200,30 @@ function getErrorMessage(error) {
   return 'sync failed';
 }
 
+function isOccurrenceScopedPayload(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  return !!(String(body.instance_id || '').trim() || String(body.occurrence_date || '').trim());
+}
+
+async function refreshOccurrenceScopedViews(taskID) {
+  const numericTaskID = Number(taskID || 0);
+  if (numericTaskID > 0) {
+    await invalidateCalendarRangesByTask(numericTaskID);
+  }
+  if (!queryClientRef) return;
+  await Promise.all([
+    queryClientRef.invalidateQueries({ queryKey: ['calendar'] }),
+    queryClientRef.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+    queryClientRef.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+  ]);
+}
+
+function isTaskMissingFailure(status, message) {
+  if (status === 404) return true;
+  const normalized = String(message || '').trim().toLowerCase();
+  return status === 400 && normalized.includes('task not found');
+}
+
 async function executeOutboxOperation(op) {
   emitSyncTrace('outbox_executing', {
     op_id: op.op_id,
@@ -216,6 +242,11 @@ async function executeOutboxOperation(op) {
       return;
     }
     case 'update': {
+      logTimeDebug('syncEngine.outbox.update.request', {
+        entity_id: Number(op.entity_id || 0),
+        if_match_revision: Number(op.if_match_revision || 0) || undefined,
+        payload: op.payload || {},
+      });
       const res = await tasksAPI.update(op.entity_id, op.payload, {
         ifMatchRevision: op.if_match_revision,
         clientSubmittedAt: op.client_submitted_at,
@@ -225,6 +256,9 @@ async function executeOutboxOperation(op) {
         await applyServerTask(res.data);
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+      }
+      if (isOccurrenceScopedPayload(op?.payload)) {
+        await refreshOccurrenceScopedViews(op?.entity_id);
       }
       return;
     }
@@ -239,6 +273,9 @@ async function executeOutboxOperation(op) {
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
       }
+      if (isOccurrenceScopedPayload(op?.payload)) {
+        await refreshOccurrenceScopedViews(op?.entity_id);
+      }
       return;
     }
     case 'schedule': {
@@ -251,6 +288,9 @@ async function executeOutboxOperation(op) {
         await applyServerTask(res.data);
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+      }
+      if (isOccurrenceScopedPayload(op?.payload)) {
+        await refreshOccurrenceScopedViews(op?.entity_id);
       }
       return;
     }
@@ -274,6 +314,14 @@ async function executeOutboxOperation(op) {
 async function handleOutboxFailure(op, error) {
   const status = error?.response?.status;
   const message = getErrorMessage(error);
+  logTimeDebug('syncEngine.outbox.failure', {
+    entity_id: Number(op?.entity_id || 0),
+    op_type: String(op?.op_type || ''),
+    status: Number(status || 0) || undefined,
+    message,
+    if_match_revision: Number(op?.if_match_revision || 0) || undefined,
+    payload: op?.payload || {},
+  });
 
   if (status === 409) {
     await removeOutbox(op.op_id);
@@ -298,6 +346,24 @@ async function handleOutboxFailure(op, error) {
       op_id: op.op_id,
       op_type: op.op_type,
       entity_id: op.entity_id,
+      message,
+    });
+    return;
+  }
+
+  if (isTaskMissingFailure(status, message) && Number(op?.entity_id || 0) > 0) {
+    await removeOutbox(op.op_id);
+    queryClientRef?.setQueryData(queryKeys.tasks.all, (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.filter((task) => Number(task?.id) !== Number(op.entity_id));
+    });
+    await removeTask(op.entity_id);
+    await removeTaskActivitiesByTask(op.entity_id);
+    emitSyncTrace('outbox_task_missing_removed', {
+      op_id: op.op_id,
+      op_type: op.op_type,
+      entity_id: op.entity_id,
+      status,
       message,
     });
     return;

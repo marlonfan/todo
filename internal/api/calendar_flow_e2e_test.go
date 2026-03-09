@@ -221,7 +221,8 @@ func TestTaskActivitiesMergedWithin15Minutes(t *testing.T) {
 	}
 	task := decodeJSON[models.Task](t, createResp)
 
-	firstSubmitAt := "2026-03-06T08:00:00.000Z"
+	baseSubmitAt := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	firstSubmitAt := baseSubmitAt.Format(time.RFC3339Nano)
 	firstUpdateResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
 		"title": "B",
 	}, map[string]string{
@@ -234,7 +235,8 @@ func TestTaskActivitiesMergedWithin15Minutes(t *testing.T) {
 	}
 	updatedOnce := decodeJSON[models.Task](t, firstUpdateResp)
 
-	secondSubmitAt := "2026-03-06T08:10:00.000Z"
+	secondSubmitAtTime := baseSubmitAt.Add(10 * time.Minute)
+	secondSubmitAt := secondSubmitAtTime.Format(time.RFC3339Nano)
 	secondUpdateResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
 		"title": "C",
 	}, map[string]string{
@@ -261,7 +263,7 @@ func TestTaskActivitiesMergedWithin15Minutes(t *testing.T) {
 	if fmt.Sprint(change.From) != "A" || fmt.Sprint(change.To) != "C" {
 		t.Fatalf("expected title change A->C, got %v -> %v", change.From, change.To)
 	}
-	if activities[0].OccurredAt.UTC().Format(time.RFC3339) != "2026-03-06T08:10:00Z" {
+	if activities[0].OccurredAt.UTC().Format(time.RFC3339) != secondSubmitAtTime.Format(time.RFC3339) {
 		t.Fatalf("unexpected occurred_at: %s", activities[0].OccurredAt.UTC().Format(time.RFC3339))
 	}
 }

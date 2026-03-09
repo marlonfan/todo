@@ -89,6 +89,8 @@ const CONFLICT_EXCLUDED_FIELDS = new Set([
   'client_timezone',
   'start_time_local',
   'end_time_local',
+  'instance_id',
+  'occurrence_date',
 ]);
 
 function stableSerialize(value) {

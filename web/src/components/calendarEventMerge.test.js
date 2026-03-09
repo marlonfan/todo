@@ -267,7 +267,7 @@ test('mergeCalendarEvents does not override readonly server event with projected
   assert.equal(merged[0].title, 'server');
 });
 
-test('mergeCalendarEvents suppresses projected recurring fallback when server has recurring instances', () => {
+test('mergeCalendarEvents keeps projected recurring fallback for instances missing from server cache', () => {
   const server = [
     {
       id: '22_20260302',
@@ -292,6 +292,40 @@ test('mergeCalendarEvents suppresses projected recurring fallback when server ha
   ];
 
   const merged = mergeCalendarEvents(server, projected, { cancelled: new Set(), present: new Set() });
+  assert.equal(merged.length, 2);
+  const weekA = merged.find((item) => item.id === '22_20260302');
+  const weekB = merged.find((item) => item.id === '22_20260309');
+  assert.ok(weekA);
+  assert.ok(weekB);
+  assert.equal(weekA.title, 'server recurring');
+  assert.equal(weekB.title, 'projected recurring 2');
+});
+
+test('mergeCalendarEvents suppresses projected recurring instance when server marks it cancelled', () => {
+  const server = [
+    {
+      id: '35_20260319',
+      start: '2026-03-19T01:00:00Z',
+      title: 'server cancelled recurring',
+      extendedProps: { taskId: 35, status: 'cancelled', isRecurring: true, instanceId: '35_20260319' },
+    },
+  ];
+  const projected = [
+    {
+      id: '35_20260319',
+      start: '2026-03-19T01:00:00Z',
+      title: 'projected recurring',
+      extendedProps: { taskId: 35, status: 'pending', isRecurring: true, instanceId: '35_20260319' },
+    },
+    {
+      id: '35_20260326',
+      start: '2026-03-26T01:00:00Z',
+      title: 'projected recurring 2',
+      extendedProps: { taskId: 35, status: 'pending', isRecurring: true, instanceId: '35_20260326' },
+    },
+  ];
+
+  const merged = mergeCalendarEvents(server, projected, { cancelled: new Set(), present: new Set() });
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].title, 'server recurring');
+  assert.equal(merged[0].id, '35_20260326');
 });

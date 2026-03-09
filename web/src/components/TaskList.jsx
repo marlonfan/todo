@@ -1,10 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import TaskModal from './TaskModal';
-import { formatDateTime, getUserTimeGranularity, getUserTimezone, toInputFormat, toISOString } from '../utils/time';
+import {
+  formatDateTime,
+  getUserTimeGranularity,
+  getUserTimezone,
+  logTimeDebug,
+  toInputFormat,
+  toISOString,
+} from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import {
   getShowCategoryEmoji,
@@ -19,6 +26,7 @@ import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
+import { tasksAPI } from '../api/client';
 import {
   cancelTaskLocal,
   createTaskLocal,
@@ -30,6 +38,12 @@ import {
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
 const DRAFT_IDLE_SUBMIT_MS = 30000;
+const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
+const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
+const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled';
+const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
+const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
+const DELETE_DIALOG_KIND_TASK = 'task';
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -82,6 +96,57 @@ function parseLocalInput(value) {
   if (!raw) return null;
   const parsed = dayjs(raw);
   return parsed.isValid() ? parsed : null;
+}
+
+function shiftEndByDurationLocal(originalStartInput, originalEndInput, nextStartInput) {
+  const originalStart = parseLocalInput(originalStartInput);
+  const originalEnd = parseLocalInput(originalEndInput);
+  const nextStart = parseLocalInput(nextStartInput);
+  if (!originalStart || !originalEnd || !nextStart) return '';
+  const durationMinutes = originalEnd.diff(originalStart, 'minute');
+  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) return '';
+  return nextStart.add(durationMinutes, 'minute').format('YYYY-MM-DDTHH:mm');
+}
+
+function coerceEndNotBeforeStartLocal(startInput, endInput) {
+  const start = parseLocalInput(startInput);
+  const end = parseLocalInput(endInput);
+  if (!start || !end) return endInput || '';
+  if (end.isBefore(start)) {
+    return start.format('YYYY-MM-DDTHH:mm');
+  }
+  return endInput || '';
+}
+
+function alignStartToWeekdayLocal(startInput, weekdayKeys) {
+  const start = parseLocalInput(startInput);
+  if (!start) return startInput || '';
+  const dayMap = {
+    SU: 0,
+    MO: 1,
+    TU: 2,
+    WE: 3,
+    TH: 4,
+    FR: 5,
+    SA: 6,
+  };
+  const targets = [...new Set(
+    (Array.isArray(weekdayKeys) ? weekdayKeys : [])
+      .map((day) => dayMap[String(day || '').toUpperCase()])
+      .filter((day) => Number.isInteger(day))
+  )];
+  if (targets.length === 0) return start.format('YYYY-MM-DDTHH:mm');
+  const currentDay = start.day();
+  if (targets.includes(currentDay)) return start.format('YYYY-MM-DDTHH:mm');
+
+  let bestDiff = 8;
+  targets.forEach((targetDay) => {
+    let diff = (targetDay - currentDay + 7) % 7;
+    if (diff === 0) diff = 7;
+    if (diff < bestDiff) bestDiff = diff;
+  });
+  if (!Number.isFinite(bestDiff) || bestDiff <= 0 || bestDiff > 7) return start.format('YYYY-MM-DDTHH:mm');
+  return start.add(bestDiff, 'day').format('YYYY-MM-DDTHH:mm');
 }
 
 function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
@@ -178,6 +243,152 @@ function parseRecurrenceSelection(rule) {
 
 function getTaskPrimaryTime(task) {
   return task.start_time || task.due_date || '';
+}
+
+function resolveTaskOccurrenceDate(task, timezone) {
+  const explicit = String(task?.occurrence_date || task?.occurrenceDate || '').trim();
+  if (explicit) {
+    const parsed = dayjs(explicit);
+    if (parsed.isValid()) return parsed.tz(timezone).format('YYYY-MM-DD');
+  }
+  const instanceID = String(task?.instance_id || task?.instanceId || '').trim();
+  const token = instanceID.match(/^\d+_(\d{8})$/)?.[1] || '';
+  if (!token) return '';
+  return `${token.slice(0, 4)}-${token.slice(4, 6)}-${token.slice(6, 8)}`;
+}
+
+function normalizeOccurrenceDate(value, timezone) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = dayjs(raw);
+  if (!parsed.isValid()) return '';
+  return parsed.tz(timezone).format('YYYY-MM-DD');
+}
+
+function buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone) {
+  const numericTaskID = Number(taskID || 0);
+  if (!numericTaskID) return [];
+  const keys = [];
+  const normalizedInstanceID = String(instanceID || '').trim();
+  if (normalizedInstanceID) {
+    keys.push(`instance:${numericTaskID}:${normalizedInstanceID}`);
+  }
+  const normalizedDate = normalizeOccurrenceDate(occurrenceDate, timezone);
+  if (normalizedDate) {
+    keys.push(`date:${numericTaskID}:${normalizedDate}`);
+  }
+  return keys;
+}
+
+function resolveOccurrenceStatusFromOptimisticMap(
+  optimisticMap,
+  taskID,
+  instanceID,
+  occurrenceDate,
+  timezone,
+  fallbackStatus = 'pending'
+) {
+  const fallback = String(fallbackStatus || 'pending');
+  const map = optimisticMap && typeof optimisticMap === 'object' ? optimisticMap : {};
+  const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
+  for (const key of keys) {
+    const value = String(map?.[key]?.status || '').trim();
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function buildDeleteContext(task, timezone) {
+  if (!task || task.read_only) return null;
+  const taskID = Number(task?.source_task_id || task?.task_id || task?.id || 0);
+  if (!taskID) return null;
+  const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
+  const instanceID = String(task?.instance_id || task?.instanceId || '').trim();
+  const validInstanceID = /^\d+_\d{8}$/.test(instanceID);
+  const occurrenceDate = resolveTaskOccurrenceDate(task, timezone);
+  const occurrenceStart = String(
+    task?.occurrence_start
+    || task?.occurrenceStart
+    || task?.start_time
+    || task?.startTime
+    || ''
+  );
+  return {
+    taskID,
+    isRecurring: !!recurrenceRule,
+    hasOccurrenceContext: !!(validInstanceID || occurrenceDate),
+    validInstanceID,
+    instanceID,
+    occurrenceDate,
+    occurrenceStart,
+    status: String(task?.status || 'pending'),
+  };
+}
+
+function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, occurrenceStatusOptimisticMap, timezone) {
+  const baseByID = new Map();
+  (Array.isArray(tasksRaw) ? tasksRaw : []).forEach((task) => {
+    const taskID = Number(task?.id || 0);
+    if (!taskID) return;
+    baseByID.set(taskID, task);
+  });
+
+  const seen = new Set();
+  const list = [];
+  (Array.isArray(occurrenceItems) ? occurrenceItems : []).forEach((item) => {
+    const taskID = Number(item?.task_id || item?.taskID || 0);
+    if (!taskID) return;
+    const start = dayjs(item?.start_time || item?.startTime || '');
+    if (!start.isValid()) return;
+    const startISO = start.toISOString();
+    const end = item?.end_time || item?.endTime ? dayjs(item?.end_time || item?.endTime) : null;
+    const endISO = end && end.isValid() ? end.toISOString() : null;
+    const occurrenceDate = normalizeOccurrenceDate(
+      item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || start.toISOString(),
+      timezone,
+    ) || start.tz(timezone).format('YYYY-MM-DD');
+    const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
+    const status = resolveOccurrenceStatusFromOptimisticMap(
+      occurrenceStatusOptimisticMap,
+      taskID,
+      instanceID,
+      occurrenceDate,
+      timezone,
+      String(item?.status || 'pending'),
+    );
+    const fallbackKey = `${taskID}_${occurrenceDate.replace(/-/g, '')}`;
+    const dedupeKey = instanceID || fallbackKey;
+    if (!dedupeKey || seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    const baseTask = baseByID.get(taskID) || {};
+    const eventPriority = Number.parseInt(item?.priority, 10);
+    const priority = Number.isFinite(eventPriority)
+      ? eventPriority
+      : (Number.parseInt(baseTask?.priority, 10) || 0);
+    list.push({
+      ...baseTask,
+      id: `occ_${dedupeKey}`,
+      source_task_id: taskID,
+      virtual_occurrence: true,
+      title: String(item?.title || baseTask?.title || ''),
+      description: typeof item?.description === 'string' ? item.description : '',
+      priority,
+      status,
+      start_time: startISO,
+      end_time: endISO,
+      due_date: null,
+      recurrence_rule: baseTask?.recurrence_rule || baseTask?.recurrenceRule || { freq: 'daily', interval: 1 },
+      instance_id: instanceID,
+      occurrence_date: occurrenceDate,
+      occurrence_start: startISO,
+      occurrence_end: endISO,
+      categories: Array.isArray(baseTask?.categories) ? baseTask.categories : [],
+      read_only: !!baseTask?.read_only,
+    });
+  });
+
+  return list;
 }
 
 function compareTasksStable(a, b) {
@@ -359,8 +570,234 @@ function TaskList({ forcedView = '' }) {
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const timeInputStepSeconds = timeGranularity * 60;
-  const { data: tasks = [], isLoading: tasksLoading } = useTasksQuery();
+  const { data: tasksRaw = [], isLoading: tasksLoading } = useTasksQuery();
   const { data: categories = [] } = useCategoriesQuery();
+  const [occurrenceStatusOptimisticMap, setOccurrenceStatusOptimisticMap] = useState({});
+  const searchModeActive = useMemo(() => {
+    if (forcedView) return forcedView === 'search';
+    if (location.pathname === '/search') return true;
+    const params = new URLSearchParams(location.search);
+    return (params.get('view') || '') === 'search';
+  }, [forcedView, location.pathname, location.search]);
+  const { data: recurringNextOccurrences = [], isFetched: recurringNextOccurrencesFetched } = useQuery({
+    queryKey: queryKeys.tasks.nextOccurrences(),
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const res = await tasksAPI.listNextOccurrences();
+      return Array.isArray(res?.data) ? res.data : [];
+    },
+  });
+  const { data: recurringHistoryPayload = { items: [] } } = useQuery({
+    queryKey: queryKeys.tasks.occurrences('history', 0, 500),
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const res = await tasksAPI.listOccurrences({
+        limit: 500,
+        cursor: 0,
+      });
+      if (Array.isArray(res?.data)) {
+        return { items: res.data };
+      }
+      const payload = res?.data && typeof res.data === 'object' ? res.data : {};
+      return {
+        items: Array.isArray(payload?.items) ? payload.items : [],
+      };
+    },
+  });
+  const recurringHistoryItems = useMemo(() => {
+    const value = recurringHistoryPayload?.items;
+    return Array.isArray(value) ? value : [];
+  }, [recurringHistoryPayload]);
+  const { data: recurringSearchPayload = { items: [] } } = useQuery({
+    queryKey: queryKeys.tasks.occurrences(RECURRING_SEARCH_STATUSES, 0, 500),
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+    enabled: searchModeActive,
+    queryFn: async () => {
+      const res = await tasksAPI.listOccurrences({
+        status: RECURRING_SEARCH_STATUSES,
+        limit: 500,
+        cursor: 0,
+      });
+      if (Array.isArray(res?.data)) {
+        return { items: res.data };
+      }
+      const payload = res?.data && typeof res.data === 'object' ? res.data : {};
+      return {
+        items: Array.isArray(payload?.items) ? payload.items : [],
+      };
+    },
+  });
+  const recurringSearchItems = useMemo(() => {
+    const value = recurringSearchPayload?.items;
+    return Array.isArray(value) ? value : [];
+  }, [recurringSearchPayload]);
+  const recurringNextPendingMap = useMemo(() => {
+    const pool = new Map();
+    (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach((item) => {
+      const taskID = Number(item?.task_id || item?.taskID || 0);
+      if (!taskID) return;
+      const start = dayjs(item?.start_time || item?.startTime || '');
+      if (!start.isValid()) return;
+      const startLocal = start.tz(timezone);
+      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
+      const occurrenceDate = normalizeOccurrenceDate(
+        item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || start.toISOString(),
+        timezone,
+      ) || startLocal.format('YYYY-MM-DD');
+      const status = resolveOccurrenceStatusFromOptimisticMap(
+        occurrenceStatusOptimisticMap,
+        taskID,
+        instanceID,
+        occurrenceDate,
+        timezone,
+        String(item?.status || 'pending'),
+      );
+      if (status !== 'pending') return;
+      const current = pool.get(taskID);
+      if (current && !startLocal.isBefore(current.startLocal)) return;
+      const end = item?.end_time || item?.endTime ? dayjs(item?.end_time || item?.endTime) : null;
+      pool.set(taskID, {
+        instanceId: instanceID,
+        occurrenceDate,
+        startISO: start.toISOString(),
+        endISO: end && end.isValid() ? end.toISOString() : null,
+        description: typeof item?.description === 'string' ? item.description : '',
+        status,
+        startLocal,
+      });
+    });
+    return pool;
+  }, [occurrenceStatusOptimisticMap, recurringNextOccurrences, timezone]);
+  const recurringInstanceTasks = useMemo(() => {
+    return buildRecurringInstanceTasksFromOccurrences(
+      recurringHistoryItems,
+      tasksRaw,
+      occurrenceStatusOptimisticMap,
+      timezone,
+    );
+  }, [occurrenceStatusOptimisticMap, recurringHistoryItems, tasksRaw, timezone]);
+  const recurringSearchInstanceTasks = useMemo(() => (
+    buildRecurringInstanceTasksFromOccurrences(
+      recurringSearchItems,
+      tasksRaw,
+      occurrenceStatusOptimisticMap,
+      timezone,
+    )
+  ), [occurrenceStatusOptimisticMap, recurringSearchItems, tasksRaw, timezone]);
+  const tasks = useMemo(() => {
+    const base = Array.isArray(tasksRaw) ? tasksRaw : [];
+    if (base.length === 0) return [];
+    return base.flatMap((task) => {
+      const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
+      if (!recurrenceRule) return [task];
+      const taskID = Number(task?.id || 0);
+      const nextPending = recurringNextPendingMap.get(taskID);
+      if (!nextPending) {
+        if (recurringNextOccurrencesFetched && String(task?.status || '') === 'pending') {
+          // Recurring series with no next pending occurrence should not fall back to series anchor in pending list.
+          return [];
+        }
+        return [task];
+      }
+      return [{
+        ...task,
+        start_time: nextPending.startISO,
+        end_time: nextPending.endISO,
+        instance_id: nextPending.instanceId,
+        occurrence_date: nextPending.occurrenceDate,
+        occurrence_start: nextPending.startISO,
+        occurrence_end: nextPending.endISO,
+        description: nextPending.description,
+        status: nextPending.status,
+      }];
+    });
+  }, [recurringNextOccurrencesFetched, recurringNextPendingMap, tasksRaw]);
+
+  const recurringServerStatusMap = useMemo(() => {
+    const statusMap = new Map();
+    const ingest = (item) => {
+      const taskID = Number(item?.task_id || item?.taskID || 0);
+      if (!taskID) return;
+      const startLocal = dayjs(item?.start_time || item?.startTime || '').tz(timezone);
+      const fallbackStart = startLocal.isValid() ? startLocal.toISOString() : '';
+      const occurrenceDate = normalizeOccurrenceDate(
+        item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || fallbackStart,
+        timezone,
+      );
+      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
+      const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
+      const status = String(item?.status || 'pending');
+      keys.forEach((key) => {
+        if (!key || statusMap.has(key)) return;
+        statusMap.set(key, status);
+      });
+    };
+    (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach(ingest);
+    (Array.isArray(recurringHistoryItems) ? recurringHistoryItems : []).forEach(ingest);
+    return statusMap;
+  }, [recurringHistoryItems, recurringNextOccurrences, timezone]);
+
+  useEffect(() => {
+    if (recurringServerStatusMap.size === 0) return;
+    setOccurrenceStatusOptimisticMap((prev) => {
+      const entries = Object.entries(prev || {});
+      if (entries.length === 0) return prev;
+      let changed = false;
+      const next = {};
+      entries.forEach(([key, value]) => {
+        const status = String(value?.status || '').trim();
+        if (!status) {
+          changed = true;
+          return;
+        }
+        if (recurringServerStatusMap.get(key) === status) {
+          changed = true;
+          return;
+        }
+        next[key] = value;
+      });
+      return changed ? next : prev;
+    });
+  }, [recurringServerStatusMap]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const prune = () => {
+      const now = Date.now();
+      setOccurrenceStatusOptimisticMap((prev) => {
+        const entries = Object.entries(prev || {});
+        if (entries.length === 0) return prev;
+        let changed = false;
+        const next = {};
+        entries.forEach(([key, value]) => {
+          const status = String(value?.status || '').trim();
+          const updatedAt = Number(value?.updatedAt || 0);
+          if (!status) {
+            changed = true;
+            return;
+          }
+          if (!updatedAt || (now - updatedAt) <= OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS) {
+            next[key] = value;
+            return;
+          }
+          changed = true;
+        });
+        return changed ? next : prev;
+      });
+    };
+    const timerID = window.setInterval(prune, 60 * 1000);
+    return () => window.clearInterval(timerID);
+  }, []);
+
+  useEffect(() => {
+    logTimeDebug('taskList.timezone.resolved', {
+      component: 'TaskList',
+      timezone,
+    });
+  }, [timezone]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTask, setModalTask] = useState(null);
@@ -380,6 +817,8 @@ function TaskList({ forcedView = '' }) {
   const [showDraftCustomRecurrenceMenu, setShowDraftCustomRecurrenceMenu] = useState(false);
   const [showDraftMonthlyDatePicker, setShowDraftMonthlyDatePicker] = useState(false);
   const [showActivityPanel, setShowActivityPanel] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState({ open: false, kind: '', context: null });
+  const [deleteDialogSubmitting, setDeleteDialogSubmitting] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false
@@ -526,11 +965,17 @@ function TaskList({ forcedView = '' }) {
     }
 
     if (view === 'completed') {
-      return tasks.filter((task) => task.status === 'completed');
+      return [
+        ...recurringInstanceTasks.filter((task) => task.status === 'completed'),
+        ...tasks.filter((task) => task.status === 'completed'),
+      ];
     }
 
     if (view === 'deleted') {
-      return tasks.filter((task) => task.status === 'cancelled');
+      return [
+        ...recurringInstanceTasks.filter((task) => task.status === 'cancelled'),
+        ...tasks.filter((task) => task.status === 'cancelled'),
+      ];
     }
 
     if (view === 'search') {
@@ -562,13 +1007,37 @@ function TaskList({ forcedView = '' }) {
     }
 
     return pending;
-  }, [activeCategoryID, tasks, timezone, view]);
+  }, [activeCategoryID, recurringInstanceTasks, tasks, timezone, view]);
 
   const searchedTasks = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
     if (view !== 'search') return baseFilteredTasks;
-    if (!keyword) return baseFilteredTasks;
-    return baseFilteredTasks.filter((task) => {
+    const recurringKeySet = new Set();
+    recurringSearchInstanceTasks.forEach((task) => {
+      const taskID = Number(task?.source_task_id || task?.task_id || task?.id || 0);
+      if (!taskID) return;
+      const instanceID = String(task?.instance_id || task?.instanceId || '').trim();
+      if (instanceID) {
+        recurringKeySet.add(`instance:${taskID}:${instanceID}`);
+        return;
+      }
+      const occurrenceDate = resolveTaskOccurrenceDate(task, timezone);
+      if (occurrenceDate) recurringKeySet.add(`date:${taskID}:${occurrenceDate}`);
+    });
+    const baseSearchTasks = baseFilteredTasks.filter((task) => {
+      const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
+      if (!recurrenceRule) return true;
+      const taskID = Number(task?.source_task_id || task?.task_id || task?.id || 0);
+      if (!taskID) return true;
+      const instanceID = String(task?.instance_id || task?.instanceId || '').trim();
+      if (instanceID && recurringKeySet.has(`instance:${taskID}:${instanceID}`)) return false;
+      const occurrenceDate = resolveTaskOccurrenceDate(task, timezone);
+      if (occurrenceDate && recurringKeySet.has(`date:${taskID}:${occurrenceDate}`)) return false;
+      return true;
+    });
+    const searchSource = [...baseSearchTasks, ...recurringSearchInstanceTasks];
+    if (!keyword) return searchSource;
+    return searchSource.filter((task) => {
       const title = String(task.title || '').toLowerCase();
       const description = String(task.description || '').toLowerCase();
       const categoryText = (task.categories || [])
@@ -576,7 +1045,7 @@ function TaskList({ forcedView = '' }) {
         .join(' ');
       return title.includes(keyword) || description.includes(keyword) || categoryText.includes(keyword);
     });
-  }, [baseFilteredTasks, searchKeyword, view]);
+  }, [baseFilteredTasks, recurringSearchInstanceTasks, searchKeyword, timezone, view]);
 
   const sortedTasks = useMemo(
     () => sortTasksByOption(searchedTasks, sortBy, timezone),
@@ -810,14 +1279,30 @@ function TaskList({ forcedView = '' }) {
     const endTime = taskValue.end_time || taskValue.endTime || '';
     const recurrenceRule = parseRecurrenceRule(taskValue.recurrence_rule || taskValue.recurrenceRule);
     const parsedRecurrence = parseRecurrenceSelection(recurrenceRule);
+    let startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
+    let endInput = endTime ? toInputFormat(endTime, null, allDay) : '';
+    if (!allDay && (parsedRecurrence.type === 'weekly' || parsedRecurrence.type === 'biweekly') && startInput) {
+      const alignedStartInput = alignStartToWeekdayLocal(
+        startInput,
+        parsedRecurrence.days.length > 0 ? parsedRecurrence.days : DEFAULT_WORKDAY_KEYS,
+      );
+      if (alignedStartInput && alignedStartInput !== startInput) {
+        const shiftedEndInput = shiftEndByDurationLocal(startInput, endInput, alignedStartInput);
+        startInput = alignedStartInput;
+        if (shiftedEndInput) {
+          endInput = shiftedEndInput;
+        }
+      }
+      endInput = coerceEndNotBeforeStartLocal(startInput, endInput);
+    }
     return {
       title: taskValue.title || '',
       description: taskValue.description || '',
       priority: String(taskValue.priority ?? 0),
       status: taskValue.status || 'pending',
       all_day: allDay,
-      start_time: startTime ? toInputFormat(startTime, null, allDay) : '',
-      end_time: endTime ? toInputFormat(endTime, null, allDay) : '',
+      start_time: startInput,
+      end_time: endInput,
       category_ids: (taskValue.categories || []).map((cat) => String(cat.id)),
       recurrence_enabled: !!recurrenceRule,
       recurrence_type: parsedRecurrence.type,
@@ -876,7 +1361,11 @@ function TaskList({ forcedView = '' }) {
       return;
     }
 
-    const nextStart = draft.start_time && !draft.start_time.includes('T') ? `${draft.start_time}T00:00` : draft.start_time;
+    const { hour: defaultHour, minute: defaultMinute } = getDefaultStartTimeParts();
+    const defaultTime = `${String(defaultHour).padStart(2, '0')}:${String(defaultMinute).padStart(2, '0')}`;
+    const nextStart = draft.start_time && !draft.start_time.includes('T')
+      ? `${draft.start_time}T${defaultTime}`
+      : draft.start_time;
     const nextEnd = draft.end_time && !draft.end_time.includes('T') ? `${draft.end_time}T23:59` : draft.end_time;
     if (nextStart !== draft.start_time || nextEnd !== draft.end_time) {
       setDraft((prev) => (prev ? { ...prev, start_time: nextStart || '', end_time: nextEnd || '' } : prev));
@@ -912,26 +1401,113 @@ function TaskList({ forcedView = '' }) {
 
   const handleStatusChange = useCallback(async (task, newStatus) => {
     if (task.read_only) return;
+    const taskID = Number(task?.source_task_id || task?.task_id || task?.id || 0);
+    if (!taskID) return;
+    let optimisticOccurrenceKeys = [];
     try {
-      if (task.recurrence_rule) {
-        await updateTaskStatusLocal(queryClient, task.id, {
-          status: newStatus,
-          occurrence_date: dayjs().tz(timezone).format('YYYY-MM-DD'),
-        }, {
+      const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
+      if (recurrenceRule) {
+        const instanceID = String(task?.instance_id || task?.instanceId || '').trim();
+        const occurrenceDate = resolveTaskOccurrenceDate(task, timezone);
+        const payload = { status: newStatus };
+        if (/^\d+_\d{8}$/.test(instanceID)) {
+          payload.instance_id = instanceID;
+        }
+        if (occurrenceDate) {
+          payload.occurrence_date = occurrenceDate;
+        }
+        const hasOccurrenceContext = !!(payload.instance_id || payload.occurrence_date);
+        const restoringCancelledOccurrenceAsDetachedTask = (
+          hasOccurrenceContext
+          && String(newStatus || '') === 'pending'
+          && String(task?.status || '') === 'cancelled'
+        );
+        if (restoringCancelledOccurrenceAsDetachedTask) {
+          const startTime = task?.occurrence_start || task?.occurrenceStart || task?.start_time || task?.startTime || null;
+          const endTime = task?.occurrence_end || task?.occurrenceEnd || task?.end_time || task?.endTime || null;
+          const dueDate = task?.due_date || task?.dueDate || null;
+          const categoryIDs = Array.isArray(task?.categories)
+            ? task.categories.map((cat) => Number(cat?.id || 0)).filter((id) => id > 0)
+            : [];
+          const detachedTask = await createTaskLocal(queryClient, {
+            title: String(task?.title || '').trim(),
+            description: String(task?.description || ''),
+            priority: Number.parseInt(task?.priority, 10) || 0,
+            status: 'pending',
+            all_day: !!(task?.all_day || task?.allDay),
+            start_time: startTime,
+            end_time: endTime,
+            due_date: dueDate,
+            category_ids: categoryIDs,
+            recurrence_rule: null,
+            recurrence_end_date: null,
+          }, {
+            submitMeta: {
+              submittedAt: new Date().toISOString(),
+              submitSource: 'manual',
+            },
+          });
+          if (detachedTask?.id) {
+            setSelectedTaskID(detachedTask.id);
+          }
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+            queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+          ]);
+          return;
+        }
+        if (hasOccurrenceContext) {
+          optimisticOccurrenceKeys = buildOccurrenceStatusKeys(
+            taskID,
+            payload.instance_id || instanceID,
+            payload.occurrence_date || occurrenceDate,
+            timezone,
+          );
+          if (optimisticOccurrenceKeys.length > 0) {
+            const now = Date.now();
+            setOccurrenceStatusOptimisticMap((prev) => {
+              const next = { ...(prev || {}) };
+              optimisticOccurrenceKeys.forEach((key) => {
+                if (!key) return;
+                next[key] = { status: newStatus, updatedAt: now };
+              });
+              return next;
+            });
+          }
+        }
+        await updateTaskStatusLocal(queryClient, taskID, hasOccurrenceContext ? payload : newStatus, {
           submitMeta: {
             submittedAt: new Date().toISOString(),
             submitSource: 'manual',
           },
+          awaitPersist: true,
         });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+          queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+        ]);
       } else {
-        await updateTaskStatusLocal(queryClient, task.id, newStatus, {
+        await updateTaskStatusLocal(queryClient, taskID, newStatus, {
           submitMeta: {
             submittedAt: new Date().toISOString(),
             submitSource: 'manual',
           },
+          awaitPersist: true,
         });
       }
     } catch (err) {
+      if (optimisticOccurrenceKeys.length > 0) {
+        setOccurrenceStatusOptimisticMap((prev) => {
+          const next = { ...(prev || {}) };
+          let changed = false;
+          optimisticOccurrenceKeys.forEach((key) => {
+            if (!Object.prototype.hasOwnProperty.call(next, key)) return;
+            delete next[key];
+            changed = true;
+          });
+          return changed ? next : prev;
+        });
+      }
       console.error('Failed to update task status:', err);
     }
   }, [queryClient, timezone]);
@@ -960,7 +1536,7 @@ function TaskList({ forcedView = '' }) {
         priority: Number.isInteger(parsedPriority?.priority) ? parsedPriority.priority : 0,
         all_day: false,
         client_timezone: timezone,
-        start_time: toISOString(startLocal),
+        start_time: toISOString(startLocal, timezone),
         start_time_local: startLocal,
       };
       if (activeCategoryID > 0) {
@@ -968,6 +1544,12 @@ function TaskList({ forcedView = '' }) {
       }
 
       const createdTask = await createTaskLocal(queryClient, payload);
+      logTimeDebug('taskList.quickCreate.payload', {
+        task_id: createdTask?.id || 0,
+        start_time_local: payload.start_time_local,
+        start_time: payload.start_time,
+        client_timezone: payload.client_timezone,
+      });
       setQuickTitle('');
       if (createdTask?.id) {
         setSelectedTaskID(createdTask.id);
@@ -979,7 +1561,27 @@ function TaskList({ forcedView = '' }) {
 
   const handleDraftFieldChange = (field, value) => {
     draftTouchedRef.current = true;
-    setDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
+    setDraft((prev) => {
+      if (!prev) return prev;
+      if (field !== 'start_time') return { ...prev, [field]: value };
+
+      const nextStart = String(value || '');
+      if (!nextStart || !prev.end_time) {
+        return { ...prev, start_time: nextStart };
+      }
+
+      if (prev.all_day) {
+        const startDay = parseLocalInput(nextStart);
+        const endDay = parseLocalInput(prev.end_time);
+        if (startDay && endDay && endDay.isBefore(startDay, 'day')) {
+          return { ...prev, start_time: nextStart, end_time: nextStart };
+        }
+        return { ...prev, start_time: nextStart };
+      }
+
+      const alignedEnd = coerceEndNotBeforeStartLocal(nextStart, prev.end_time);
+      return { ...prev, start_time: nextStart, end_time: alignedEnd };
+    });
   };
 
   const applyQuickDatePreset = (preset) => {
@@ -1012,10 +1614,13 @@ function TaskList({ forcedView = '' }) {
         };
       }
 
+      const nextStart = target.hour(hour).minute(minute).second(0).format('YYYY-MM-DDTHH:mm');
+      const shiftedEnd = shiftEndByDurationLocal(prev.start_time, prev.end_time, nextStart);
+      const nextEnd = shiftedEnd || coerceEndNotBeforeStartLocal(nextStart, prev.end_time);
       return {
         ...prev,
-        start_time: target.hour(hour).minute(minute).second(0).format('YYYY-MM-DDTHH:mm'),
-        end_time: prev.end_time || '',
+        start_time: nextStart,
+        end_time: nextEnd,
       };
     });
   };
@@ -1057,7 +1662,7 @@ function TaskList({ forcedView = '' }) {
     { key: 'SA', label: t('calendar.weekday.sa') },
     { key: 'SU', label: t('calendar.weekday.su') },
   ];
-  const workDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR'];
+  const workDayKeys = DEFAULT_WORKDAY_KEYS;
   const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
   const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
@@ -1093,21 +1698,60 @@ function TaskList({ forcedView = '' }) {
     };
 
     if (timeChanged || recurrenceChanged) {
-      const startInput = String(draftValue.start_time || originalDraft?.start_time || '');
-      const endInput = String(draftValue.end_time || originalDraft?.end_time || '');
+      const startInput = String(draftValue.start_time ?? originalDraft?.start_time ?? '');
+      const endInput = String(draftValue.end_time ?? originalDraft?.end_time ?? '');
       payload.all_day = !!draftValue.all_day;
       if (payload.all_day) {
         const startDate = splitDatePart(startInput);
-        const endDate = splitDatePart(endInput);
-        payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`) : null;
-        payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`) : null;
+        let endDate = splitDatePart(endInput);
+        if (startDate && endDate) {
+          const startDay = parseLocalInput(startDate);
+          const endDay = parseLocalInput(endDate);
+          if (startDay && endDay && endDay.isBefore(startDay, 'day')) {
+            endDate = startDate;
+          }
+        }
+        payload.start_time = startDate ? toISOString(`${startDate} 00:00:00`, timezone) : null;
+        payload.end_time = endDate ? toISOString(`${endDate} 23:59:59`, timezone) : null;
+        if (startDate) payload.start_time_local = startDate;
+        if (endDate) payload.end_time_local = endDate;
       } else {
-        payload.start_time = startInput ? toISOString(startInput) : null;
-        payload.end_time = endInput ? toISOString(endInput) : null;
+        let nextStartInput = startInput;
+        let nextEndInput = endInput;
+        if (
+          draftValue.recurrence_enabled
+          && (draftValue.recurrence_type === 'weekly' || draftValue.recurrence_type === 'biweekly')
+        ) {
+          const recurrenceDays = (draftValue.recurrence_days || [])
+            .map((day) => String(day || '').toUpperCase())
+            .filter((day) => WEEKDAY_ONLY_RE.test(day));
+          const alignedStartInput = alignStartToWeekdayLocal(nextStartInput, recurrenceDays.length > 0 ? recurrenceDays : workDayKeys);
+          if (alignedStartInput && alignedStartInput !== nextStartInput) {
+            const shiftedEnd = shiftEndByDurationLocal(nextStartInput, nextEndInput, alignedStartInput);
+            nextStartInput = alignedStartInput;
+            if (shiftedEnd) {
+              nextEndInput = shiftedEnd;
+            }
+          }
+        }
+        nextEndInput = coerceEndNotBeforeStartLocal(nextStartInput, nextEndInput);
+        payload.start_time = nextStartInput ? toISOString(nextStartInput, timezone) : null;
+        payload.end_time = nextEndInput ? toISOString(nextEndInput, timezone) : null;
+        if (nextStartInput) payload.start_time_local = nextStartInput;
+        if (nextEndInput) payload.end_time_local = nextEndInput;
       }
 
-      if (startInput) payload.start_time_local = startInput;
-      if (endInput) payload.end_time_local = endInput;
+      logTimeDebug('taskList.buildDraftPayload.time', {
+        task_id: Number(taskValue?.id || 0),
+        all_day: payload.all_day,
+        start_input: startInput,
+        end_input: endInput,
+        start_time_local: payload.start_time_local || '',
+        end_time_local: payload.end_time_local || '',
+        start_time: payload.start_time,
+        end_time: payload.end_time,
+        client_timezone: payload.client_timezone,
+      });
     }
 
     if (draftValue.recurrence_enabled) {
@@ -1148,6 +1792,12 @@ function TaskList({ forcedView = '' }) {
 
     setSubmittingDraft(true);
     try {
+      logTimeDebug('taskList.submitPendingDraft.start', {
+        task_id: taskID,
+        submit_source: submitSource,
+        if_match_revision: Number(selectedTaskSnapshotRef.current?.revision || 0) || undefined,
+        payload: pending.payload,
+      });
       await updateTaskLocal(queryClient, taskID, pending.payload, {
         scheduleSync: true,
         localOnly: false,
@@ -1215,6 +1865,12 @@ function TaskList({ forcedView = '' }) {
       void savedTask;
 
       pendingDraftSubmitRef.current = { taskID: targetTaskID, payload: built.payload };
+      logTimeDebug('taskList.handleSaveDraft.localSaved', {
+        task_id: targetTaskID,
+        submit_after: !!submitAfter,
+        submit_source: submitSource,
+        payload: built.payload,
+      });
       setPendingSubmitTaskID(targetTaskID);
       scheduleIdleDraftSubmit(targetTaskID);
       setLastSavedAt(dayjs().format('HH:mm:ss'));
@@ -1306,26 +1962,126 @@ function TaskList({ forcedView = '' }) {
     void handleSubmitDraft();
   }, [handleSubmitDraft]);
 
-  const handleDeleteSelected = async () => {
-    if (!selectedTask) return;
-    if (selectedTask.read_only) return;
-    if (!confirm(t('task.deleteConfirm'))) return;
+  const closeDeleteDialog = useCallback(() => {
+    if (deleteDialogSubmitting) return;
+    setDeleteDialog({ open: false, kind: '', context: null });
+  }, [deleteDialogSubmitting]);
 
-    try {
-      if (selectedTask?.status === 'cancelled') {
-        await deleteTaskLocal(queryClient, selectedTask.id);
-      } else {
-        await cancelTaskLocal(queryClient, selectedTask.id);
+  const executeDeleteAction = useCallback(async (action) => {
+    if (deleteDialogSubmitting) return;
+    const ctx = deleteDialog?.context;
+    if (!ctx) return;
+
+    const taskID = Number(ctx.taskID || 0);
+    if (!taskID) return;
+    const submitMeta = {
+      submittedAt: new Date().toISOString(),
+      submitSource: 'manual',
+    };
+    const fallbackOccurrenceDate = (() => {
+      const explicit = String(ctx.occurrenceDate || '').trim();
+      if (explicit) return explicit;
+      const fromInstance = String(ctx.instanceID || '').trim().match(/^\d+_(\d{8})$/)?.[1] || '';
+      if (fromInstance) {
+        return `${fromInstance.slice(0, 4)}-${fromInstance.slice(4, 6)}-${fromInstance.slice(6, 8)}`;
       }
-      if (Number(pendingDraftSubmitRef.current?.taskID || 0) === Number(selectedTask.id)) {
+      const fromStart = normalizeOccurrenceDate(ctx.occurrenceStart, timezone);
+      return fromStart || '';
+    })();
+    const fallbackInstanceID = (() => {
+      if (ctx.validInstanceID) return String(ctx.instanceID || '').trim();
+      if (!fallbackOccurrenceDate) return '';
+      return `${taskID}_${fallbackOccurrenceDate.replace(/-/g, '')}`;
+    })();
+
+    setDeleteDialogSubmitting(true);
+    try {
+      if (action === 'single') {
+        const payload = { status: 'cancelled' };
+        if (fallbackInstanceID) payload.instance_id = fallbackInstanceID;
+        if (fallbackOccurrenceDate) payload.occurrence_date = fallbackOccurrenceDate;
+        await updateTaskStatusLocal(queryClient, taskID, payload, { submitMeta, awaitPersist: true });
+      } else if (action === 'series') {
+        const baseTask = (Array.isArray(tasksRaw) ? tasksRaw : []).find((item) => Number(item?.id) === taskID) || null;
+        const occurrenceStart = dayjs(ctx.occurrenceStart || '');
+        const seriesStart = dayjs(
+          baseTask?.start_time
+          || baseTask?.startTime
+          || baseTask?.due_date
+          || baseTask?.dueDate
+          || ''
+        );
+        if (ctx.hasOccurrenceContext && occurrenceStart.isValid() && seriesStart.isValid() && occurrenceStart.isAfter(seriesStart)) {
+          await updateTaskLocal(queryClient, taskID, {
+            recurrence_end_date: occurrenceStart.subtract(1, 'second').utc().toISOString(),
+          }, { submitMeta, awaitPersist: true });
+          const occurrencePayload = { status: 'cancelled' };
+          if (fallbackInstanceID) occurrencePayload.instance_id = fallbackInstanceID;
+          if (fallbackOccurrenceDate) occurrencePayload.occurrence_date = fallbackOccurrenceDate;
+          if (occurrencePayload.instance_id || occurrencePayload.occurrence_date) {
+            await updateTaskStatusLocal(queryClient, taskID, occurrencePayload, { submitMeta, awaitPersist: true });
+          }
+        } else {
+          await deleteTaskLocal(queryClient, taskID);
+        }
+      } else if (action === 'task') {
+        if (ctx.status === 'cancelled') {
+          await deleteTaskLocal(queryClient, taskID);
+        } else {
+          await cancelTaskLocal(queryClient, taskID);
+        }
+      } else {
+        return;
+      }
+
+      if (Number(pendingDraftSubmitRef.current?.taskID || 0) === taskID) {
         pendingDraftSubmitRef.current = { taskID: 0, payload: null };
         setPendingSubmitTaskID(0);
       }
+      setDeleteDialog({ open: false, kind: '', context: null });
       setSelectedTaskID(0);
     } catch (err) {
       console.error('Failed to delete task:', err);
+    } finally {
+      setDeleteDialogSubmitting(false);
     }
-  };
+  }, [deleteDialog, deleteDialogSubmitting, queryClient, tasksRaw, timezone]);
+
+  const handleDeleteSelected = useCallback(() => {
+    const ctx = buildDeleteContext(selectedTask, timezone);
+    if (!ctx) return;
+    if (ctx.isRecurring) {
+      setDeleteDialog({
+        open: true,
+        kind: ctx.hasOccurrenceContext ? DELETE_DIALOG_KIND_RECURRING_CHOICE : DELETE_DIALOG_KIND_RECURRING_SERIES,
+        context: ctx,
+      });
+      return;
+    }
+    if (ctx.status === 'cancelled') {
+      setDeleteDialog({
+        open: true,
+        kind: DELETE_DIALOG_KIND_TASK,
+        context: ctx,
+      });
+      return;
+    }
+    setDeleteDialog({
+      open: true,
+      kind: DELETE_DIALOG_KIND_TASK,
+      context: ctx,
+    });
+  }, [selectedTask, timezone]);
+
+  useEffect(() => {
+    if (!deleteDialog.open) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      closeDeleteDialog();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closeDeleteDialog, deleteDialog.open]);
 
   useEffect(() => {
     if (!selectedTask || !draft || !isDraftDirty || savingDraft) return;
@@ -1382,6 +2138,16 @@ function TaskList({ forcedView = '' }) {
   }), [i18n.language, t]);
 
   const handleSelectTask = useCallback((task) => {
+    if (task?.virtual_occurrence) {
+      const sourceTaskID = Number(task?.source_task_id || task?.task_id || 0);
+      if (!sourceTaskID) return;
+      openAdvancedModal({
+        ...task,
+        id: sourceTaskID,
+        source_task_id: sourceTaskID,
+      });
+      return;
+    }
     setSelectedTaskID(task.id);
     if (isMobileViewport) {
       openAdvancedModal(task);
@@ -2198,6 +2964,96 @@ function TaskList({ forcedView = '' }) {
           )}
         </section>
       </div>
+
+      {deleteDialog.open && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/35"
+          onClick={() => {
+            closeDeleteDialog();
+          }}
+        >
+          <div
+            className="absolute inset-x-0 bottom-0 rounded-t-2xl border border-slate-200 bg-white px-4 pb-4 pt-3 shadow-2xl md:bottom-auto md:left-1/2 md:top-1/2 md:w-[min(28rem,calc(100vw-2rem))] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200 md:hidden" />
+            <h3 className="text-base font-semibold text-slate-900">
+              {deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_CHOICE || deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_SERIES
+                ? t('task.deleteRecurringDialogTitle')
+                : t('task.deleteDialogTitle')}
+            </h3>
+            <p className="mt-1 text-sm text-slate-600">
+              {deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_CHOICE
+                ? t('task.deleteRecurringDialogHint')
+                : deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_SERIES
+                  ? t('task.deleteRecurringSeriesDialogHint')
+                  : t('task.deleteConfirm')}
+            </p>
+
+            {deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_CHOICE ? (
+              <div className="mt-4 space-y-2">
+                <button
+                  type="button"
+                  disabled={deleteDialogSubmitting}
+                  onClick={() => {
+                    void executeDeleteAction('single');
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {deleteDialogSubmitting ? t('task.submitting') : t('task.deleteOnlyThis')}
+                </button>
+                <button
+                  type="button"
+                  disabled={deleteDialogSubmitting}
+                  onClick={() => {
+                    void executeDeleteAction('series');
+                  }}
+                  className="w-full rounded-xl bg-rose-600 px-3 py-2.5 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {deleteDialogSubmitting ? t('task.submitting') : t('task.deleteAllSeries')}
+                </button>
+                <button
+                  type="button"
+                  disabled={deleteDialogSubmitting}
+                  onClick={() => {
+                    closeDeleteDialog();
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {t('common.cancel')}
+                </button>
+              </div>
+            ) : (
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={deleteDialogSubmitting}
+                  onClick={() => {
+                    closeDeleteDialog();
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  type="button"
+                  disabled={deleteDialogSubmitting}
+                  onClick={() => {
+                    if (deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_SERIES) {
+                      void executeDeleteAction('series');
+                      return;
+                    }
+                    void executeDeleteAction('task');
+                  }}
+                  className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {deleteDialogSubmitting ? t('task.submitting') : t('common.delete')}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {modalOpen && <TaskModal task={modalTask} onClose={handleModalClose} onSaved={handleTaskSaved} />}
     </div>

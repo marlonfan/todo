@@ -133,6 +133,7 @@ function buildProjectedEvent(task, {
     editable: !task.read_only,
     extendedProps: {
       taskId: Number(task.id),
+      description: isRecurring ? '' : (task.description || ''),
       status: task.status || 'pending',
       priority: Number.parseInt(task.priority, 10) || 0,
       isRecurring,
@@ -319,13 +320,26 @@ export function buildTaskStatusIndex(tasks) {
   return { cancelled, present };
 }
 
+function buildRecurringInstanceKey(event) {
+  const ext = event?.extendedProps || {};
+  const taskID = Number(ext?.taskId || 0);
+  if (!taskID) return '';
+  const instanceID = String(ext?.instanceId || event?.id || '').trim();
+  if (instanceID) {
+    return `${taskID}:${instanceID}`;
+  }
+  const start = dayjs(event?.start || '');
+  if (!start.isValid()) return '';
+  return `${taskID}:${start.utc().format('YYYYMMDD')}`;
+}
+
 export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusIndex = { cancelled: new Set(), present: null }) {
   const base = Array.isArray(serverEvents) ? serverEvents : [];
   const projected = Array.isArray(projectedEvents) ? projectedEvents : [];
   const projectedNonRecurringByTaskID = new Map();
-  const projectedRecurringByTaskID = new Map();
+  const projectedRecurring = [];
   const consumedNonRecurringTaskIDs = new Set();
-  const serverRecurringTaskIDs = new Set();
+  const serverRecurringInstanceKeys = new Set();
   const merged = [];
 
   projected.forEach((event) => {
@@ -333,9 +347,7 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
     if (!taskID) return;
     const isRecurring = !!event?.extendedProps?.isRecurring;
     if (isRecurring) {
-      const list = projectedRecurringByTaskID.get(taskID) || [];
-      list.push(event);
-      projectedRecurringByTaskID.set(taskID, list);
+      projectedRecurring.push(event);
       return;
     }
     projectedNonRecurringByTaskID.set(taskID, event);
@@ -344,17 +356,26 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
   base.forEach((event) => {
     const taskID = Number(event?.extendedProps?.taskId || 0);
     const serverStatus = event?.extendedProps?.status || 'pending';
+    const isRecurring = !!event?.extendedProps?.isRecurring;
     if (taskID && serverStatus === 'cancelled') {
+      if (isRecurring) {
+        const recurringKey = buildRecurringInstanceKey(event);
+        if (recurringKey) {
+          serverRecurringInstanceKeys.add(recurringKey);
+        }
+      }
       return;
     }
-    const isRecurring = !!event?.extendedProps?.isRecurring;
     if (!taskID) {
       merged.push(event);
       return;
     }
     if (isRecurring) {
-      // Server recurring instances are authoritative for this task.
-      serverRecurringTaskIDs.add(taskID);
+      // Server recurring instances are authoritative for the same instance key.
+      const recurringKey = buildRecurringInstanceKey(event);
+      if (recurringKey) {
+        serverRecurringInstanceKeys.add(recurringKey);
+      }
       merged.push(event);
       return;
     }
@@ -390,13 +411,13 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
 
   projectedNonRecurringByTaskID.forEach((event, taskID) => {
     if (consumedNonRecurringTaskIDs.has(taskID)) return;
-    if (serverRecurringTaskIDs.has(taskID)) return;
     merged.push(event);
   });
 
-  projectedRecurringByTaskID.forEach((eventsForTask, taskID) => {
-    if (serverRecurringTaskIDs.has(taskID)) return;
-    eventsForTask.forEach((event) => merged.push(event));
+  projectedRecurring.forEach((event) => {
+    const recurringKey = buildRecurringInstanceKey(event);
+    if (recurringKey && serverRecurringInstanceKeys.has(recurringKey)) return;
+    merged.push(event);
   });
 
   return merged;

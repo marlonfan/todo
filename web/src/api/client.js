@@ -67,6 +67,8 @@ function withTaskMutationHeaders(options = {}) {
 export const tasksAPI = {
   list: (params) => apiClient.get('/tasks', { params }),
   sync: (params) => apiClient.get('/tasks/sync', { params }),
+  listOccurrences: (params) => apiClient.get('/tasks/occurrences', { params }),
+  listNextOccurrences: (params) => apiClient.get('/tasks/next-occurrences', { params }),
   get: (id) => apiClient.get(`/tasks/${id}`),
   create: (data, options = {}) => apiClient.post('/tasks', data, withTaskMutationHeaders(options)),
   update: (id, data, options = {}) => apiClient.put(`/tasks/${id}`, data, withTaskMutationHeaders(options)),

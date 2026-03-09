@@ -6,6 +6,7 @@ import {
   upsertTask,
 } from './localStore';
 import { enqueueTaskOperation } from './syncEngine';
+import useCalendarCacheStore from '../stores/calendarCacheStore';
 
 function nowISO() {
   return new Date().toISOString();
@@ -66,6 +67,13 @@ async function invalidateCalendarCaches(queryClient, taskID = null, options = {}
   }
 }
 
+async function invalidateTaskOccurrenceQueries(queryClient) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+    queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+  ]);
+}
+
 function getCachedCategories(queryClient) {
   const value = queryClient.getQueryData(queryKeys.categories.all);
   return Array.isArray(value) ? value : [];
@@ -78,14 +86,34 @@ function resolveCategoriesFromIDs(queryClient, categoryIDs) {
   return categories.filter((item) => ids.includes(Number(item.id)));
 }
 
+function isOccurrenceScopedPayload(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  return !!(body.instance_id || body.occurrence_date);
+}
+
+function patchRecurringOccurrenceCalendarStatus(taskID, payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const status = String(body.status || '').trim();
+  if (!status) return;
+  useCalendarCacheStore.getState().patchTaskOccurrenceStatus({
+    taskID,
+    status,
+    instanceID: String(body.instance_id || '').trim(),
+    occurrenceDate: String(body.occurrence_date || '').trim(),
+  });
+}
+
 function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
   if (!currentTask) return currentTask;
   const { incrementRevision = true } = options;
   const currentRevision = Number(currentTask.revision || 1);
+  const occurrenceScoped = isOccurrenceScopedPayload(payload);
   const patch = {
     ...currentTask,
     title: typeof payload.title === 'string' ? payload.title : currentTask.title,
-    description: typeof payload.description === 'string' ? payload.description : currentTask.description,
+    description: occurrenceScoped
+      ? currentTask.description
+      : (typeof payload.description === 'string' ? payload.description : currentTask.description),
     priority: typeof payload.priority !== 'undefined' ? Number.parseInt(payload.priority, 10) || 0 : currentTask.priority,
     status: payload.status || currentTask.status,
     all_day: typeof payload.all_day === 'boolean' ? payload.all_day : currentTask.all_day,
@@ -156,13 +184,15 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
     localOnly = false,
     skipOptimistic = false,
     submitMeta: submitMetaInput = null,
+    awaitPersist = false,
   } = options;
   const submitMeta = normalizeSubmitMeta(submitMetaInput || {});
   let nextTask = null;
   let baseRevision = 0;
   if (!skipOptimistic) {
     setTasksCache(queryClient, (prev) => prev.map((task) => {
-      if (task.id !== taskID) return task;
+      if (!task || typeof task !== 'object') return task;
+      if (Number(task.id) !== Number(taskID)) return task;
       baseRevision = Number(task.revision || 1);
       nextTask = applyTaskPatch(task, payload, queryClient, {
         incrementRevision: !localOnly,
@@ -172,14 +202,14 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
   } else {
     const currentList = queryClient.getQueryData(queryKeys.tasks.all);
     const currentTask = Array.isArray(currentList)
-      ? currentList.find((task) => Number(task.id) === Number(taskID))
+      ? currentList.find((task) => Number(task?.id) === Number(taskID))
       : null;
     baseRevision = Number(currentTask?.revision || 1);
     nextTask = currentTask || null;
   }
 
   if (nextTask) {
-    runMutationSideEffects('updateTaskLocal', async () => {
+    const persistWork = async () => {
       if (!skipOptimistic) {
         await upsertTask(nextTask);
       }
@@ -195,11 +225,16 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
         }, { schedule: shouldScheduleSync });
       }
       await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
-    });
+    };
+    if (awaitPersist) {
+      await persistWork();
+    } else {
+      runMutationSideEffects('updateTaskLocal', persistWork);
+    }
     return nextTask;
   }
 
-  runMutationSideEffects('updateTaskLocalNoTask', async () => {
+  const persistNoTaskWork = async () => {
     if (!localOnly) {
       await enqueueTaskOperation({
         op_id: createOpID(),
@@ -212,24 +247,35 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
       }, { schedule: shouldScheduleSync });
     }
     await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
-  });
+  };
+  if (awaitPersist) {
+    await persistNoTaskWork();
+  } else {
+    runMutationSideEffects('updateTaskLocalNoTask', persistNoTaskWork);
+  }
 
   return nextTask;
 }
 
 export async function updateTaskStatusLocal(queryClient, taskID, statusInput, options = {}) {
   const submitMeta = normalizeSubmitMeta(options?.submitMeta || {});
+  const awaitPersist = !!options?.awaitPersist;
   const payload = typeof statusInput === 'string'
     ? { status: statusInput }
     : (statusInput || {});
+  const occurrenceScoped = isOccurrenceScopedPayload(payload);
 
   const shouldPatchBaseTask = !payload.instance_id && !payload.occurrence_date;
+  const shouldRevalidateCalendarQuery = typeof options?.revalidateCalendarQuery === 'boolean'
+    ? options.revalidateCalendarQuery
+    : shouldPatchBaseTask;
   let nextTask = null;
   let baseRevision = 0;
 
   if (shouldPatchBaseTask) {
     setTasksCache(queryClient, (prev) => prev.map((task) => {
-      if (task.id !== taskID) return task;
+      if (!task || typeof task !== 'object') return task;
+      if (Number(task.id) !== Number(taskID)) return task;
       nextTask = {
         ...task,
         status: payload.status || task.status,
@@ -251,7 +297,10 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
     }
   }
 
-  runMutationSideEffects('updateTaskStatusLocal', async () => {
+  const persistWork = async () => {
+    if (occurrenceScoped) {
+      patchRecurringOccurrenceCalendarStatus(taskID, payload);
+    }
     await enqueueTaskOperation({
       op_id: createOpID(),
       entity_type: 'task',
@@ -261,8 +310,14 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
       if_match_revision: shouldPatchBaseTask ? (baseRevision || undefined) : undefined,
       ...submitMeta,
     });
-    await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
-  });
+    await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: shouldRevalidateCalendarQuery });
+    await invalidateTaskOccurrenceQueries(queryClient);
+  };
+  if (awaitPersist) {
+    await persistWork();
+  } else {
+    runMutationSideEffects('updateTaskStatusLocal', persistWork);
+  }
 
   return nextTask;
 }
@@ -273,7 +328,8 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload, opti
   let baseRevision = 0;
 
   setTasksCache(queryClient, (prev) => prev.map((task) => {
-    if (task.id !== taskID) return task;
+    if (!task || typeof task !== 'object') return task;
+    if (Number(task.id) !== Number(taskID)) return task;
     baseRevision = Number(task.revision || 1);
     nextTask = {
       ...task,
@@ -323,11 +379,11 @@ export async function deleteTaskLocal(queryClient, taskID) {
   if (!numericID) return;
   const currentList = queryClient.getQueryData(queryKeys.tasks.all);
   const currentTask = Array.isArray(currentList)
-    ? currentList.find((task) => Number(task.id) === numericID)
+    ? currentList.find((task) => Number(task?.id) === numericID)
     : null;
   const baseRevision = Number(currentTask?.revision || 0);
 
-  setTasksCache(queryClient, (prev) => prev.filter((task) => task.id !== numericID));
+  setTasksCache(queryClient, (prev) => prev.filter((task) => Number(task?.id) !== numericID));
   runMutationSideEffects('deleteTaskLocal', async () => {
     await removeTask(numericID);
 
