@@ -64,6 +64,34 @@ function parseEventInTimezone(value, timezone) {
   return dayjs.tz(raw, timezone);
 }
 
+function resolveInclusiveEndDay(start, end) {
+  let endDay = end.startOf('day');
+  // Treat exact midnight as exclusive end for multi-day all-day events.
+  if (end.isSame(endDay) && end.isAfter(start)) {
+    endDay = endDay.subtract(1, 'day');
+  }
+  return endDay;
+}
+
+function getAllDayEventDates(event, timezone) {
+  const start = parseEventInTimezone(event?.start, timezone);
+  if (!start.isValid()) return [];
+  const rawEnd = event?.end ? parseEventInTimezone(event.end, timezone) : start.endOf('day');
+  const end = rawEnd.isValid() && rawEnd.isAfter(start) ? rawEnd : start.endOf('day');
+  const startDay = start.startOf('day');
+  const endDay = resolveInclusiveEndDay(start, end);
+  if (endDay.isBefore(startDay, 'day')) {
+    return [startDay];
+  }
+  const dates = [];
+  let current = startDay;
+  while (current.isBefore(endDay) || current.isSame(endDay, 'day')) {
+    dates.push(current);
+    current = current.add(1, 'day');
+  }
+  return dates;
+}
+
 function isReadonlyEvent(event) {
   return !!event?.extendedProps?.readOnly || String(event?.extendedProps?.source || '') === 'caldav';
 }
@@ -1492,10 +1520,13 @@ export default function InfiniteCalendarCanvas({
       if (!event?.allDay) return;
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return;
-      const dayKey = start.format('YYYY-MM-DD');
-      const list = allDayByDay.get(dayKey) || [];
-      list.push({ eventKey, event, start });
-      allDayByDay.set(dayKey, list);
+      const dates = getAllDayEventDates(event, timezone);
+      dates.forEach((date) => {
+        const dayKey = date.format('YYYY-MM-DD');
+        const list = allDayByDay.get(dayKey) || [];
+        list.push({ eventKey, event, start, dayKey });
+        allDayByDay.set(dayKey, list);
+      });
     });
 
     for (let i = startIndex; i < endIndex; i += 1) {
@@ -1563,7 +1594,7 @@ export default function InfiniteCalendarCanvas({
           : style;
         allDayEvents.push(
           <div
-            key={item.eventKey}
+            key={`${item.eventKey}::${dayKey}`}
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
             className={`canvas-event absolute z-30 overflow-hidden rounded px-1 text-[10px] leading-tight ${
@@ -1713,6 +1744,19 @@ export default function InfiniteCalendarCanvas({
     eventEntries.forEach(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return;
+      if (event?.allDay) {
+        const dates = getAllDayEventDates(event, timezone);
+        dates.forEach((date) => {
+          const weekIndex = date.startOf('week').diff(monthNativeStartWeek, 'week');
+          if (weekIndex < 0 || weekIndex >= monthNativeWeeksCount) return;
+          const day = date.day();
+          const key = `${weekIndex}|${day}`;
+          const list = byCell.get(key) || [];
+          list.push({ eventKey, event, start: date });
+          byCell.set(key, list);
+        });
+        return;
+      }
       const weekIndex = start.startOf('week').diff(monthNativeStartWeek, 'week');
       if (weekIndex < 0 || weekIndex >= monthNativeWeeksCount) return;
       const day = start.day();
@@ -1739,7 +1783,7 @@ export default function InfiniteCalendarCanvas({
         const readonly = isReadonlyEvent(item.event);
         monthEvents.push(
           <button
-            key={item.eventKey}
+            key={`${item.eventKey}::${weekIndex}|${day}`}
             type="button"
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
