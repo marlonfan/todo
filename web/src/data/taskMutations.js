@@ -103,6 +103,97 @@ function patchRecurringOccurrenceCalendarStatus(taskID, payload) {
   });
 }
 
+function normalizeOccurrenceDateText(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) {
+    return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  }
+  const dateLike = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (dateLike) {
+    return dateLike[1];
+  }
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) {
+    return new Date(parsed).toISOString().slice(0, 10);
+  }
+  return '';
+}
+
+function patchOccurrenceDescriptionInItems(items, taskID, scopedInstanceID, scopedDate, nextDescription) {
+  if (!Array.isArray(items) || items.length === 0) return items;
+  let changed = false;
+  const next = items.map((item) => {
+    const itemTaskID = Number(item?.task_id || item?.taskID || item?.source_task_id || item?.sourceTaskID || item?.id || 0);
+    if (!itemTaskID || itemTaskID !== taskID) return item;
+    const itemInstanceID = String(item?.instance_id || item?.instanceId || '').trim();
+    const itemDate = normalizeOccurrenceDateText(
+      item?.occurrence_date
+      || item?.occurrenceDate
+      || item?.original_date
+      || item?.originalDate
+      || item?.start_time
+      || item?.startTime
+      || '',
+    );
+    const scopedByInstance = !!(scopedInstanceID && itemInstanceID && scopedInstanceID === itemInstanceID);
+    const scopedByDate = !!(scopedDate && itemDate && scopedDate === itemDate);
+    if (!scopedByInstance && !scopedByDate) return item;
+    if (String(item?.description || '') === nextDescription) return item;
+    changed = true;
+    return {
+      ...item,
+      description: nextDescription,
+    };
+  });
+  return changed ? next : items;
+}
+
+function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
+  if (!queryClient || !payload || typeof payload !== 'object') return;
+  if (!Object.prototype.hasOwnProperty.call(payload, 'description')) return;
+  const nextDescription = String(payload?.description || '');
+  const scopedInstanceID = String(payload?.instance_id || '').trim();
+  const scopedDate = normalizeOccurrenceDateText(payload?.occurrence_date || '');
+  if (!scopedInstanceID && !scopedDate) return;
+
+  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
+    patchOccurrenceDescriptionInItems(prev, Number(taskID) || 0, scopedInstanceID, scopedDate, nextDescription)
+  ));
+
+  const occurrenceQueries = queryClient.getQueriesData({ queryKey: ['tasks', 'occurrences'] });
+  occurrenceQueries.forEach(([queryKey, value]) => {
+    if (Array.isArray(value)) {
+      const nextItems = patchOccurrenceDescriptionInItems(
+        value,
+        Number(taskID) || 0,
+        scopedInstanceID,
+        scopedDate,
+        nextDescription,
+      );
+      if (nextItems !== value) {
+        queryClient.setQueryData(queryKey, nextItems);
+      }
+      return;
+    }
+    if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return;
+    const nextItems = patchOccurrenceDescriptionInItems(
+      value.items,
+      Number(taskID) || 0,
+      scopedInstanceID,
+      scopedDate,
+      nextDescription,
+    );
+    if (nextItems !== value.items) {
+      queryClient.setQueryData(queryKey, {
+        ...value,
+        items: nextItems,
+      });
+    }
+  });
+}
+
 function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
   if (!currentTask) return currentTask;
   const { incrementRevision = true } = options;
@@ -187,6 +278,10 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
     awaitPersist = false,
   } = options;
   const submitMeta = normalizeSubmitMeta(submitMetaInput || {});
+  const occurrenceScoped = isOccurrenceScopedPayload(payload);
+  if (occurrenceScoped) {
+    patchRecurringOccurrenceDescription(queryClient, taskID, payload);
+  }
   let nextTask = null;
   let baseRevision = 0;
   if (!skipOptimistic) {

@@ -856,7 +856,11 @@ function TaskList({ forcedView = '' }) {
         occurrence_date: nextPending.occurrenceDate,
         occurrence_start: nextPending.startISO,
         occurrence_end: nextPending.endISO,
-        description: nextPending.description,
+        // Keep series description when occurrence payload doesn't provide one.
+        // Otherwise debounced autosave may rehydrate draft with an empty description.
+        description: String(nextPending.description || '').trim()
+          ? nextPending.description
+          : String(task?.description || ''),
         status: nextPending.status,
       }];
     });
@@ -2112,6 +2116,16 @@ function TaskList({ forcedView = '' }) {
       !!draftValue.all_day !== !!originalDraft?.all_day
       || String(draftValue.start_time || '') !== String(originalDraft?.start_time || '')
       || String(draftValue.end_time || '') !== String(originalDraft?.end_time || '');
+    const recurrenceRule = parseRecurrenceRule(taskValue?.recurrence_rule || taskValue?.recurrenceRule);
+    const scopedInstanceID = String(taskValue?.instance_id || taskValue?.instanceId || '').trim();
+    const scopedOccurrenceDate = resolveTaskOccurrenceDate(taskValue, timezone);
+    const hasOccurrenceContext = !!(
+      recurrenceRule
+      && (
+        /^\d+_\d{8}$/.test(scopedInstanceID)
+        || !!scopedOccurrenceDate
+      )
+    );
 
     const payload = {
       title: normalizedTitle,
@@ -2121,6 +2135,14 @@ function TaskList({ forcedView = '' }) {
       client_timezone: timezone,
       category_ids: (draftValue.category_ids || []).map((id) => Number.parseInt(id, 10)).filter((id) => !Number.isNaN(id)),
     };
+    if (hasOccurrenceContext) {
+      if (/^\d+_\d{8}$/.test(scopedInstanceID)) {
+        payload.instance_id = scopedInstanceID;
+      }
+      if (scopedOccurrenceDate) {
+        payload.occurrence_date = scopedOccurrenceDate;
+      }
+    }
 
     if (timeChanged || recurrenceChanged) {
       const fallbackTimeParts = getDefaultStartTimeParts();

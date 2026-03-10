@@ -205,6 +205,21 @@ function isOccurrenceScopedPayload(payload) {
   return !!(String(body.instance_id || '').trim() || String(body.occurrence_date || '').trim());
 }
 
+function shouldRefreshRecurringViewsForUpdatePayload(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  if (isOccurrenceScopedPayload(body)) return true;
+  const recurringViewKeys = [
+    'status',
+    'start_time',
+    'end_time',
+    'due_date',
+    'all_day',
+    'recurrence_rule',
+    'recurrence_end_date',
+  ];
+  return recurringViewKeys.some((key) => Object.prototype.hasOwnProperty.call(body, key));
+}
+
 async function refreshOccurrenceScopedViews(taskID) {
   const numericTaskID = Number(taskID || 0);
   if (numericTaskID > 0) {
@@ -257,7 +272,7 @@ async function executeOutboxOperation(op) {
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
       }
-      if (isOccurrenceScopedPayload(op?.payload)) {
+      if (shouldRefreshRecurringViewsForUpdatePayload(op?.payload)) {
         await refreshOccurrenceScopedViews(op?.entity_id);
       }
       return;
