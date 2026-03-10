@@ -163,9 +163,15 @@ func (r *NotificationRepository) DeleteUserSetting(id int64) error {
 
 func (r *NotificationRepository) GetDefaultSetting(userID int64) (*models.UserNotifySetting, error) {
 	var setting models.UserNotifySetting
-	err := r.db.Where("user_id = ? AND is_default = ?", userID, true).First(&setting).Error
+	err := r.db.
+		Where("user_id = ? AND is_default = ?", userID, true).
+		Limit(1).
+		Find(&setting).Error
 	if err != nil {
 		return nil, err
+	}
+	if setting.ID == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
 	return &setting, nil
 }
