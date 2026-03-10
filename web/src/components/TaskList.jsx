@@ -856,11 +856,7 @@ function TaskList({ forcedView = '' }) {
         occurrence_date: nextPending.occurrenceDate,
         occurrence_start: nextPending.startISO,
         occurrence_end: nextPending.endISO,
-        // Keep series description when occurrence payload doesn't provide one.
-        // Otherwise debounced autosave may rehydrate draft with an empty description.
-        description: String(nextPending.description || '').trim()
-          ? nextPending.description
-          : String(task?.description || ''),
+        description: nextPending.description,
         status: nextPending.status,
       }];
     });
