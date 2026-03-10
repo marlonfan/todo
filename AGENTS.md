@@ -20,6 +20,8 @@
 - `make test`: run backend tests (`go test -v ./...`).
 - `cd web && npm test`: run frontend tests with Node’s built-in test runner.
 - `cd web && npm run build`: run frontend tests and produce production bundle.
+- After each code adjustment, first stop the existing process on `8080`: `lsof -tiTCP:8080 -sTCP:LISTEN | xargs -r kill`.
+- Then start/restart the app with: `./build.sh && ./bin/todo-app`.
 
 ## Coding Style & Naming Conventions
 - Go: format with `gofmt`/`go fmt`; keep package names short and lowercase; tests in `*_test.go`.

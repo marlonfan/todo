@@ -1090,3 +1090,573 @@ body {
   color: #3b82f6 !important;
   background: transparent !important;
 }
+
+.react-datepicker-wrapper {
+  width: 100%;
+}
+
+.react-datepicker-popper {
+  z-index: 80 !important;
+}
+
+.react-datepicker {
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-family: "SF Pro Text", "PingFang SC", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif !important;
+}
+
+.react-datepicker__header {
+  background: #ffffff !important;
+  border-bottom: 1px solid #eef2f7 !important;
+  border-top-left-radius: 12px !important;
+  border-top-right-radius: 12px !important;
+}
+
+.react-datepicker__current-month {
+  color: #1f2937 !important;
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__day-name {
+  color: #6b7280 !important;
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__navigation {
+  top: 8px !important;
+}
+
+.task-datepicker-inline {
+  width: 100%;
+  border: 1px solid #dbe5f4;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.task-datepicker-inline .react-datepicker {
+  width: 100%;
+  border: 0 !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.task-datepicker-inline .react-datepicker__month-container {
+  width: 100%;
+}
+
+.task-datepicker-inline .react-datepicker__month {
+  margin: 0.4rem 0.55rem 0.45rem !important;
+}
+
+.task-datepicker-inline .react-datepicker__day-names {
+  margin-top: 0.12rem !important;
+}
+
+.task-datepicker-inline .react-datepicker__day-name,
+.task-datepicker-inline .react-datepicker__day,
+.task-datepicker-inline .react-datepicker__time-name {
+  width: 1.95rem;
+  margin: 0.08rem;
+}
+
+.task-datepicker-inline .react-datepicker__day {
+  height: 2.05rem;
+  line-height: 1;
+  border-radius: 999px;
+  color: #374151;
+  font-size: 0.82rem;
+}
+
+.task-datepicker-inline .react-datepicker__day:hover {
+  background: #e8f0fe !important;
+  color: #1a73e8 !important;
+}
+
+.task-datepicker-inline .react-datepicker__day--outside-month {
+  color: #b8c1cf !important;
+}
+
+.task-datepicker-inline .react-datepicker__day--outside-month:hover {
+  background: #f2f5fa !important;
+  color: #98a3b3 !important;
+}
+
+.task-datepicker-inline .react-datepicker__day--today {
+  color: #1a73e8 !important;
+  font-weight: 700 !important;
+  background: #eef5ff;
+}
+
+.task-datepicker-inline .react-datepicker__day--selected,
+.task-datepicker-inline .react-datepicker__day--keyboard-selected {
+  background: #1a73e8 !important;
+  color: #fff !important;
+}
+
+.task-datepicker-inline .react-datepicker__day--keyboard-selected:not(.react-datepicker__day--selected) {
+  background: transparent !important;
+  color: #374151 !important;
+}
+
+.task-datepicker-inline .react-datepicker__day--selected:hover,
+.task-datepicker-inline .react-datepicker__day--keyboard-selected:hover {
+  background: #1a73e8 !important;
+  color: #fff !important;
+}
+
+.task-datepicker-inline .react-datepicker__day--keyboard-selected:not(.react-datepicker__day--selected):hover {
+  background: #e8f0fe !important;
+  color: #1a73e8 !important;
+}
+
+.time-panel-card .task-datepicker-inline {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.time-panel-card .task-datepicker-inline .react-datepicker {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.time-panel-card .task-datepicker-inline .react-datepicker__header {
+  background: transparent !important;
+  border-bottom: 0 !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}
+
+.time-panel-card .task-datepicker-inline .react-datepicker__month {
+  margin: 0.25rem 0 0.35rem !important;
+}
+
+.time-panel-card .task-datepicker-inline .react-datepicker__day-names,
+.time-panel-card .task-datepicker-inline .react-datepicker__week {
+  display: flex;
+  margin: 0 !important;
+}
+
+.time-panel-card .task-datepicker-inline .react-datepicker__day-name,
+.time-panel-card .task-datepicker-inline .react-datepicker__day,
+.time-panel-card .task-datepicker-inline .react-datepicker__time-name {
+  flex: 1 1 0;
+  width: auto;
+  max-width: none;
+  margin: 0;
+}
+
+.time-panel-card .task-datepicker-inline .react-datepicker__day {
+  height: 2.05rem;
+}
+
+.time-panel-card {
+  border-radius: 18px !important;
+  border-color: #e7ecf3 !important;
+  background: #f7f9fc !important;
+  box-shadow: 0 10px 24px -20px rgba(15, 23, 42, 0.45) !important;
+}
+
+.time-panel-card .time-panel-toolbar {
+  border-bottom-color: #edf2f7 !important;
+}
+
+.time-panel-card .time-panel-toolbar .inline-flex {
+  border-color: #e5e7eb;
+  background: #f6f7f9;
+}
+
+.time-panel-card .time-panel-toolbar .inline-flex button {
+  min-width: 3.8rem;
+}
+
+.time-panel-card .react-datepicker__current-month {
+  text-align: left;
+  padding-left: 0.65rem;
+}
+
+.time-panel-card .react-datepicker {
+  background: transparent !important;
+}
+
+.time-panel-card .react-datepicker__navigation--previous {
+  left: auto !important;
+  right: 1.85rem !important;
+}
+
+.time-panel-card .react-datepicker__navigation--next {
+  right: 0.55rem !important;
+}
+
+.time-quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.time-quick-btn {
+  display: inline-flex;
+  height: 2.15rem;
+  width: 2.15rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.time-quick-btn:hover {
+  background: rgba(15, 23, 42, 0.14);
+  color: #0f172a;
+}
+
+.time-quick-btn:active {
+  background: rgba(15, 23, 42, 0.2);
+}
+
+.time-quick-btn svg {
+  color: inherit;
+}
+
+.task-datepicker-inline--datetime .react-datepicker__input-time-container {
+  width: 100%;
+  margin: 0 !important;
+  padding: 0.45rem 0 0.4rem !important;
+  border-top: 1px solid #edf2f7;
+  background: transparent;
+}
+
+.task-datepicker-inline--datetime .react-datepicker-time__caption {
+  display: none;
+}
+
+.task-datepicker-inline--datetime .react-datepicker-time__input-container {
+  width: 100%;
+  margin: 0 !important;
+}
+
+.task-datepicker-inline--datetime .react-datepicker-time__input {
+  display: flex;
+  width: 100%;
+  justify-content: stretch;
+}
+
+.task-datepicker-inline--datetime .react-datepicker-time__input > * {
+  width: 100%;
+}
+
+.task-solar-panel {
+  width: 100%;
+}
+
+.task-solar-time-row {
+  margin-top: 0.35rem;
+  border-top: 1px solid #edf2f7;
+  padding-top: 0.35rem;
+}
+
+.task-time-selectbox {
+  position: relative;
+  width: 100%;
+}
+
+.task-time-selectbox-trigger {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #d7e0f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0.34rem 0.6rem;
+  font-size: 0.8rem;
+  color: #1f2937;
+  line-height: 1.25;
+}
+
+.task-time-selectbox-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.task-time-selectbox-icon {
+  color: #64748b;
+  flex: 0 0 auto;
+}
+
+.task-time-selectbox-trigger:hover {
+  border-color: #c8d5ea;
+  background: #fcfdff;
+}
+
+.task-time-selectbox-trigger:focus-visible {
+  outline: none;
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.16);
+}
+
+.task-time-selectbox-chevron {
+  color: #64748b;
+  font-size: 0.74rem;
+  transition: transform 0.15s ease;
+}
+
+.task-time-selectbox-chevron--open {
+  transform: rotate(180deg);
+}
+
+.task-time-selectbox-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 12;
+  max-height: 9.25rem;
+  overflow: auto;
+  border: 1px solid #d7e0f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 24px -18px rgba(15, 23, 42, 0.45);
+}
+
+.task-time-selectbox-menu--floating {
+  position: fixed;
+  left: 0;
+  right: auto;
+  top: 0;
+  z-index: 130;
+  margin: 0;
+}
+
+.task-time-selectbox-option {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0.36rem 0.6rem;
+  text-align: left;
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.task-time-selectbox-option:hover {
+  background: #eef5ff;
+  color: #1a73e8;
+}
+
+.task-time-selectbox-option--active,
+.task-time-selectbox-option--active:hover {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.task-datepicker-day-with-lunar {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding-top: 2px;
+}
+
+.task-datepicker-day-solar {
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.task-datepicker-day-lunar {
+  font-size: 0.6rem;
+  color: #64748b;
+  line-height: 1;
+}
+
+.task-datepicker-inline .react-datepicker__day--selected .task-datepicker-day-lunar,
+.task-datepicker-inline .react-datepicker__day--keyboard-selected .task-datepicker-day-lunar {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.task-datepicker-lunar-mode {
+  width: 100%;
+}
+
+.task-lunar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.45rem 0.24rem;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.task-lunar-toolbar-btn {
+  display: inline-flex;
+  height: 1.65rem;
+  width: 1.65rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.task-lunar-toolbar-btn:hover {
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+
+.task-lunar-toolbar-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.task-lunar-toolbar-btn:disabled:hover {
+  background: transparent;
+  color: #64748b;
+}
+
+.task-lunar-toolbar-title {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #1f2937;
+  letter-spacing: 0.01em;
+}
+
+.task-lunar-panel {
+  width: 100%;
+  padding: 0.16rem 0.45rem 0.25rem;
+}
+
+.task-lunar-panel--inline {
+  padding-bottom: 0.2rem;
+}
+
+.task-lunar-weekdays,
+.task-lunar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+}
+
+.task-lunar-weekday {
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding-bottom: 0.16rem;
+}
+
+.task-lunar-day {
+  min-height: 2.05rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #374151;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0.08rem 0;
+}
+
+.task-lunar-day:hover {
+  background: #e8f0fe;
+  color: #1a73e8;
+}
+
+.task-lunar-day--outside {
+  color: #b8c1cf;
+}
+
+.task-lunar-day--outside:hover {
+  background: #f2f5fa;
+  color: #9aa6b6;
+}
+
+.task-lunar-day-solar {
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.task-lunar-day-lunar {
+  font-size: 0.58rem;
+  line-height: 1;
+  color: #64748b;
+}
+
+.task-lunar-day--outside .task-lunar-day-lunar {
+  color: #adb8c7;
+}
+
+.task-lunar-day--selected,
+.task-lunar-day--selected:hover {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.task-lunar-day--selected .task-lunar-day-lunar,
+.task-lunar-day--selected:hover .task-lunar-day-lunar {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.task-lunar-time-row {
+  margin-top: 0.35rem;
+  border-top: 1px solid #edf2f7;
+  padding-top: 0.35rem;
+}
+
+.task-lunar-time-row .task-time-selectbox {
+  width: 100%;
+}
+
+.time-panel-card .task-datepicker-inline.task-datepicker-lunar-mode {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.time-panel-card .task-datepicker-inline.task-datepicker-lunar-mode .task-lunar-toolbar {
+  border-bottom: 0;
+  padding: 0.02rem 0.05rem 0.16rem;
+}
+
+.time-panel-card .task-datepicker-inline.task-datepicker-lunar-mode .task-lunar-panel {
+  padding: 0.14rem 0 0.2rem;
+}
+
+@media (max-width: 640px) {
+  .task-datepicker-inline .react-datepicker__day-name,
+  .task-datepicker-inline .react-datepicker__day,
+  .task-datepicker-inline .react-datepicker__time-name {
+    width: 1.82rem;
+  }
+
+  .task-datepicker-inline .react-datepicker__day {
+    height: 1.9rem;
+  }
+
+  .time-panel-card .time-panel-toolbar .inline-flex button {
+    min-width: 3.5rem;
+  }
+}

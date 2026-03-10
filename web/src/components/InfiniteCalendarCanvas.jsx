@@ -41,7 +41,8 @@ function clampDurationMinutes(start, end) {
   const s = dayjs(start);
   const e = dayjs(end || start);
   const diff = e.diff(s, 'minute');
-  return Math.max(15, Number.isFinite(diff) ? diff : 30);
+  const normalized = Number.isFinite(diff) ? diff : 30;
+  return Math.max(15, Math.min(24 * 60, normalized));
 }
 
 function parseEventInTimezone(value, timezone) {
@@ -1308,23 +1309,53 @@ export default function InfiniteCalendarCanvas({
     const nowDotX = TIME_AXIS_WIDTH + (nowDayIndex - cameraSteps) * dayWidth;
     const currentTimeLabel = nowLocal.format('HH:mm');
 
-    const timedByDay = new Map();
+    const renderWindowStart = reference.add(startIndex, 'day').startOf('day');
+    const renderWindowEndExclusive = reference.add(endIndex, 'day').startOf('day');
+
+    const timedSegments = [];
     eventEntries.forEach(({ key: eventKey, event }) => {
       const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid() || event?.allDay) return;
-      const dayKey = start.format('YYYY-MM-DD');
-      const list = timedByDay.get(dayKey) || [];
-      const end = event?.end ? parseEventInTimezone(event.end, timezone) : start.add(30, 'minute');
-      list.push({
-        eventKey,
-        event,
-        start,
-        end: end.isAfter(start) ? end : start.add(30, 'minute'),
-      });
-      timedByDay.set(dayKey, list);
+      const rawEnd = event?.end ? parseEventInTimezone(event.end, timezone) : start.add(30, 'minute');
+      const end = rawEnd.isAfter(start) ? rawEnd : start.add(30, 'minute');
+
+      let cursor = start.startOf('day');
+      while (cursor.isBefore(end)) {
+        const nextDay = cursor.add(1, 'day');
+        const segmentStart = start.isAfter(cursor) ? start : cursor;
+        const segmentEnd = end.isBefore(nextDay) ? end : nextDay;
+        if (segmentEnd.isAfter(segmentStart)) {
+          const intersectsWindow = segmentEnd.isAfter(renderWindowStart)
+            && segmentStart.isBefore(renderWindowEndExclusive);
+          if (intersectsWindow) {
+            const clampedStart = segmentStart.isBefore(renderWindowStart) ? renderWindowStart : segmentStart;
+            const clampedEnd = segmentEnd.isAfter(renderWindowEndExclusive) ? renderWindowEndExclusive : segmentEnd;
+            if (clampedEnd.isAfter(clampedStart)) {
+              const dayKey = clampedStart.format('YYYY-MM-DD');
+              timedSegments.push({
+                segmentKey: `${eventKey}::${dayKey}`,
+                eventKey,
+                event,
+                dayKey,
+                start: clampedStart,
+                end: clampedEnd,
+                isTailSegment: segmentEnd.isSame(end),
+              });
+            }
+          }
+        }
+        cursor = nextDay;
+      }
     });
 
-    const layoutByEventKey = new Map();
+    const timedByDay = new Map();
+    timedSegments.forEach((segment) => {
+      const list = timedByDay.get(segment.dayKey) || [];
+      list.push(segment);
+      timedByDay.set(segment.dayKey, list);
+    });
+
+    const layoutBySegmentKey = new Map();
     timedByDay.forEach((list) => {
       const sorted = [...list].sort((a, b) => {
         const diff = a.start.valueOf() - b.start.valueOf();
@@ -1338,7 +1369,7 @@ export default function InfiniteCalendarCanvas({
       const finalizeCluster = () => {
         if (!clusterItems.length) return;
         clusterItems.forEach((item) => {
-          layoutByEventKey.set(String(item.eventKey), { col: item.col, cols: clusterMaxCols });
+          layoutBySegmentKey.set(String(item.segmentKey), { col: item.col, cols: clusterMaxCols });
         });
         clusterItems.length = 0;
         clusterMaxCols = 0;
@@ -1362,23 +1393,19 @@ export default function InfiniteCalendarCanvas({
       finalizeCluster();
     });
 
-    const blocks = eventEntries.flatMap(({ key: eventKey, event }) => {
-      const start = parseEventInTimezone(event?.start, timezone);
-      if (!start.isValid()) return [];
-      const allDay = !!event?.allDay;
-      if (allDay) return [];
-      const dayIndex = start.startOf('day').diff(reference, 'day');
+    const blocks = timedSegments.map((segment) => {
+      const dayIndex = segment.start.startOf('day').diff(reference, 'day');
       const columnBaseLeft = TIME_AXIS_WIDTH + (dayIndex - cameraSteps) * dayWidth + 2;
       const slotWidth = Math.max(20, dayWidth - 6);
-      const layout = layoutByEventKey.get(String(eventKey)) || { col: 0, cols: 1 };
+      const layout = layoutBySegmentKey.get(String(segment.segmentKey)) || { col: 0, cols: 1 };
       const cols = Math.max(1, layout.cols || 1);
       const col = Math.max(0, Math.min(cols - 1, layout.col || 0));
       const colWidth = slotWidth / cols;
       const x = columnBaseLeft + col * colWidth;
       const width = Math.max(18, colWidth - 2);
-      const minuteOfDay = start.hour() * 60 + start.minute();
+      const minuteOfDay = segment.start.hour() * 60 + segment.start.minute();
       const y = timeGridBodyTop + (minuteOfDay / 60) * HOUR_HEIGHT + 1;
-      const durationMin = clampDurationMinutes(event.start, event.end);
+      const durationMin = clampDurationMinutes(segment.start, segment.end);
       const h = Math.max(18, (durationMin / 60) * HOUR_HEIGHT - 2);
       const contentHeight = Math.max(12, h - 4);
       const lineHeight = 14;
@@ -1399,11 +1426,13 @@ export default function InfiniteCalendarCanvas({
             lineHeight: `${lineHeight}px`,
             wordBreak: 'break-word',
           };
-      const status = event?.extendedProps?.status || 'pending';
-      const readonly = isReadonlyEvent(event);
-      return [{
-        eventKey,
-        event,
+      const status = segment.event?.extendedProps?.status || 'pending';
+      const readonly = isReadonlyEvent(segment.event);
+      return {
+        blockKey: segment.segmentKey,
+        eventKey: segment.eventKey,
+        event: segment.event,
+        resizable: segment.isTailSegment,
         style: {
           left: x,
           top: y,
@@ -1418,7 +1447,7 @@ export default function InfiniteCalendarCanvas({
               : 'bg-blue-600/80 text-white'
         }`,
         titleStyle,
-      }];
+      };
     });
 
     return (
@@ -1457,7 +1486,7 @@ export default function InfiniteCalendarCanvas({
               />
             </>
           )}
-          {blocks.map(({ eventKey, event, style, className, titleStyle }) => {
+          {blocks.map(({ blockKey, eventKey, event, resizable, style, className, titleStyle }) => {
             const isDraggingThis = dragVisual && String(dragVisual.eventKey) === String(eventKey);
             const readonly = isReadonlyEvent(event);
             const visualStyle = isDraggingThis
@@ -1472,7 +1501,7 @@ export default function InfiniteCalendarCanvas({
               : style;
             return (
             <div
-              key={eventKey}
+              key={blockKey}
               data-event-key={eventKey}
               data-event-id={event.id}
               className={`${className} ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
@@ -1483,7 +1512,7 @@ export default function InfiniteCalendarCanvas({
               }}
             >
               <span className="block" style={titleStyle}>{event.title || 'Untitled'}</span>
-              {!readonly && !event?.allDay && (
+              {!readonly && !event?.allDay && resizable && (
                 <span
                   className="canvas-event-resize absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize"
                   style={{ touchAction: 'none' }}

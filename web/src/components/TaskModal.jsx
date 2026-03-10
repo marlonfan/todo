@@ -12,8 +12,28 @@ import {
 } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconHistory, IconRepeat, IconRepeatOff, IconTag } from './icons/TaskIcons';
+import {
+  buildLunarYearlyRuleFromSelection,
+  coerceLunarSelection,
+  lunarSelectionFromLocalInput,
+  solarDateFromLunarSelection,
+  LUNAR_TIMEZONE,
+  parseLunarYearlyRule,
+} from '../utils/lunar';
+import {
+  IconCalendar,
+  IconClock,
+  IconFlag,
+  IconHistory,
+  IconMoon,
+  IconRepeat,
+  IconRepeatOff,
+  IconSun,
+  IconSunrise,
+  IconTag,
+} from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import { useCategoriesQuery } from '../query/hooks';
 import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
@@ -64,6 +84,27 @@ function getDefaultStartParts() {
   const start = normalizeTaskStartTime(getStoredUser().default_task_start_time);
   const [hour, minute] = start.split(':').map((v) => Number.parseInt(v, 10));
   return { hour: Number.isFinite(hour) ? hour : 9, minute: Number.isFinite(minute) ? minute : 0 };
+}
+
+function roundToHalfHour(timeValue) {
+  let current = timeValue.second(0).millisecond(0);
+  const minute = current.minute();
+  if (minute < 15) {
+    current = current.minute(0);
+  } else if (minute < 45) {
+    current = current.minute(30);
+  } else {
+    current = current.add(1, 'hour').minute(0);
+  }
+  return current;
+}
+
+function buildDefaultRangeAroundNow(timezoneName) {
+  const center = roundToHalfHour(dayjs().tz(timezoneName));
+  return {
+    start: center.subtract(30, 'minute').format('YYYY-MM-DDTHH:mm'),
+    end: center.add(30, 'minute').format('YYYY-MM-DDTHH:mm'),
+  };
 }
 
 function parseInputInTimezone(value, timezoneName) {
@@ -197,6 +238,12 @@ function coerceEndNotBeforeStart(startInput, endInput, timezoneName) {
   return endInput || '';
 }
 
+function buildEndFromStart(startInput, timezoneName, minutes = 60) {
+  const start = parseInputInTimezone(startInput, timezoneName);
+  if (!start) return '';
+  return start.add(minutes, 'minute').format('YYYY-MM-DDTHH:mm');
+}
+
 function parseLocalInput(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -204,11 +251,21 @@ function parseLocalInput(value) {
   return parsed.isValid() ? parsed : null;
 }
 
+function splitDatePart(value) {
+  return value && value.includes('T') ? value.split('T')[0] : value || '';
+}
+
 function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
   const start = parseLocalInput(startInput);
   const end = parseLocalInput(endInput);
   if (!start && !end) return noDateLabel;
   if (!isAllDay) {
+    if (start && end) {
+      if (start.isSame(end, 'day')) {
+        return `${start.format('MM/DD HH:mm')}-${end.format('HH:mm')}`;
+      }
+      return `${start.format('MM/DD HH:mm')}-${end.format('MM/DD HH:mm')}`;
+    }
     if (start) return start.format('MM/DD HH:mm');
     return end.format('MM/DD HH:mm');
   }
@@ -231,8 +288,14 @@ function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, f
   return `${firstLabel}+${selected.length - 1}`;
 }
 
-function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t) {
+function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, lunarSelection = null) {
   if (!enabled) return t('task.repeatOff');
+  if (recurrenceType === 'lunar') {
+    const month = Number.parseInt(lunarSelection?.month, 10) || 1;
+    const day = Number.parseInt(lunarSelection?.day, 10) || 1;
+    const leap = !!lunarSelection?.isLeapMonth;
+    return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
+  }
   if (recurrenceType === 'biweekly') {
     const label = t('task.biweekly');
     const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
@@ -280,19 +343,59 @@ function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
   return 1;
 }
 
-function parseRecurrenceSelection(rule) {
-  if (!rule) return { type: 'daily', days: [], monthDate: 1 };
+function parseRecurrenceSelection(rule, fallbackStartInput = '') {
+  const fallbackLunar = parseLunarYearlyRule({ freq: 'lunar_yearly' }, fallbackStartInput) || {
+    year: dayjs().tz(LUNAR_TIMEZONE).year(),
+    month: 1,
+    day: 1,
+    isLeapMonth: false,
+  };
+  if (!rule) {
+    return {
+      type: 'daily',
+      days: [],
+      monthDate: 1,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
+  }
   const freq = String(rule.freq || 'daily').trim().toLowerCase();
   const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
   const byDay = normalizeByDayList(rule.byday || rule.byDay);
-  const monthDate = resolveMonthlyDateFromRule(rule, '');
+  const monthDate = resolveMonthlyDateFromRule(rule, fallbackStartInput);
+  if (freq === 'lunar_yearly' || freq === 'lunar') {
+    const lunar = parseLunarYearlyRule(rule, fallbackStartInput) || fallbackLunar;
+    return {
+      type: 'lunar',
+      days: [],
+      monthDate,
+      lunarYear: lunar.year,
+      lunarMonth: lunar.month,
+      lunarDay: lunar.day,
+      lunarIsLeapMonth: lunar.isLeapMonth,
+    };
+  }
   if (freq === 'weekly' && interval === 2) {
-    return { type: 'biweekly', days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)), monthDate };
+    return {
+      type: 'biweekly',
+      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+      monthDate,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
   }
   return {
     type: freq || 'daily',
     days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
     monthDate,
+    lunarYear: fallbackLunar.year,
+    lunarMonth: fallbackLunar.month,
+    lunarDay: fallbackLunar.day,
+    lunarIsLeapMonth: fallbackLunar.isLeapMonth,
   };
 }
 
@@ -309,6 +412,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [monthlyDate, setMonthlyDate] = useState(1);
   const [showCustomRecurrenceMenu, setShowCustomRecurrenceMenu] = useState(false);
   const [showMonthlyDatePicker, setShowMonthlyDatePicker] = useState(false);
+  const [timeRangeEnabled, setTimeRangeEnabled] = useState(false);
+  const [timeRangeEditing, setTimeRangeEditing] = useState('start');
+  const [timeCalendarMode, setTimeCalendarMode] = useState('solar');
+  const [startLunarYear, setStartLunarYear] = useState(dayjs().tz(LUNAR_TIMEZONE).year());
+  const [startLunarMonth, setStartLunarMonth] = useState(1);
+  const [startLunarDay, setStartLunarDay] = useState(1);
+  const [startLunarIsLeapMonth, setStartLunarIsLeapMonth] = useState(false);
+  const [endLunarYear, setEndLunarYear] = useState(dayjs().tz(LUNAR_TIMEZONE).year());
+  const [endLunarMonth, setEndLunarMonth] = useState(1);
+  const [endLunarDay, setEndLunarDay] = useState(1);
+  const [endLunarIsLeapMonth, setEndLunarIsLeapMonth] = useState(false);
+  const [recurrenceLunarYear, setRecurrenceLunarYear] = useState(dayjs().tz(LUNAR_TIMEZONE).year());
+  const [recurrenceLunarMonth, setRecurrenceLunarMonth] = useState(1);
+  const [recurrenceLunarDay, setRecurrenceLunarDay] = useState(1);
+  const [recurrenceLunarIsLeapMonth, setRecurrenceLunarIsLeapMonth] = useState(false);
   const [timeTouched, setTimeTouched] = useState(false);
   const [parsePreview, setParsePreview] = useState('');
   const [basicPanel, setBasicPanel] = useState('');
@@ -318,7 +436,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const basicPanelRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const timeGranularity = getUserTimeGranularity();
-  const timeInputStepSeconds = timeGranularity * 60;
 
   const isEditing = !!task;
   const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
@@ -376,13 +493,51 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     : hasCategoryValue
       ? 'text-indigo-600 hover:bg-indigo-50'
       : 'text-slate-500 hover:bg-slate-100';
-  const recurrenceSummaryLabel = buildRecurrenceSummaryLabel(showRecurrence, recurrenceType, selectedDays, t);
+  const recurrenceSummaryLabel = buildRecurrenceSummaryLabel(showRecurrence, recurrenceType, selectedDays, t, {
+    month: recurrenceLunarMonth,
+    day: recurrenceLunarDay,
+    isLeapMonth: recurrenceLunarIsLeapMonth,
+  });
   const recurrenceButtonClass = basicPanel === 'recurrence'
     ? 'bg-slate-100 text-slate-700'
     : showRecurrence
       ? 'text-emerald-600 hover:bg-emerald-50'
       : 'text-slate-500 hover:bg-slate-100';
   const isCustomRecurrenceType = recurrenceType === 'biweekly' || recurrenceType === 'lunar';
+  const recurrenceLunarPickerDate = (
+    solarDateFromLunarSelection({
+      year: recurrenceLunarYear,
+      month: recurrenceLunarMonth,
+      day: recurrenceLunarDay,
+      isLeapMonth: recurrenceLunarIsLeapMonth,
+    })
+    || splitDatePart(startInputValue || '')
+    || dayjs().tz(getUserTimezone()).format('YYYY-MM-DD')
+  );
+
+  const normalizeSelectionByYear = (selection) => coerceLunarSelection(selection, dayjs().tz(LUNAR_TIMEZONE).year());
+  const handleStartDateTimeChange = (nextValue) => {
+    const nextStart = String(nextValue || '');
+    const timezoneName = getUserTimezone();
+    const currentEnd = String(getValues('end_time') || '');
+    setValue('start_time', nextStart, { shouldDirty: true });
+    if (timeRangeEnabled) {
+      if (nextStart && currentEnd) {
+        const alignedEnd = coerceEndNotBeforeStart(nextStart, currentEnd, timezoneName);
+        if (alignedEnd !== currentEnd) {
+          setValue('end_time', alignedEnd, { shouldDirty: true });
+        }
+      }
+    } else if (currentEnd) {
+      setValue('end_time', '', { shouldDirty: true });
+    }
+    setTimeTouched(true);
+  };
+  const handleEndDateTimeChange = (nextValue) => {
+    setValue('end_time', String(nextValue || ''), { shouldDirty: true });
+    setTimeTouched(true);
+  };
+
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
   useEffect(() => {
@@ -419,6 +574,26 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     }
   }, [showRecurrence, recurrenceType]);
 
+  useEffect(() => {
+    const lunar = lunarSelectionFromLocalInput(startInputValue, !!isAllDay, LUNAR_TIMEZONE);
+    if (!lunar) return;
+    const normalized = normalizeSelectionByYear(lunar);
+    setStartLunarYear(normalized.year);
+    setStartLunarMonth(normalized.month);
+    setStartLunarDay(normalized.day);
+    setStartLunarIsLeapMonth(normalized.isLeapMonth);
+  }, [isAllDay, startInputValue]);
+
+  useEffect(() => {
+    const lunar = lunarSelectionFromLocalInput(endInputValue, !!isAllDay, LUNAR_TIMEZONE);
+    if (!lunar) return;
+    const normalized = normalizeSelectionByYear(lunar);
+    setEndLunarYear(normalized.year);
+    setEndLunarMonth(normalized.month);
+    setEndLunarDay(normalized.day);
+    setEndLunarIsLeapMonth(normalized.isLeapMonth);
+  }, [endInputValue, isAllDay]);
+
   const applyQuickDatePreset = (preset) => {
     if (preset === 'clear') {
       setValue('start_time', '');
@@ -444,7 +619,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
     if (isAllDay) {
       setValue('start_time', target.format('YYYY-MM-DD'));
-      setValue('end_time', '');
+      if (timeRangeEnabled) {
+        setValue('end_time', target.format('YYYY-MM-DD'));
+      } else {
+        setValue('end_time', '');
+      }
       setTimeTouched(true);
       return;
     }
@@ -456,17 +635,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     const nextEndInput = shiftedEnd || coerceEndNotBeforeStart(nextStartInput, currentEndInput, timezoneName);
 
     setValue('start_time', nextStartInput);
-    if (nextEndInput !== currentEndInput) {
-      setValue('end_time', nextEndInput);
+    if (timeRangeEnabled) {
+      if (nextEndInput !== currentEndInput) {
+        setValue('end_time', nextEndInput);
+      }
+    } else if (currentEndInput) {
+      setValue('end_time', '');
     }
     setTimeTouched(true);
   };
 
-  const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
-
   useEffect(() => {
     setTimeTouched(false);
     setParsePreview('');
+    setTimeRangeEditing('start');
+    setTimeCalendarMode('solar');
     
     if (task) {
       // 编辑模式：填充表单数据
@@ -513,7 +696,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       }
       let startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
       let endInput = endTime ? toInputFormat(endTime, null, allDay) : '';
-      const parsedSelection = parseRecurrenceSelection(recurrenceRule);
+      const parsedSelection = parseRecurrenceSelection(recurrenceRule, startInput);
       if (
         !allDay
         && (parsedSelection.type === 'weekly' || parsedSelection.type === 'biweekly')
@@ -536,12 +719,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setValue('start_time', startInput || '');
       setValue('end_time', endInput || '');
       setValue('all_day', allDay || false);
+      setTimeRangeEnabled(!!endInput);
       
       // 处理重复规则
       setShowRecurrence(false);
       setRecurrenceType('daily');
       setSelectedDays([]);
       setMonthlyDate(resolveMonthlyDateFromRule(null, startInput));
+      const fallbackRecurrenceLunar = parseLunarYearlyRule(
+        { freq: 'lunar_yearly' },
+        startInput || getDefaultStartInputValue(getUserTimezone()),
+      ) || { year: dayjs().tz(LUNAR_TIMEZONE).year(), month: 1, day: 1, isLeapMonth: false };
+      setRecurrenceLunarYear(fallbackRecurrenceLunar.year);
+      setRecurrenceLunarMonth(fallbackRecurrenceLunar.month);
+      setRecurrenceLunarDay(fallbackRecurrenceLunar.day);
+      setRecurrenceLunarIsLeapMonth(fallbackRecurrenceLunar.isLeapMonth);
       setShowCustomRecurrenceMenu(false);
       setShowMonthlyDatePicker(false);
       if (recurrenceRule) {
@@ -549,6 +741,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         setRecurrenceType(parsedSelection.type);
         setSelectedDays(parsedSelection.days);
         setMonthlyDate(resolveMonthlyDateFromRule(recurrenceRule, startInput));
+        setRecurrenceLunarYear(Number.parseInt(parsedSelection.lunarYear, 10) || fallbackRecurrenceLunar.year);
+        setRecurrenceLunarMonth(Number.parseInt(parsedSelection.lunarMonth, 10) || fallbackRecurrenceLunar.month);
+        setRecurrenceLunarDay(Number.parseInt(parsedSelection.lunarDay, 10) || fallbackRecurrenceLunar.day);
+        setRecurrenceLunarIsLeapMonth(!!parsedSelection.lunarIsLeapMonth);
         if (parsedSelection.type === 'biweekly' || parsedSelection.type === 'lunar') {
           setShowCustomRecurrenceMenu(true);
         }
@@ -566,12 +762,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setRecurrenceType('daily');
       setSelectedDays([]);
       setMonthlyDate(1);
+      const fallbackLunarSelection = parseLunarYearlyRule(
+        { freq: 'lunar_yearly' },
+        initialRange?.start || getDefaultStartInputValue(getUserTimezone()),
+      ) || { year: dayjs().tz(LUNAR_TIMEZONE).year(), month: 1, day: 1, isLeapMonth: false };
+      setRecurrenceLunarYear(fallbackLunarSelection.year);
+      setRecurrenceLunarMonth(fallbackLunarSelection.month);
+      setRecurrenceLunarDay(fallbackLunarSelection.day);
+      setRecurrenceLunarIsLeapMonth(fallbackLunarSelection.isLeapMonth);
       setShowCustomRecurrenceMenu(false);
       setShowMonthlyDatePicker(false);
       if (initialRange?.start) {
         setValue('all_day', !!initialRange.allDay);
         setValue('start_time', initialRange.start);
         setValue('end_time', initialRange.end || '');
+        setTimeRangeEnabled(!!initialRange.end);
         setMonthlyDate(clampMonthlyDate(dayjs(initialRange.start).date(), 1));
       } else {
         const timezone = getUserTimezone();
@@ -579,6 +784,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         setValue('start_time', defaultStart);
         setValue('end_time', '');
         setValue('all_day', false);
+        setTimeRangeEnabled(false);
         setMonthlyDate(clampMonthlyDate(dayjs(defaultStart).date(), 1));
       }
       setValue('priority', '0');
@@ -692,7 +898,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           || String(task?.occurrenceStart || task?.occurrence_start || '').trim()
         )
       );
-      const existingRecurrenceSelection = parseRecurrenceSelection(existingRecurrenceRule);
+      const existingRecurrenceSelection = parseRecurrenceSelection(
+        existingRecurrenceRule,
+        toInputFormat(task?.start_time || task?.startTime || task?.due_date || task?.dueDate || '', null, !!data.all_day),
+      );
       const normalizedExistingDays = (existingRecurrenceSelection.days || [])
         .map((day) => String(day || '').toUpperCase())
         .filter((day) => WEEKDAY_ONLY_RE.test(day))
@@ -701,6 +910,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         .map((day) => String(day || '').toUpperCase())
         .filter((day) => WEEKDAY_ONLY_RE.test(day))
         .sort();
+      const normalizedExistingLunar = {
+        month: Number.parseInt(existingRecurrenceSelection.lunarMonth, 10) || 1,
+        day: Number.parseInt(existingRecurrenceSelection.lunarDay, 10) || 1,
+        leap: !!existingRecurrenceSelection.lunarIsLeapMonth,
+      };
+      const normalizedCurrentLunar = {
+        month: Number.parseInt(recurrenceLunarMonth, 10) || 1,
+        day: Number.parseInt(recurrenceLunarDay, 10) || 1,
+        leap: !!recurrenceLunarIsLeapMonth,
+      };
       const recurrenceChanged = isEditing && (
         showRecurrence !== !!existingRecurrenceRule
         || (showRecurrence && (
@@ -708,6 +927,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           || JSON.stringify(normalizedSelectedDays) !== JSON.stringify(normalizedExistingDays)
           || ((recurrenceType || 'daily') === 'monthly'
             && clampMonthlyDate(monthlyDate) !== clampMonthlyDate(existingRecurrenceSelection.monthDate, 1))
+          || ((recurrenceType || 'daily') === 'lunar' && (
+            normalizedCurrentLunar.month !== normalizedExistingLunar.month
+            || normalizedCurrentLunar.day !== normalizedExistingLunar.day
+            || normalizedCurrentLunar.leap !== normalizedExistingLunar.leap
+          ))
         ))
       );
       const shouldFallbackScheduleFromTask = recurrenceChanged && !timeTouched;
@@ -846,8 +1070,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         const normalizedDays = selectedDays
           .map((day) => String(day || '').toUpperCase())
           .filter((day) => WEEKDAY_ONLY_RE.test(day));
-        const rule = { freq: recurrenceType, interval: 1 };
-        if (recurrenceType === 'biweekly') {
+        let rule = { freq: recurrenceType, interval: 1 };
+        if (recurrenceType === 'lunar') {
+          const normalizedSelection = coerceLunarSelection({
+            year: recurrenceLunarYear,
+            month: recurrenceLunarMonth,
+            day: recurrenceLunarDay,
+            isLeapMonth: recurrenceLunarIsLeapMonth,
+          });
+          rule = buildLunarYearlyRuleFromSelection(normalizedSelection);
+        } else if (recurrenceType === 'biweekly') {
           rule.freq = 'weekly';
           rule.interval = 2;
           rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
@@ -1222,7 +1454,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       title={timeButtonTitle}
                     >
                       <IconClock className="h-4 w-4" />
-                      <span className="w-20 truncate text-left text-[11px] leading-4">{timeSummaryLabel}</span>
+                      <span className="max-w-[11.5rem] truncate text-left text-[11px] leading-4">{timeSummaryLabel}</span>
                       {hasParsedTimeHint && (
                         <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
                       )}
@@ -1258,118 +1490,206 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   )}
 
                   {basicPanel === 'time' && (
-                    <div className="absolute left-0 top-10 z-20 w-[min(30rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <div className="mb-3 flex items-center justify-between">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.startTime')}</div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setValue('all_day', !isAllDay, { shouldDirty: true });
-                            setTimeTouched(true);
-                          }}
-                          className={`rounded-full border px-2.5 py-1 text-xs ${
-                            isAllDay
-                              ? 'border-blue-300 bg-blue-50 text-blue-700'
-                              : 'border-slate-200 bg-white text-slate-500'
-                          }`}
-                        >
-                          {t('task.allDay')}
-                        </button>
-                      </div>
-                      <div className="mb-3 flex flex-wrap gap-2">
-                        <button type="button" onClick={() => applyQuickDatePreset('today')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickToday')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('tomorrow')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickTomorrow')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('tonight')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickTonight')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('next_week')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                          {t('task.quickNextWeek')}
-                        </button>
-                        <button type="button" onClick={() => applyQuickDatePreset('clear')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50">
-                          {t('task.clearDate')}
-                        </button>
-                      </div>
-                      {isAllDay ? (
-                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                          <div>
-                            <label className="form-label">{t('task.startTime')}</label>
-                            <input
-                              type="date"
-                              value={splitDatePart(startInputValue)}
-                              onChange={(e) => {
-                                const nextStart = e.target.value || '';
-                                const currentEnd = splitDatePart(getValues('end_time') || '');
-                                setValue('start_time', nextStart);
-                                if (nextStart && currentEnd) {
-                                  const startDay = parseLocalInput(nextStart);
-                                  const endDay = parseLocalInput(currentEnd);
-                                  if (startDay && endDay && endDay.isBefore(startDay, 'day')) {
-                                    setValue('end_time', nextStart);
-                                  }
-                                }
+                    <div className="time-panel-card absolute left-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg">
+                      <div className="time-panel-toolbar mb-2 space-y-1.5 border-b border-slate-100 pb-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTimeRangeEnabled(false);
+                                setTimeRangeEditing('start');
+                                setValue('end_time', '', { shouldDirty: true });
                                 setTimeTouched(true);
                               }}
-                              className="form-input"
-                            />
-                          </div>
-                          <div>
-                            <label className="form-label">{t('task.endTime')}</label>
-                            <input
-                              type="date"
-                              value={splitDatePart(endInputValue)}
-                              onChange={(e) => {
-                                setValue('end_time', e.target.value);
-                                setTimeTouched(true);
-                              }}
-                              className="form-input"
-                            />
-                            <p className="mt-1 text-xs text-slate-500">{t('task.endTimeHint')}</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          <div>
-                            <label className="form-label">{t('task.startTime')}</label>
-                            <input
-                              type="datetime-local"
-                              step={timeInputStepSeconds}
-                              value={startInputValue || ''}
-                              onChange={(e) => {
-                                const nextStart = e.target.value || '';
+                              className={`rounded-full px-2 py-1 text-[11px] ${
+                                !timeRangeEnabled
+                                  ? 'bg-sky-100 text-sky-700'
+                                  : 'text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.timePoint')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTimeRangeEnabled(true);
+                                setTimeRangeEditing('end');
                                 const timezoneName = getUserTimezone();
-                                const currentEnd = getValues('end_time') || '';
-                                setValue('start_time', nextStart);
-                                if (nextStart && currentEnd) {
-                                  const alignedEnd = coerceEndNotBeforeStart(nextStart, currentEnd, timezoneName);
-                                  if (alignedEnd !== currentEnd) {
-                                    setValue('end_time', alignedEnd);
+                                const currentStart = String(getValues('start_time') || '');
+                                const currentEnd = String(getValues('end_time') || '');
+                                if (isAllDay) {
+                                  if (!currentStart) {
+                                    const today = dayjs().tz(timezoneName).format('YYYY-MM-DD');
+                                    setValue('start_time', today, { shouldDirty: true });
+                                    setValue('end_time', today, { shouldDirty: true });
+                                  } else if (!currentEnd) {
+                                    setValue('end_time', currentStart, { shouldDirty: true });
                                   }
+                                  setTimeTouched(true);
+                                  return;
+                                }
+                                if (!currentStart && !currentEnd) {
+                                  const range = buildDefaultRangeAroundNow(timezoneName);
+                                  setValue('start_time', range.start, { shouldDirty: true });
+                                  setValue('end_time', range.end, { shouldDirty: true });
+                                  setTimeTouched(true);
+                                  return;
+                                }
+                                if (currentStart && !currentEnd) {
+                                  const nextEnd = buildEndFromStart(currentStart, timezoneName, 60)
+                                    || currentStart;
+                                  setValue('end_time', nextEnd, { shouldDirty: true });
+                                } else if (!currentStart && currentEnd) {
+                                  const range = buildDefaultRangeAroundNow(timezoneName);
+                                  setValue('start_time', range.start, { shouldDirty: true });
+                                  setValue('end_time', coerceEndNotBeforeStart(range.start, currentEnd, timezoneName), { shouldDirty: true });
                                 }
                                 setTimeTouched(true);
                               }}
-                              className="form-input"
-                            />
+                              className={`rounded-full px-2 py-1 text-[11px] ${
+                                timeRangeEnabled
+                                  ? 'bg-sky-100 text-sky-700'
+                                  : 'text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.timeRange')}
+                            </button>
                           </div>
-                          <div>
-                            <label className="form-label">{t('task.endTime')}</label>
-                            <input
-                              type="datetime-local"
-                              step={timeInputStepSeconds}
-                              value={endInputValue || ''}
-                              onChange={(e) => {
-                                setValue('end_time', e.target.value || '');
-                                setTimeTouched(true);
-                              }}
-                              className="form-input"
-                            />
+                          <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setTimeCalendarMode('solar')}
+                              className={`rounded-full px-2 py-1 text-[11px] ${
+                                timeCalendarMode === 'solar'
+                                  ? 'bg-sky-100 text-sky-700'
+                                  : 'text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.calendarSolar')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setTimeCalendarMode('lunar')}
+                              className={`rounded-full px-2 py-1 text-[11px] ${
+                                timeCalendarMode === 'lunar'
+                                  ? 'bg-sky-100 text-sky-700'
+                                  : 'text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.calendarLunar')}
+                            </button>
                           </div>
-                          <p className="text-xs text-slate-500">{t('task.endTimeHint')}</p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setValue('all_day', !isAllDay, { shouldDirty: true });
+                              setTimeTouched(true);
+                            }}
+                            className={`rounded-full border px-2 py-1 text-[11px] ${
+                              isAllDay
+                                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                            }`}
+                          >
+                            {t('task.allDay')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => applyQuickDatePreset('clear')}
+                            className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50"
+                          >
+                            {t('task.clearDate')}
+                          </button>
+                          <div className="time-quick-actions ml-auto">
+                            <button
+                              type="button"
+                              title={t('task.quickToday')}
+                              aria-label={t('task.quickToday')}
+                              onClick={() => applyQuickDatePreset('today')}
+                              className="time-quick-btn"
+                            >
+                              <IconSun className="h-5 w-5" />
+                            </button>
+                            <button
+                              type="button"
+                              title={t('task.quickTomorrow')}
+                              aria-label={t('task.quickTomorrow')}
+                              onClick={() => applyQuickDatePreset('tomorrow')}
+                              className="time-quick-btn"
+                            >
+                              <IconSunrise className="h-5 w-5" />
+                            </button>
+                            <button
+                              type="button"
+                              title={t('task.quickNextWeek')}
+                              aria-label={t('task.quickNextWeek')}
+                              onClick={() => applyQuickDatePreset('next_week')}
+                              className="time-quick-btn"
+                            >
+                              <IconCalendar className="h-5 w-5" />
+                            </button>
+                            <button
+                              type="button"
+                              title={t('task.quickTonight')}
+                              aria-label={t('task.quickTonight')}
+                              onClick={() => applyQuickDatePreset('tonight')}
+                              className="time-quick-btn"
+                            >
+                              <IconMoon className="h-5 w-5" />
+                            </button>
+                          </div>
                         </div>
-                      )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div>
+                          {timeRangeEnabled && (
+                            <div className="mb-1 inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setTimeRangeEditing('start')}
+                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                  timeRangeEditing === 'start'
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.startTime')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTimeRangeEditing('end')}
+                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                  timeRangeEditing === 'end'
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.endTime')}
+                              </button>
+                            </div>
+                          )}
+                          <TaskDatePicker
+                            key={`modal-time-${timeCalendarMode}-${timeRangeEnabled ? timeRangeEditing : 'point'}-${isAllDay ? 'all' : 'timed'}`}
+                            value={isAllDay
+                              ? splitDatePart((timeRangeEnabled && timeRangeEditing === 'end') ? endInputValue : startInputValue)
+                              : ((timeRangeEnabled && timeRangeEditing === 'end') ? (endInputValue || '') : (startInputValue || ''))}
+                            allDay={!!isAllDay}
+                            stepMinutes={30}
+                            inline
+                            lunarOverlay
+                            lunarMode={timeCalendarMode === 'lunar'}
+                            onChange={(nextValue) => {
+                              if (timeRangeEnabled && timeRangeEditing === 'end') {
+                                handleEndDateTimeChange(nextValue);
+                                return;
+                              }
+                              handleStartDateTimeChange(nextValue);
+                            }}
+                          />
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -1516,17 +1836,69 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       ? 'border-sky-300 bg-sky-100 text-sky-800'
                                       : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
                                   }`}
-                                >
-                                  {t('task.biweekly')}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled
-                                  title={t('task.lunarRepeatPending')}
-                                  className="cursor-not-allowed rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-400"
-                                >
-                                  {t('task.lunarDay')}
-                                </button>
+                                  >
+                                    {t('task.biweekly')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRecurrenceType('lunar');
+                                      setSelectedDays([]);
+                                      const fallback = parseLunarYearlyRule(
+                                        { freq: 'lunar_yearly' },
+                                        startInputValue || getValues('start_time') || getDefaultStartInputValue(getUserTimezone()),
+                                      ) || {
+                                        year: dayjs().tz(LUNAR_TIMEZONE).year(),
+                                        month: 1,
+                                        day: 1,
+                                        isLeapMonth: false,
+                                      };
+                                      setRecurrenceLunarYear(fallback.year);
+                                      setRecurrenceLunarMonth(fallback.month);
+                                      setRecurrenceLunarDay(fallback.day);
+                                      setRecurrenceLunarIsLeapMonth(fallback.isLeapMonth);
+                                    }}
+                                    className={`rounded-full border px-3 py-1 text-xs ${
+                                      recurrenceType === 'lunar'
+                                        ? 'border-sky-300 bg-sky-100 text-sky-800'
+                                        : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
+                                    }`}
+                                  >
+                                    {t('task.lunarYearly')}
+                                  </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {recurrenceType === 'lunar' && (
+                            <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-2.5">
+                              <div className="text-xs font-medium text-slate-700">{t('task.lunarYearly')}</div>
+                              <TaskDatePicker
+                                value={recurrenceLunarPickerDate}
+                                allDay
+                                inline
+                                lunarOverlay
+                                lunarMode
+                                stepMinutes={timeGranularity}
+                                onChange={(nextValue) => {
+                                  const value = String(nextValue || '').trim();
+                                  if (!value) return;
+                                  const lunar = lunarSelectionFromLocalInput(value, true, LUNAR_TIMEZONE);
+                                  if (!lunar) return;
+                                  const nextSelection = coerceLunarSelection({
+                                    year: lunar.year,
+                                    month: lunar.month,
+                                    day: lunar.day,
+                                    isLeapMonth: lunar.isLeapMonth,
+                                  });
+                                  setRecurrenceLunarYear(nextSelection.year);
+                                  setRecurrenceLunarMonth(nextSelection.month);
+                                  setRecurrenceLunarDay(nextSelection.day);
+                                  setRecurrenceLunarIsLeapMonth(nextSelection.isLeapMonth);
+                                }}
+                              />
+                              <div className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                                {`${t('task.lunarYearly')} ${recurrenceLunarIsLeapMonth ? t('task.lunarLeapPrefix') : ''}${recurrenceLunarMonth}/${recurrenceLunarDay}`}
                               </div>
                             </div>
                           )}

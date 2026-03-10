@@ -33,8 +33,19 @@ function LiveMarkdownEditor({
 
   const resolveHeight = () => (fill ? '100%' : `${minHeight}px`);
   const normalize = (text) => String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
+  const safeDestroy = (instance) => {
+    if (!instance || typeof instance.destroy !== 'function') return;
+    if (!instance.vditor || !instance.vditor.element) return;
+    if (instance.isDestroyed) return;
+    try {
+      instance.destroy();
+    } catch {
+      // Ignore non-critical destroy race from async editor init.
+    }
+  };
 
   useEffect(() => {
+    let disposed = false;
     const mountID = mountIDRef.current;
     if (mountRef.current) {
       mountRef.current.style.height = resolveHeight();
@@ -71,6 +82,10 @@ function LiveMarkdownEditor({
         }
       },
       after: () => {
+        if (disposed) {
+          safeDestroy(instance);
+          return;
+        }
         readyRef.current = true;
         editorRef.current = instance;
         const pendingValue = String(pendingExternalValueRef.current || '');
@@ -138,9 +153,10 @@ function LiveMarkdownEditor({
     window.addEventListener('keydown', handleEditorShortcuts, true);
 
     return () => {
+      disposed = true;
       window.removeEventListener('keydown', handleEditorShortcuts, true);
       readyRef.current = false;
-      instance.destroy();
+      safeDestroy(instance);
       editorRef.current = null;
     };
   }, []);

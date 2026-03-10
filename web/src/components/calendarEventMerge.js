@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import * as RRuleModule from 'rrule';
+import { buildLunarYearlyOccurrenceStarts } from '../utils/lunar.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -165,6 +166,39 @@ function buildRecurringProjectedEvents(task, options) {
   if (!dtStart || !rangeStartDate || !rangeEndDate) return [];
 
   const freqKey = String(rule.freq || '').trim().toLowerCase();
+  if (freqKey === 'lunar_yearly' || freqKey === 'lunar') {
+    const lunarStarts = buildLunarYearlyOccurrenceStarts({
+      anchorISO: rawStart,
+      rangeStartISO: rangeStart,
+      rangeEndISO: rangeEnd,
+      recurrenceRule: rule,
+      recurrenceEndISO: task?.recurrence_end_date || task?.recurrenceEndDate || '',
+    });
+    if (!Array.isArray(lunarStarts) || lunarStarts.length === 0) return [];
+    const durationMs = resolveTaskDurationMs(rawStart, rawEnd);
+    const seen = new Set();
+    return lunarStarts.reduce((acc, startISO) => {
+      const start = dayjs(startISO);
+      if (!start.isValid()) return acc;
+      const dayToken = start.utc().format('YYYYMMDD');
+      const instanceId = `${task.id}_${dayToken}`;
+      if (seen.has(instanceId)) return acc;
+      seen.add(instanceId);
+      const eventEndISO = (Number.isFinite(durationMs) && durationMs > 0)
+        ? new Date(start.toDate().getTime() + durationMs).toISOString()
+        : undefined;
+      acc.push(buildProjectedEvent(task, {
+        id: instanceId,
+        start: toCalendarISO(startISO) || startISO,
+        end: eventEndISO ? (toCalendarISO(eventEndISO) || eventEndISO) : undefined,
+        allDay: !!(task.all_day || task.allDay),
+        isRecurring: true,
+        instanceId,
+        timezone,
+      }));
+      return acc;
+    }, []);
+  }
   const freq = RECURRENCE_FREQ_MAP[freqKey];
   if (typeof freq === 'undefined') return [];
 

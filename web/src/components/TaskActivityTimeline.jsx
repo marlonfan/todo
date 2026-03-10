@@ -100,6 +100,12 @@ function formatRecurrenceRule(value, t) {
   if (!value || typeof value !== 'object') return t('task.repeatOff');
   const freq = String(value.freq || '').toLowerCase();
   const interval = Math.max(1, Number.parseInt(value.interval, 10) || 1);
+  if (freq === 'lunar_yearly' || freq === 'lunar') {
+    const month = Number.parseInt(value.lunar_month, 10) || 1;
+    const day = Number.parseInt(value.lunar_day, 10) || 1;
+    const leap = !!value.lunar_is_leap_month;
+    return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
+  }
   if (freq === 'weekly' && interval === 2) return t('task.biweekly');
   if (freq === 'daily') return t('task.daily');
   if (freq === 'weekly') return t('task.weekly');

@@ -14,7 +14,6 @@ import (
 	"todo-app/internal/models"
 	"todo-app/internal/repository"
 
-	"github.com/teambition/rrule-go"
 	"gorm.io/gorm"
 )
 
@@ -79,6 +78,10 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 	if err := normalizeTaskTimes(req.ClientTimezone, req.StartTimeLocal, req.EndTimeLocal, &req.StartTime, &req.EndTime); err != nil {
 		return nil, err
 	}
+	normalizedRule, err := normalizeAndValidateRecurrenceRule(req.RecurrenceRule, req.StartTime, req.DueDate)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateTaskTimeRange(req.StartTime, req.EndTime); err != nil {
 		return nil, err
 	}
@@ -103,7 +106,7 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 		DueDate:           req.DueDate,
 		AllDay:            req.AllDay,
 		Revision:          1,
-		RecurrenceRule:    req.RecurrenceRule,
+		RecurrenceRule:    normalizedRule,
 		RecurrenceEndDate: req.RecurrenceEndDate,
 	}
 
@@ -232,19 +235,9 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 		if task.RecurrenceRule == nil {
 			continue
 		}
-		anchor, hasAnchor := resolveTaskOccurrenceAnchorDate(task)
-		if !hasAnchor {
-			continue
-		}
-		rruleStr := buildRRuleString(task.RecurrenceRule, &anchor, task.RecurrenceEndDate)
-		rule, parseErr := rrule.StrToRRule(rruleStr)
-		if parseErr != nil {
-			continue
-		}
-
-		occurrences := rule.Between(fromDate, horizon, true)
-		for _, occ := range occurrences {
-			dateOnly := occ.UTC().Truncate(24 * time.Hour)
+		occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon)
+		for _, occurrenceStart := range occurrences {
+			dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
 			key := fmt.Sprintf("%d|%s", task.ID, dateOnly.Format("2006-01-02"))
 			override := occurrenceByTaskDate[key]
 			status := task.Status
@@ -262,7 +255,7 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 				Description:  "",
 				Status:       status,
 				Priority:     task.Priority,
-				StartTime:    occ,
+				StartTime:    occurrenceStart.UTC(),
 				AllDay:       task.AllDay,
 				IsRecurring:  true,
 				OriginalDate: dateOnly,
@@ -271,7 +264,7 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 			if task.EndTime != nil && task.StartTime != nil {
 				duration := task.EndTime.Sub(*task.StartTime)
 				if duration > 0 {
-					end := occ.Add(duration)
+					end := occurrenceStart.UTC().Add(duration)
 					instance.EndTime = &end
 				}
 			}
@@ -416,7 +409,11 @@ func (s *TaskService) Update(
 		}
 	}
 	if fieldMask["recurrence_rule"] {
-		task.RecurrenceRule = req.RecurrenceRule
+		normalizedRule, err := normalizeAndValidateRecurrenceRule(req.RecurrenceRule, task.StartTime, task.DueDate)
+		if err != nil {
+			return nil, err
+		}
+		task.RecurrenceRule = normalizedRule
 		baseChanged = true
 		// Recurring task base should stay pending; keep the original completion on anchor occurrence only.
 		if task.RecurrenceRule != nil && task.Status == models.TaskStatusCompleted {
@@ -712,10 +709,6 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 	if task == nil || task.RecurrenceRule == nil {
 		return nil, nil
 	}
-	anchor, hasAnchor := resolveTaskOccurrenceAnchorDate(task)
-	if !hasAnchor {
-		return nil, nil
-	}
 
 	fromUTC := from.UTC()
 	if fromUTC.IsZero() {
@@ -733,15 +726,9 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 		occurrenceByDate[row.OccurrenceDate.UTC().Format("2006-01-02")] = row
 	}
 
-	rruleStr := buildRRuleString(task.RecurrenceRule, &anchor, task.RecurrenceEndDate)
-	rule, parseErr := rrule.StrToRRule(rruleStr)
-	if parseErr != nil {
-		return nil, nil
-	}
-
-	occurrences := rule.Between(fromDate, horizon, true)
-	for _, occ := range occurrences {
-		dateOnly := occ.UTC().Truncate(24 * time.Hour)
+	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon)
+	for _, occurrenceStart := range occurrences {
+		dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
 		override := occurrenceByDate[dateOnly.Format("2006-01-02")]
 
 		status := task.Status
@@ -752,7 +739,7 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 			continue
 		}
 
-		startTime := occ.UTC()
+		startTime := occurrenceStart.UTC()
 		if override != nil && override.StartTime != nil {
 			startTime = override.StartTime.UTC()
 		}
@@ -811,9 +798,12 @@ func cloneRecurrenceRule(rule *models.RecurrenceRule) *models.RecurrenceRule {
 		return nil
 	}
 	cloned := &models.RecurrenceRule{
-		Freq:     rule.Freq,
-		Interval: rule.Interval,
-		Count:    rule.Count,
+		Freq:             rule.Freq,
+		Interval:         rule.Interval,
+		Count:            rule.Count,
+		LunarMonth:       rule.LunarMonth,
+		LunarDay:         rule.LunarDay,
+		LunarIsLeapMonth: rule.LunarIsLeapMonth,
 	}
 	if len(rule.ByDay) > 0 {
 		cloned.ByDay = append([]string(nil), rule.ByDay...)
@@ -986,20 +976,9 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 		if task.RecurrenceRule == nil {
 			continue
 		}
-
-		// Fix 4: Convert freq to uppercase for RRULE
-		rruleStr := buildRRuleString(task.RecurrenceRule, task.StartTime, task.RecurrenceEndDate)
-		rrule, err := rrule.StrToRRule(rruleStr)
-		if err != nil {
-			// Try with original case if uppercase fails
-			continue
-		}
-
-		// Get occurrences within range
-		occurrences := rrule.Between(start, end, true)
-
-		for _, occ := range occurrences {
-			dateOnly := occ.UTC().Truncate(24 * time.Hour)
+		occurrences := buildTaskOccurrenceStarts(&task, start, end)
+		for _, occurrenceStart := range occurrences {
+			dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
 			instanceID := buildOccurrenceInstanceID(task.ID, dateOnly)
 			instance := models.TaskInstance{
 				InstanceID:   instanceID,
@@ -1008,7 +987,7 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 				Description:  "",
 				Status:       task.Status,
 				Priority:     task.Priority,
-				StartTime:    occ,
+				StartTime:    occurrenceStart.UTC(),
 				AllDay:       task.AllDay,
 				IsRecurring:  true,
 				OriginalDate: dateOnly,
@@ -1019,7 +998,7 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 			if task.EndTime != nil && task.StartTime != nil {
 				duration := task.EndTime.Sub(*task.StartTime)
 				if duration > 0 {
-					endTime := occ.Add(duration)
+					endTime := occurrenceStart.UTC().Add(duration)
 					instance.EndTime = &endTime
 				}
 			}

@@ -44,6 +44,41 @@ export function IconClock({ className }) {
   );
 }
 
+export function IconSun({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2V5" />
+      <path d="M12 19V22" />
+      <path d="M4.9 4.9L7 7" />
+      <path d="M17 17L19.1 19.1" />
+      <path d="M2 12H5" />
+      <path d="M19 12H22" />
+      <path d="M4.9 19.1L7 17" />
+      <path d="M17 7L19.1 4.9" />
+    </BaseIcon>
+  );
+}
+
+export function IconSunrise({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <path d="M4 18H20" />
+      <path d="M6 14a6 6 0 0 1 12 0" />
+      <path d="M12 3V8" />
+      <path d="M8.8 6.2L12 3L15.2 6.2" />
+    </BaseIcon>
+  );
+}
+
+export function IconMoon({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <path d="M20.4 14.8A8.2 8.2 0 1 1 9.2 3.6A7.1 7.1 0 0 0 20.4 14.8Z" />
+    </BaseIcon>
+  );
+}
+
 export function IconHistory({ className }) {
   return (
     <BaseIcon className={className}>

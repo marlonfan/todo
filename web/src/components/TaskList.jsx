@@ -14,6 +14,14 @@ import {
 } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import {
+  buildLunarYearlyRuleFromSelection,
+  coerceLunarSelection,
+  lunarSelectionFromLocalInput,
+  LUNAR_TIMEZONE,
+  parseLunarYearlyRule,
+  solarDateFromLunarSelection,
+} from '../utils/lunar';
+import {
   getShowCategoryEmoji,
   onUIPrefsChanged,
   getTaskListSortPref,
@@ -21,8 +29,23 @@ import {
   getTaskListGroupPref,
   setTaskListGroupPref,
 } from '../utils/uiPrefs';
-import { IconClock, IconFlag, IconGroup, IconHistory, IconRepeat, IconRepeatOff, IconSearch, IconSort, IconTag } from './icons/TaskIcons';
+import {
+  IconCalendar,
+  IconClock,
+  IconFlag,
+  IconGroup,
+  IconHistory,
+  IconMoon,
+  IconRepeat,
+  IconRepeatOff,
+  IconSearch,
+  IconSort,
+  IconSun,
+  IconSunrise,
+  IconTag,
+} from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
@@ -71,6 +94,9 @@ function normalizeDraftForCompare(draft) {
     recurrence_type: draft.recurrence_type || 'daily',
     recurrence_days: [...(draft.recurrence_days || [])].map(String).sort(),
     recurrence_date: Number.parseInt(draft.recurrence_date, 10) || 1,
+    recurrence_lunar_month: Number.parseInt(draft.recurrence_lunar_month, 10) || 1,
+    recurrence_lunar_day: Number.parseInt(draft.recurrence_lunar_day, 10) || 1,
+    recurrence_lunar_is_leap_month: !!draft.recurrence_lunar_is_leap_month,
   };
 }
 
@@ -91,11 +117,46 @@ function getDefaultStartTimeParts() {
   }
 }
 
+function getDefaultStartInputValue(timezoneName) {
+  const { hour, minute } = getDefaultStartTimeParts();
+  return dayjs()
+    .tz(timezoneName)
+    .hour(hour)
+    .minute(minute)
+    .second(0)
+    .format('YYYY-MM-DDTHH:mm');
+}
+
+function roundToHalfHour(timeValue) {
+  let current = timeValue.second(0).millisecond(0);
+  const minute = current.minute();
+  if (minute < 15) {
+    current = current.minute(0);
+  } else if (minute < 45) {
+    current = current.minute(30);
+  } else {
+    current = current.add(1, 'hour').minute(0);
+  }
+  return current;
+}
+
+function buildDraftDefaultRangeAroundNow(timezoneName) {
+  const center = roundToHalfHour(dayjs().tz(timezoneName));
+  return {
+    start: center.subtract(30, 'minute').format('YYYY-MM-DDTHH:mm'),
+    end: center.add(30, 'minute').format('YYYY-MM-DDTHH:mm'),
+  };
+}
+
 function parseLocalInput(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
   const parsed = dayjs(raw);
   return parsed.isValid() ? parsed : null;
+}
+
+function splitDatePart(value) {
+  return value && value.includes('T') ? value.split('T')[0] : value || '';
 }
 
 function shiftEndByDurationLocal(originalStartInput, originalEndInput, nextStartInput) {
@@ -116,6 +177,12 @@ function coerceEndNotBeforeStartLocal(startInput, endInput) {
     return start.format('YYYY-MM-DDTHH:mm');
   }
   return endInput || '';
+}
+
+function buildEndFromStartLocal(startInput, minutes = 60) {
+  const start = parseLocalInput(startInput);
+  if (!start) return '';
+  return start.add(minutes, 'minute').format('YYYY-MM-DDTHH:mm');
 }
 
 function alignStartToWeekdayLocal(startInput, weekdayKeys) {
@@ -154,6 +221,12 @@ function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
   const end = parseLocalInput(endInput);
   if (!start && !end) return noDateLabel;
   if (!isAllDay) {
+    if (start && end) {
+      if (start.isSame(end, 'day')) {
+        return `${start.format('MM/DD HH:mm')}-${end.format('HH:mm')}`;
+      }
+      return `${start.format('MM/DD HH:mm')}-${end.format('MM/DD HH:mm')}`;
+    }
     if (start) return start.format('MM/DD HH:mm');
     return end.format('MM/DD HH:mm');
   }
@@ -176,8 +249,14 @@ function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, f
   return `${firstLabel}+${selected.length - 1}`;
 }
 
-function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t) {
+function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, lunarSelection = null) {
   if (!enabled) return t('task.repeatOff');
+  if (recurrenceType === 'lunar') {
+    const month = Number.parseInt(lunarSelection?.month, 10) || 1;
+    const day = Number.parseInt(lunarSelection?.day, 10) || 1;
+    const leap = !!lunarSelection?.isLeapMonth;
+    return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
+  }
   if (recurrenceType === 'biweekly') {
     const biweeklyLabel = t('task.biweekly');
     const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
@@ -225,19 +304,59 @@ function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
   return 1;
 }
 
-function parseRecurrenceSelection(rule) {
-  if (!rule) return { type: 'daily', days: [], monthDate: 1 };
+function parseRecurrenceSelection(rule, fallbackStartInput = '') {
+  const fallbackLunar = parseLunarYearlyRule({ freq: 'lunar_yearly' }, fallbackStartInput) || {
+    year: dayjs().tz(LUNAR_TIMEZONE).year(),
+    month: 1,
+    day: 1,
+    isLeapMonth: false,
+  };
+  if (!rule) {
+    return {
+      type: 'daily',
+      days: [],
+      monthDate: 1,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
+  }
   const freq = String(rule.freq || 'daily').trim().toLowerCase();
   const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
   const byDay = normalizeByDayList(rule.byday || rule.byDay);
-  const monthDate = resolveMonthlyDateFromRule(rule, '');
+  const monthDate = resolveMonthlyDateFromRule(rule, fallbackStartInput);
+  if (freq === 'lunar_yearly' || freq === 'lunar') {
+    const lunar = parseLunarYearlyRule(rule, fallbackStartInput) || fallbackLunar;
+    return {
+      type: 'lunar',
+      days: [],
+      monthDate,
+      lunarYear: lunar.year,
+      lunarMonth: lunar.month,
+      lunarDay: lunar.day,
+      lunarIsLeapMonth: lunar.isLeapMonth,
+    };
+  }
   if (freq === 'weekly' && interval === 2) {
-    return { type: 'biweekly', days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)), monthDate };
+    return {
+      type: 'biweekly',
+      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+      monthDate,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
   }
   return {
     type: freq || 'daily',
     days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
     monthDate,
+    lunarYear: fallbackLunar.year,
+    lunarMonth: fallbackLunar.month,
+    lunarDay: fallbackLunar.day,
+    lunarIsLeapMonth: fallbackLunar.isLeapMonth,
   };
 }
 
@@ -569,7 +688,6 @@ function TaskList({ forcedView = '' }) {
   const location = useLocation();
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
-  const timeInputStepSeconds = timeGranularity * 60;
   const { data: tasksRaw = [], isLoading: tasksLoading } = useTasksQuery();
   const { data: categories = [] } = useCategoriesQuery();
   const [occurrenceStatusOptimisticMap, setOccurrenceStatusOptimisticMap] = useState({});
@@ -816,6 +934,10 @@ function TaskList({ forcedView = '' }) {
   const [draftParsePreview, setDraftParsePreview] = useState('');
   const [showDraftCustomRecurrenceMenu, setShowDraftCustomRecurrenceMenu] = useState(false);
   const [showDraftMonthlyDatePicker, setShowDraftMonthlyDatePicker] = useState(false);
+  const [draftTimeRangeEnabled, setDraftTimeRangeEnabled] = useState(false);
+  const [draftTimeRangeEditing, setDraftTimeRangeEditing] = useState('start');
+  const [draftTimeCalendarMode, setDraftTimeCalendarMode] = useState('solar');
+  const [draftRecurrenceLunarYear, setDraftRecurrenceLunarYear] = useState(dayjs().tz(LUNAR_TIMEZONE).year());
   const [showActivityPanel, setShowActivityPanel] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, kind: '', context: null });
   const [deleteDialogSubmitting, setDeleteDialogSubmitting] = useState(false);
@@ -831,6 +953,7 @@ function TaskList({ forcedView = '' }) {
   const lastSyncedSelectedIDRef = useRef(0);
   const draftSourceTaskIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
+  const draftEditVersionRef = useRef(0);
   const draftSyncTimerRef = useRef(0);
   const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
   const selectedTaskSnapshotRef = useRef(null);
@@ -839,6 +962,11 @@ function TaskList({ forcedView = '' }) {
   const isSavingDraftRef = useRef(false);
   const leaveFlushInFlightRef = useRef(false);
   const flushDraftOnLeaveRef = useRef(null);
+
+  const markDraftTouched = useCallback(() => {
+    draftTouchedRef.current = true;
+    draftEditVersionRef.current += 1;
+  }, []);
 
   const params = new URLSearchParams(location.search);
   const isSearchPath = location.pathname === '/search';
@@ -1245,7 +1373,12 @@ function TaskList({ forcedView = '' }) {
     !!draft?.recurrence_enabled,
     draft?.recurrence_type || 'daily',
     draft?.recurrence_days || [],
-    t
+    t,
+    {
+      month: draft?.recurrence_lunar_month,
+      day: draft?.recurrence_lunar_day,
+      isLeapMonth: draft?.recurrence_lunar_is_leap_month,
+    },
   );
   const draftRecurrenceButtonClass = detailPanel === 'recurrence'
     ? 'bg-slate-100 text-slate-700'
@@ -1253,13 +1386,36 @@ function TaskList({ forcedView = '' }) {
       ? 'text-emerald-600 hover:bg-emerald-50'
       : 'text-slate-500 hover:bg-slate-100';
   const isDraftCustomRecurrenceType = (draft?.recurrence_type || 'daily') === 'biweekly' || (draft?.recurrence_type || 'daily') === 'lunar';
+  const draftRecurrenceLunarPickerDate = (
+    solarDateFromLunarSelection({
+      year: draftRecurrenceLunarYear,
+      month: Number.parseInt(draft?.recurrence_lunar_month, 10) || 1,
+      day: Number.parseInt(draft?.recurrence_lunar_day, 10) || 1,
+      isLeapMonth: !!draft?.recurrence_lunar_is_leap_month,
+    })
+    || splitDatePart(draft?.start_time || '')
+    || dayjs().tz(timezone).format('YYYY-MM-DD')
+  );
 
   useEffect(() => {
     setDraftParsePreview('');
     setShowDraftCustomRecurrenceMenu(false);
     setShowDraftMonthlyDatePicker(false);
+    setDraftTimeRangeEditing('start');
+    setDraftTimeCalendarMode('solar');
     setShowActivityPanel(false);
   }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!selectedTask) return;
+    const allDay = !!(selectedTask.all_day || selectedTask.allDay);
+    const startValue = selectedTask.start_time || selectedTask.startTime || selectedTask.due_date || selectedTask.dueDate || '';
+    const startInput = startValue ? toInputFormat(startValue, null, allDay) : '';
+    const recurrence = parseRecurrenceRule(selectedTask.recurrence_rule || selectedTask.recurrenceRule);
+    const fallback = parseLunarYearlyRule(recurrence || { freq: 'lunar_yearly' }, startInput);
+    if (!fallback) return;
+    setDraftRecurrenceLunarYear(fallback.year);
+  }, [selectedTask]);
 
   useEffect(() => {
     if (!draft?.recurrence_enabled) {
@@ -1278,7 +1434,7 @@ function TaskList({ forcedView = '' }) {
     const startTime = taskValue.start_time || taskValue.startTime || taskValue.due_date || '';
     const endTime = taskValue.end_time || taskValue.endTime || '';
     const recurrenceRule = parseRecurrenceRule(taskValue.recurrence_rule || taskValue.recurrenceRule);
-    const parsedRecurrence = parseRecurrenceSelection(recurrenceRule);
+    const parsedRecurrence = parseRecurrenceSelection(recurrenceRule, startTime ? toInputFormat(startTime, null, allDay) : '');
     let startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
     let endInput = endTime ? toInputFormat(endTime, null, allDay) : '';
     if (!allDay && (parsedRecurrence.type === 'weekly' || parsedRecurrence.type === 'biweekly') && startInput) {
@@ -1308,15 +1464,20 @@ function TaskList({ forcedView = '' }) {
       recurrence_type: parsedRecurrence.type,
       recurrence_days: parsedRecurrence.days,
       recurrence_date: parsedRecurrence.monthDate,
+      recurrence_lunar_month: parsedRecurrence.lunarMonth,
+      recurrence_lunar_day: parsedRecurrence.lunarDay,
+      recurrence_lunar_is_leap_month: parsedRecurrence.lunarIsLeapMonth,
     };
   };
 
   useEffect(() => {
     if (!selectedTask) {
       setDraft(null);
+      setDraftTimeRangeEnabled(false);
       lastSyncedSelectedIDRef.current = 0;
       draftSourceTaskIDRef.current = 0;
       draftTouchedRef.current = false;
+      draftEditVersionRef.current = 0;
       return;
     }
 
@@ -1325,7 +1486,9 @@ function TaskList({ forcedView = '' }) {
       lastSyncedSelectedIDRef.current = selectedTask.id;
       draftSourceTaskIDRef.current = selectedTask.id;
       draftTouchedRef.current = false;
+      draftEditVersionRef.current = 0;
       setDraft(nextDraft);
+      setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       setDetailPanel('');
       return;
     }
@@ -1333,21 +1496,24 @@ function TaskList({ forcedView = '' }) {
     if (!draft) {
       draftTouchedRef.current = false;
       draftSourceTaskIDRef.current = selectedTask.id;
+      draftEditVersionRef.current = 0;
       setDraft(nextDraft);
+      setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       return;
     }
 
     // Keep detail draft synced with external updates (drag/drop, modal save, etc.)
     // unless the user is actively editing this draft.
-    if (!draftTouchedRef.current) {
+    if (!draftTouchedRef.current && detailPanel !== 'time') {
       const current = normalizeDraftForCompare(draft);
       const incoming = normalizeDraftForCompare(nextDraft);
       if (JSON.stringify(current) !== JSON.stringify(incoming)) {
         draftSourceTaskIDRef.current = selectedTask.id;
         setDraft(nextDraft);
+        setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
     }
-  }, [selectedTask, draft]);
+  }, [selectedTask, draft, detailPanel]);
 
   useEffect(() => {
     if (!draft) return;
@@ -1560,7 +1726,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftFieldChange = (field, value) => {
-    draftTouchedRef.current = true;
+    markDraftTouched();
     setDraft((prev) => {
       if (!prev) return prev;
       if (field !== 'start_time') return { ...prev, [field]: value };
@@ -1584,8 +1750,29 @@ function TaskList({ forcedView = '' }) {
     });
   };
 
+  const handleDraftStartDateTimeChange = (nextValue) => {
+    const nextStart = String(nextValue || '');
+    markDraftTouched();
+    setDraft((prev) => {
+      if (!prev) return prev;
+      if (!draftTimeRangeEnabled) {
+        return { ...prev, start_time: nextStart, end_time: '' };
+      }
+      if (!nextStart || !prev.end_time) {
+        return { ...prev, start_time: nextStart };
+      }
+      const alignedEnd = coerceEndNotBeforeStartLocal(nextStart, prev.end_time);
+      return { ...prev, start_time: nextStart, end_time: alignedEnd };
+    });
+  };
+
+  const handleDraftEndDateTimeChange = (nextValue) => {
+    markDraftTouched();
+    setDraft((prev) => (prev ? { ...prev, end_time: String(nextValue || '') } : prev));
+  };
+
   const applyQuickDatePreset = (preset) => {
-    draftTouchedRef.current = true;
+    markDraftTouched();
     setDraft((prev) => {
       if (!prev) return prev;
       if (preset === 'clear') {
@@ -1610,7 +1797,7 @@ function TaskList({ forcedView = '' }) {
         return {
           ...prev,
           start_time: target.format('YYYY-MM-DD'),
-          end_time: '',
+          end_time: draftTimeRangeEnabled ? target.format('YYYY-MM-DD') : '',
         };
       }
 
@@ -1620,13 +1807,13 @@ function TaskList({ forcedView = '' }) {
       return {
         ...prev,
         start_time: nextStart,
-        end_time: nextEnd,
+        end_time: draftTimeRangeEnabled ? nextEnd : '',
       };
     });
   };
 
   const toggleDraftCategory = (catID) => {
-    draftTouchedRef.current = true;
+    markDraftTouched();
     setDraft((prev) => {
       if (!prev) return prev;
       const id = String(catID);
@@ -1641,7 +1828,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const toggleDraftRecurrenceDay = (dayKey) => {
-    draftTouchedRef.current = true;
+    markDraftTouched();
     setDraft((prev) => {
       if (!prev) return prev;
       const current = Array.isArray(prev.recurrence_days) ? prev.recurrence_days : [];
@@ -1665,8 +1852,6 @@ function TaskList({ forcedView = '' }) {
   const workDayKeys = DEFAULT_WORKDAY_KEYS;
   const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
-  const splitDatePart = (value) => (value && value.includes('T') ? value.split('T')[0] : value || '');
-
   const buildDraftPayload = useCallback((taskValue, draftValue) => {
     if (!taskValue || !draftValue) return null;
     const title = (draftValue.title || '').trim();
@@ -1682,7 +1867,18 @@ function TaskList({ forcedView = '' }) {
       || String(draftValue.recurrence_type || 'daily') !== String(originalDraft?.recurrence_type || 'daily')
       || JSON.stringify([...(draftValue.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
         !== JSON.stringify([...(originalDraft?.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
-      || clampMonthlyDate(draftValue.recurrence_date, 1) !== clampMonthlyDate(originalDraft?.recurrence_date, 1);
+      || clampMonthlyDate(draftValue.recurrence_date, 1) !== clampMonthlyDate(originalDraft?.recurrence_date, 1)
+      || (
+        (
+          String(draftValue.recurrence_type || 'daily') === 'lunar'
+          || String(originalDraft?.recurrence_type || 'daily') === 'lunar'
+        )
+        && (
+          (Number.parseInt(draftValue.recurrence_lunar_month, 10) || 1) !== (Number.parseInt(originalDraft?.recurrence_lunar_month, 10) || 1)
+          || (Number.parseInt(draftValue.recurrence_lunar_day, 10) || 1) !== (Number.parseInt(originalDraft?.recurrence_lunar_day, 10) || 1)
+          || !!draftValue.recurrence_lunar_is_leap_month !== !!originalDraft?.recurrence_lunar_is_leap_month
+        )
+      );
     const timeChanged =
       !!draftValue.all_day !== !!originalDraft?.all_day
       || String(draftValue.start_time || '') !== String(originalDraft?.start_time || '')
@@ -1758,11 +1954,19 @@ function TaskList({ forcedView = '' }) {
       const normalizedDays = (draftValue.recurrence_days || [])
         .map((day) => String(day || '').toUpperCase())
         .filter((day) => WEEKDAY_ONLY_RE.test(day));
-      const rule = {
+      let rule = {
         freq: draftValue.recurrence_type || 'daily',
         interval: 1,
       };
-      if (draftValue.recurrence_type === 'biweekly') {
+      if (draftValue.recurrence_type === 'lunar') {
+        const normalizedSelection = coerceLunarSelection({
+          year: draftRecurrenceLunarYear,
+          month: Number.parseInt(draftValue.recurrence_lunar_month, 10) || 1,
+          day: Number.parseInt(draftValue.recurrence_lunar_day, 10) || 1,
+          isLeapMonth: !!draftValue.recurrence_lunar_is_leap_month,
+        });
+        rule = buildLunarYearlyRuleFromSelection(normalizedSelection);
+      } else if (draftValue.recurrence_type === 'biweekly') {
         rule.freq = 'weekly';
         rule.interval = 2;
         rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
@@ -1781,7 +1985,7 @@ function TaskList({ forcedView = '' }) {
       normalizedTitle,
       normalizedPriority,
     };
-  }, [timezone, workDayKeys]);
+  }, [draftRecurrenceLunarYear, timezone, workDayKeys]);
 
   const submitPendingDraft = useCallback(async (taskIDOverride = 0, submitSource = 'idle') => {
     const pending = pendingDraftSubmitRef.current;
@@ -1841,6 +2045,7 @@ function TaskList({ forcedView = '' }) {
     if (!title) return;
 
     const targetTaskID = selectedTask.id;
+    const editVersionAtStart = draftEditVersionRef.current;
     const built = buildDraftPayload(selectedTask, draft);
     if (!built?.payload) return;
 
@@ -1859,7 +2064,11 @@ function TaskList({ forcedView = '' }) {
         localOnly: true,
       });
       if (draftSourceTaskIDRef.current !== targetTaskID) {
-        return;
+        return false;
+      }
+      const hasNewEdits = draftEditVersionRef.current !== editVersionAtStart;
+      if (hasNewEdits) {
+        return false;
       }
       draftTouchedRef.current = false;
       void savedTask;
@@ -1878,8 +2087,10 @@ function TaskList({ forcedView = '' }) {
       if (submitAfter) {
         void submitPendingDraft(targetTaskID, submitSource);
       }
+      return true;
     } catch (err) {
       console.error('Failed to save task details:', err);
+      return false;
     } finally {
       setSavingDraft(false);
     }
@@ -1951,9 +2162,12 @@ function TaskList({ forcedView = '' }) {
 
   const handleSubmitDraft = async () => {
     if (!selectedTask || selectedTask.read_only) return;
-    if (isDraftDirty) {
-      await handleSaveDraft({ submitAfter: true, submitSource: 'manual' });
-      return;
+    if (isDraftDirtyRef.current) {
+      let queued = await handleSaveDraft({ submitAfter: false, submitSource: 'manual' });
+      if (!queued && isDraftDirtyRef.current) {
+        queued = await handleSaveDraft({ submitAfter: false, submitSource: 'manual' });
+      }
+      if (!queued) return;
     }
     await submitPendingDraft(selectedTask.id, 'manual');
   };
@@ -2087,13 +2301,14 @@ function TaskList({ forcedView = '' }) {
     if (!selectedTask || !draft || !isDraftDirty || savingDraft) return;
     if (!draftTouchedRef.current) return;
     if (!(draft.title || '').trim()) return;
+    if (detailPanel === 'time') return;
 
     const timer = window.setTimeout(() => {
       handleSaveDraft();
     }, 800);
 
     return () => window.clearTimeout(timer);
-  }, [draft, isDraftDirty, savingDraft, selectedTask]);
+  }, [detailPanel, draft, isDraftDirty, savingDraft, selectedTask]);
 
   useEffect(() => {
     if (!isDraftDirty) {
@@ -2569,7 +2784,7 @@ function TaskList({ forcedView = '' }) {
                       title={draftTimeButtonTitle}
                     >
                       <IconClock className="h-4 w-4" />
-                      <span className="w-20 truncate text-left text-[11px] leading-4">{draftTimeSummaryLabel}</span>
+                      <span className="max-w-[11.5rem] truncate text-left text-[11px] leading-4">{draftTimeSummaryLabel}</span>
                       {hasDraftParsedTimeHint && (
                         <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
                       )}
@@ -2604,83 +2819,197 @@ function TaskList({ forcedView = '' }) {
                     )}
 
                     {detailPanel === 'time' && (
-                      <div className="md-popover absolute right-0 top-10 z-20 w-[30rem] p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.startTime')}</div>
-                          <button
-                            type="button"
-                            onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
-                            className={`rounded-full border px-2.5 py-1 text-xs ${
-                              draft.all_day
-                                ? 'border-blue-300 bg-blue-50 text-blue-700'
-                                : 'border-slate-200 bg-white text-slate-500'
-                            }`}
-                          >
-                            {t('task.allDay')}
-                          </button>
-                        </div>
-                        <div className="mb-3 flex flex-wrap gap-2">
-                          <button type="button" onClick={() => applyQuickDatePreset('today')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                            {t('task.quickToday')}
-                          </button>
-                          <button type="button" onClick={() => applyQuickDatePreset('tomorrow')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                            {t('task.quickTomorrow')}
-                          </button>
-                          <button type="button" onClick={() => applyQuickDatePreset('tonight')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                            {t('task.quickTonight')}
-                          </button>
-                          <button type="button" onClick={() => applyQuickDatePreset('next_week')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
-                            {t('task.quickNextWeek')}
-                          </button>
-                          <button type="button" onClick={() => applyQuickDatePreset('clear')} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50">
-                            {t('task.clearDate')}
-                          </button>
-                        </div>
-                        {draft.all_day ? (
-                          <div className="grid grid-cols-2 gap-3">
-                            <div>
-                              <label className="form-label">{t('task.startTime')}</label>
-                              <input
-                                type="date"
-                                value={splitDatePart(draft.start_time)}
-                                onChange={(e) => handleDraftFieldChange('start_time', e.target.value)}
-                                className="form-input"
-                              />
+                      <div className="time-panel-card md-popover absolute right-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
+                        <div className="time-panel-toolbar mb-2 space-y-1.5 border-b border-slate-100 pb-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDraftTimeRangeEnabled(false);
+                                  setDraftTimeRangeEditing('start');
+                                  handleDraftFieldChange('end_time', '');
+                                }}
+                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                  !draftTimeRangeEnabled
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.timePoint')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDraftTimeRangeEnabled(true);
+                                  setDraftTimeRangeEditing('end');
+                                  const timezoneName = getUserTimezone();
+                                  const currentStart = String(draft.start_time || '');
+                                  const currentEnd = String(draft.end_time || '');
+                                  if (draft.all_day) {
+                                    if (!currentStart) {
+                                      const today = dayjs().tz(timezoneName).format('YYYY-MM-DD');
+                                      handleDraftFieldChange('start_time', today);
+                                      handleDraftFieldChange('end_time', today);
+                                    } else if (!currentEnd) {
+                                      handleDraftFieldChange('end_time', currentStart);
+                                    }
+                                    return;
+                                  }
+                                  if (!currentStart && !currentEnd) {
+                                    const range = buildDraftDefaultRangeAroundNow(timezoneName);
+                                    handleDraftFieldChange('start_time', range.start);
+                                    handleDraftFieldChange('end_time', range.end);
+                                    return;
+                                  }
+                                  if (currentStart && !currentEnd) {
+                                    const nextEnd = buildEndFromStartLocal(currentStart, 60) || currentStart;
+                                    handleDraftFieldChange('end_time', nextEnd);
+                                  } else if (!currentStart && currentEnd) {
+                                    const range = buildDraftDefaultRangeAroundNow(timezoneName);
+                                    handleDraftFieldChange('start_time', range.start);
+                                    handleDraftFieldChange('end_time', coerceEndNotBeforeStartLocal(range.start, currentEnd));
+                                  }
+                                }}
+                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                  draftTimeRangeEnabled
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.timeRange')}
+                              </button>
                             </div>
-                            <div>
-                              <label className="form-label">{t('task.endTime')}</label>
-                              <input
-                                type="date"
-                                value={splitDatePart(draft.end_time)}
-                                onChange={(e) => handleDraftFieldChange('end_time', e.target.value)}
-                                className="form-input"
-                              />
+                            <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setDraftTimeCalendarMode('solar')}
+                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                  draftTimeCalendarMode === 'solar'
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.calendarSolar')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDraftTimeCalendarMode('lunar')}
+                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                  draftTimeCalendarMode === 'lunar'
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {t('task.calendarLunar')}
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
+                              className={`rounded-full border px-2 py-1 text-[11px] ${
+                                draft.all_day
+                                  ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                  : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {t('task.allDay')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => applyQuickDatePreset('clear')}
+                              className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50"
+                            >
+                              {t('task.clearDate')}
+                            </button>
+                            <div className="time-quick-actions ml-auto">
+                              <button
+                                type="button"
+                                title={t('task.quickToday')}
+                                aria-label={t('task.quickToday')}
+                                onClick={() => applyQuickDatePreset('today')}
+                                className="time-quick-btn"
+                              >
+                                <IconSun className="h-5 w-5" />
+                              </button>
+                              <button
+                                type="button"
+                                title={t('task.quickTomorrow')}
+                                aria-label={t('task.quickTomorrow')}
+                                onClick={() => applyQuickDatePreset('tomorrow')}
+                                className="time-quick-btn"
+                              >
+                                <IconSunrise className="h-5 w-5" />
+                              </button>
+                              <button
+                                type="button"
+                                title={t('task.quickNextWeek')}
+                                aria-label={t('task.quickNextWeek')}
+                                onClick={() => applyQuickDatePreset('next_week')}
+                                className="time-quick-btn"
+                              >
+                                <IconCalendar className="h-5 w-5" />
+                              </button>
+                              <button
+                                type="button"
+                                title={t('task.quickTonight')}
+                                aria-label={t('task.quickTonight')}
+                                onClick={() => applyQuickDatePreset('tonight')}
+                                className="time-quick-btn"
+                              >
+                                <IconMoon className="h-5 w-5" />
+                              </button>
                             </div>
                           </div>
-                        ) : (
-                          <div className="space-y-3">
-                            <div>
-                              <label className="form-label">{t('task.startTime')}</label>
-                              <input
-                                type="datetime-local"
-                                step={timeInputStepSeconds}
-                                value={draft.start_time || ''}
-                                onChange={(e) => handleDraftFieldChange('start_time', e.target.value || '')}
-                                className="form-input"
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label">{t('task.endTime')}</label>
-                              <input
-                                type="datetime-local"
-                                step={timeInputStepSeconds}
-                                value={draft.end_time || ''}
-                                onChange={(e) => handleDraftFieldChange('end_time', e.target.value || '')}
-                                className="form-input"
-                              />
-                            </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div>
+                            {draftTimeRangeEnabled && (
+                              <div className="mb-1 inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftTimeRangeEditing('start')}
+                                  className={`rounded-full px-2 py-1 text-[11px] ${
+                                    draftTimeRangeEditing === 'start'
+                                      ? 'bg-sky-100 text-sky-700'
+                                      : 'text-slate-500 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {t('task.startTime')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftTimeRangeEditing('end')}
+                                  className={`rounded-full px-2 py-1 text-[11px] ${
+                                    draftTimeRangeEditing === 'end'
+                                      ? 'bg-sky-100 text-sky-700'
+                                      : 'text-slate-500 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {t('task.endTime')}
+                                </button>
+                              </div>
+                            )}
+                            <TaskDatePicker
+                              key={`draft-time-${draftTimeCalendarMode}-${draftTimeRangeEnabled ? draftTimeRangeEditing : 'point'}-${draft.all_day ? 'all' : 'timed'}`}
+                              value={draft.all_day
+                                ? splitDatePart((draftTimeRangeEnabled && draftTimeRangeEditing === 'end') ? draft.end_time : draft.start_time)
+                                : ((draftTimeRangeEnabled && draftTimeRangeEditing === 'end') ? (draft.end_time || '') : (draft.start_time || ''))}
+                              allDay={!!draft.all_day}
+                              stepMinutes={30}
+                              inline
+                              lunarOverlay
+                              lunarMode={draftTimeCalendarMode === 'lunar'}
+                              onChange={(nextValue) => {
+                                if (draftTimeRangeEnabled && draftTimeRangeEditing === 'end') {
+                                  handleDraftEndDateTimeChange(nextValue);
+                                  return;
+                                }
+                                handleDraftStartDateTimeChange(nextValue);
+                              }}
+                            />
                           </div>
-                        )}
+                        </div>
                       </div>
                     )}
 
@@ -2830,12 +3159,64 @@ function TaskList({ forcedView = '' }) {
                                   </button>
                                   <button
                                     type="button"
-                                    disabled
-                                    title={t('task.lunarRepeatPending')}
-                                    className="cursor-not-allowed rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs text-slate-400"
+                                    onClick={() => {
+                                      handleDraftFieldChange('recurrence_type', 'lunar');
+                                      handleDraftFieldChange('recurrence_days', []);
+                                      const fallback = parseLunarYearlyRule(
+                                        { freq: 'lunar_yearly' },
+                                        draft.start_time || getDefaultStartInputValue(timezone),
+                                      ) || {
+                                        year: dayjs().tz(LUNAR_TIMEZONE).year(),
+                                        month: 1,
+                                        day: 1,
+                                        isLeapMonth: false,
+                                      };
+                                      setDraftRecurrenceLunarYear(fallback.year);
+                                      handleDraftFieldChange('recurrence_lunar_month', fallback.month);
+                                      handleDraftFieldChange('recurrence_lunar_day', fallback.day);
+                                      handleDraftFieldChange('recurrence_lunar_is_leap_month', fallback.isLeapMonth);
+                                    }}
+                                    className={`rounded-full border px-3 py-1 text-xs ${
+                                      (draft.recurrence_type || 'daily') === 'lunar'
+                                        ? 'border-sky-300 bg-sky-100 text-sky-800'
+                                        : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
+                                    }`}
                                   >
-                                    {t('task.lunarDay')}
+                                    {t('task.lunarYearly')}
                                   </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {(draft.recurrence_type || 'daily') === 'lunar' && (
+                              <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-2.5">
+                                <div className="text-xs font-medium text-slate-700">{t('task.lunarYearly')}</div>
+                                <TaskDatePicker
+                                  value={draftRecurrenceLunarPickerDate}
+                                  allDay
+                                  inline
+                                  lunarOverlay
+                                  lunarMode
+                                  stepMinutes={timeGranularity}
+                                  onChange={(nextValue) => {
+                                    const value = String(nextValue || '').trim();
+                                    if (!value) return;
+                                    const lunar = lunarSelectionFromLocalInput(value, true, LUNAR_TIMEZONE);
+                                    if (!lunar) return;
+                                    const nextSelection = coerceLunarSelection({
+                                      year: lunar.year,
+                                      month: lunar.month,
+                                      day: lunar.day,
+                                      isLeapMonth: lunar.isLeapMonth,
+                                    });
+                                    setDraftRecurrenceLunarYear(nextSelection.year);
+                                    handleDraftFieldChange('recurrence_lunar_month', nextSelection.month);
+                                    handleDraftFieldChange('recurrence_lunar_day', nextSelection.day);
+                                    handleDraftFieldChange('recurrence_lunar_is_leap_month', nextSelection.isLeapMonth);
+                                  }}
+                                />
+                                <div className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                                  {`${t('task.lunarYearly')} ${draft.recurrence_lunar_is_leap_month ? t('task.lunarLeapPrefix') : ''}${Number.parseInt(draft.recurrence_lunar_month, 10) || 1}/${Number.parseInt(draft.recurrence_lunar_day, 10) || 1}`}
                                 </div>
                               </div>
                             )}

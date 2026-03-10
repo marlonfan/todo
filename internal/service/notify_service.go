@@ -10,7 +10,6 @@ import (
 	"todo-app/internal/notify"
 	"todo-app/internal/repository"
 
-	"github.com/teambition/rrule-go"
 	"gorm.io/gorm"
 )
 
@@ -427,10 +426,6 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 	if task == nil || task.RecurrenceRule == nil {
 		return nil, nil
 	}
-	anchor, hasAnchor := resolveTaskOccurrenceAnchorDate(task)
-	if !hasAnchor {
-		return nil, nil
-	}
 
 	fromUTC := from.UTC()
 	if fromUTC.IsZero() {
@@ -448,15 +443,9 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 		occurrenceByDate[row.OccurrenceDate.UTC().Format("2006-01-02")] = row
 	}
 
-	rruleStr := buildRRuleString(task.RecurrenceRule, &anchor, task.RecurrenceEndDate)
-	rule, parseErr := rrule.StrToRRule(rruleStr)
-	if parseErr != nil {
-		return nil, nil
-	}
-
-	occurrences := rule.Between(fromDate, horizon, true)
-	for _, occ := range occurrences {
-		dateOnly := occ.UTC().Truncate(24 * time.Hour)
+	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon)
+	for _, occurrenceStart := range occurrences {
+		dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
 		override := occurrenceByDate[dateOnly.Format("2006-01-02")]
 
 		status := task.Status
@@ -467,7 +456,7 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 			continue
 		}
 
-		startTime := occ.UTC()
+		startTime := occurrenceStart.UTC()
 		if override != nil && override.StartTime != nil {
 			startTime = override.StartTime.UTC()
 		}

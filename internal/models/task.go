@@ -27,12 +27,15 @@ const (
 
 // RecurrenceRule represents recurring task rule
 type RecurrenceRule struct {
-	Freq     string   `json:"freq,omitempty"`     // daily, weekly, monthly, yearly
-	Interval int      `json:"interval,omitempty"` // every N days/weeks/months/years
-	ByDay    []string `json:"byday,omitempty"`    // MO, TU, WE, TH, FR, SA, SU
-	ByMonth  []int    `json:"bymonth,omitempty"`  // 1-12
-	ByDate   []int    `json:"bydate,omitempty"`   // day of month
-	Count    int      `json:"count,omitempty"`    // max occurrences
+	Freq             string   `json:"freq,omitempty"`               // daily, weekly, monthly, yearly, lunar_yearly
+	Interval         int      `json:"interval,omitempty"`           // every N days/weeks/months/years
+	ByDay            []string `json:"byday,omitempty"`              // MO, TU, WE, TH, FR, SA, SU
+	ByMonth          []int    `json:"bymonth,omitempty"`            // 1-12
+	ByDate           []int    `json:"bydate,omitempty"`             // day of month
+	Count            int      `json:"count,omitempty"`              // max occurrences
+	LunarMonth       int      `json:"lunar_month,omitempty"`        // 1-12
+	LunarDay         int      `json:"lunar_day,omitempty"`          // 1-30
+	LunarIsLeapMonth bool     `json:"lunar_is_leap_month,omitempty"` // true => leap month when available
 }
 
 // Value implements driver.Valuer
