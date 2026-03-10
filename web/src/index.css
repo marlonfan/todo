@@ -1775,3 +1775,21 @@ body {
     min-width: 2.9rem;
   }
 }
+
+/* Calendar lunar and holiday display */
+.canvas-lunar-day {
+  @apply text-[10px] text-slate-400 leading-tight;
+}
+
+.canvas-holiday-tag {
+  @apply text-[10px] text-rose-500 font-medium leading-tight;
+}
+
+.canvas-solar-term {
+  @apply text-[10px] text-emerald-600 font-medium leading-tight;
+}
+
+/* Date cell holiday highlight */
+.canvas-day-cell.holiday {
+  @apply bg-rose-50/30;
+}

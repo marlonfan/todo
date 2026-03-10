@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import dayjs from 'dayjs';
 import { flushSync } from 'react-dom';
 import { commitOffsetFromWheelSession, resolvePanDelta, shouldCommitWheelSession } from './canvasMotionMath';
+import { getDayDisplayInfo, clearHolidayCache } from '../utils/holidays';
+import { getShowChineseHolidays, onUIPrefsChanged } from '../utils/uiPrefs';
 
 const HOUR_HEIGHT = 56;
 const MONTH_WEEK_HEIGHT = 164;
@@ -188,6 +190,7 @@ export default function InfiniteCalendarCanvas({
   const [dragVisual, setDragVisual] = useState(null);
   const [eventGestureLocked, setEventGestureLocked] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [showChineseHolidays, setShowChineseHolidays] = useState(() => getShowChineseHolidays());
   const dayColumns = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const monthDayCellWidth = useMemo(
     () => Math.max(1, (viewportSize.width || 700) / 7),
@@ -348,6 +351,15 @@ export default function InfiniteCalendarCanvas({
       mask.style.opacity = '0';
     }
   }, [clearLongPressTimer, clearWheelCommitTimer, unlockTextSelection]);
+
+  useEffect(() => {
+    const unsubscribe = onUIPrefsChanged((event) => {
+      if (event?.detail?.showChineseHolidays !== undefined) {
+        setShowChineseHolidays(event.detail.showChineseHolidays);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1747,15 +1759,36 @@ export default function InfiniteCalendarCanvas({
                   });
                 }}
               >
-                <span
-                  className={`pointer-events-none absolute left-1.5 top-1 inline-flex items-center rounded-full text-xs font-semibold ${
-                    isToday
-                      ? 'bg-blue-600 px-2 py-0.5 text-white shadow-sm'
-                      : 'px-0 text-slate-700'
-                  }`}
-                >
-                  {day.format('M/D')}
-                </span>
+                {(() => {
+                  const displayInfo = getDayDisplayInfo(day.toDate(), showChineseHolidays);
+                  return (
+                    <div className="pointer-events-none absolute left-1.5 right-1.5 top-1 flex items-start justify-between">
+                      <div className="flex items-center gap-1">
+                        <span
+                          className={`inline-flex items-center rounded-full text-xs font-semibold ${
+                            isToday
+                              ? 'bg-blue-600 px-2 py-0.5 text-white shadow-sm'
+                              : 'px-0 text-slate-700'
+                          }`}
+                        >
+                          {day.format('M/D')}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {displayInfo.lunarDisplay}
+                        </span>
+                      </div>
+                      {showChineseHolidays && displayInfo.primaryHoliday && (
+                        <span
+                          className={`text-[10px] font-medium leading-tight truncate max-w-[50%] ${
+                            displayInfo.isHoliday ? 'text-rose-500' : 'text-emerald-600'
+                          }`}
+                        >
+                          {displayInfo.primaryHoliday}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
                 {isToday && (
                   <span
                     className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500/90 shadow"

@@ -231,6 +231,7 @@
     "defaultAfternoonTime": "Afternoon default time",
     "defaultEveningTime": "Evening default time",
     "showCategoryEmoji": "Show category emoji icons",
+    "showChineseHolidays": "Show Chinese holidays and lunar calendar",
     "mobileNavigation": "Home & Mobile navigation",
     "mobileDefaultTab": "Default home page",
     "mobileDefaultTaskView": "Default task list",

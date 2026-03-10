@@ -8,7 +8,7 @@ import {
   normalizeTimeGranularity,
   setUserTimezone,
 } from '../utils/time';
-import { getShowCategoryEmoji, setShowCategoryEmoji } from '../utils/uiPrefs';
+import { getShowCategoryEmoji, setShowCategoryEmoji, getShowChineseHolidays, setShowChineseHolidays } from '../utils/uiPrefs';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { authAPI } from '../api/client';
@@ -124,6 +124,7 @@ function Settings() {
       : '20:00'
   );
   const [showCategoryEmoji, setShowCategoryEmojiState] = useState(getShowCategoryEmoji());
+  const [showChineseHolidays, setShowChineseHolidaysState] = useState(getShowChineseHolidays());
   const [activeTab, setActiveTab] = useState('general');
   const [calendarDefaultView, setCalendarDefaultView] = useState(
     normalizeCalendarDefaultView(cachedUser.calendar_default_view)
@@ -389,6 +390,11 @@ function Settings() {
   const handleShowCategoryEmojiToggle = (enabled) => {
     setShowCategoryEmojiState(enabled);
     setShowCategoryEmoji(enabled);
+  };
+
+  const handleShowChineseHolidaysToggle = (enabled) => {
+    setShowChineseHolidaysState(enabled);
+    setShowChineseHolidays(enabled);
   };
 
   const handleMobileDefaultTabChange = async (nextValue) => {
@@ -882,6 +888,17 @@ function Settings() {
                       onChange={(e) => handleShowCategoryEmojiToggle(e.target.checked)}
                     />
                     {t('settings.showCategoryEmoji')}
+                  </label>
+                </div>
+
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={showChineseHolidays}
+                      onChange={(e) => handleShowChineseHolidaysToggle(e.target.checked)}
+                    />
+                    {t('settings.showChineseHolidays')}
                   </label>
                 </div>
 

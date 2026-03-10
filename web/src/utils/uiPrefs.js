@@ -1,6 +1,7 @@
 const KEY_SHOW_CATEGORY_EMOJI = 'ui_show_category_emoji';
 const KEY_TASKLIST_SORT = 'ui_tasklist_sort_by_v1';
 const KEY_TASKLIST_GROUP = 'ui_tasklist_group_by_v1';
+const KEY_SHOW_CHINESE_HOLIDAYS = 'ui_show_chinese_holidays';
 const EVENT_UI_PREFS_CHANGED = 'ui:prefs-changed';
 
 export function getShowCategoryEmoji() {
@@ -18,6 +19,19 @@ export function onUIPrefsChanged(handler) {
   if (typeof window === 'undefined') return () => {};
   window.addEventListener(EVENT_UI_PREFS_CHANGED, handler);
   return () => window.removeEventListener(EVENT_UI_PREFS_CHANGED, handler);
+}
+
+export function getShowChineseHolidays() {
+  if (typeof window === 'undefined') return true;
+  return localStorage.getItem(KEY_SHOW_CHINESE_HOLIDAYS) !== '0';
+}
+
+export function setShowChineseHolidays(enabled) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(KEY_SHOW_CHINESE_HOLIDAYS, enabled ? '1' : '0');
+  window.dispatchEvent(new CustomEvent(EVENT_UI_PREFS_CHANGED, {
+    detail: { showChineseHolidays: !!enabled },
+  }));
 }
 
 function readMap(key) {

@@ -231,6 +231,7 @@
     "defaultAfternoonTime": "下午默认时间",
     "defaultEveningTime": "晚上默认时间",
     "showCategoryEmoji": "显示分类 Emoji 图标",
+    "showChineseHolidays": "显示中国节假日和农历",
     "mobileNavigation": "首页与移动端导航",
     "mobileDefaultTab": "默认首页",
     "mobileDefaultTaskView": "任务页默认清单",
