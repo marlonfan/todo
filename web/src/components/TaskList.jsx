@@ -63,7 +63,7 @@ import {
 
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
-const DRAFT_IDLE_SUBMIT_MS = 30000;
+const DRAFT_IDLE_SUBMIT_MS = 3000;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
 const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
 const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled';
@@ -3609,13 +3609,9 @@ function TaskList({ forcedView = '' }) {
                 <button onClick={handleDeleteSelected} className="btn-danger text-sm">
                   {t('common.delete')}
                 </button>
-                <button
-                  onClick={handleSubmitDraft}
-                  disabled={savingDraft || submittingDraft || (!isDraftDirty && !hasPendingSubmit)}
-                  className="btn-primary text-sm"
-                >
-                  {submittingDraft ? t('task.submitting') : t('settings.syncNow')}
-                </button>
+                <div className="text-xs text-slate-500">
+                  {t('task.autoSubmitHint', { seconds: Math.max(1, Math.round(DRAFT_IDLE_SUBMIT_MS / 1000)) })}
+                </div>
               </div>
             </div>
           )}

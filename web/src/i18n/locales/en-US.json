@@ -129,6 +129,7 @@
     "saved": "Saved",
     "resetChanges": "Reset",
     "lastSavedAt": "Last saved {{time}}",
+    "autoSubmitHint": "Auto submit is on (syncs after ~{{seconds}}s idle)",
     "quickToday": "Today",
     "quickTomorrow": "Tomorrow",
     "quickTonight": "Tonight",
