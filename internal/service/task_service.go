@@ -333,6 +333,7 @@ func (s *TaskService) Update(
 		}
 		return nil, err
 	}
+	wasRecurring := task.RecurrenceRule != nil
 	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
@@ -449,6 +450,18 @@ func (s *TaskService) Update(
 		completedStatus := models.TaskStatusCompleted
 		if err := s.upsertRecurringOccurrence(task, completedAnchorDate, &completedStatus, nil); err != nil {
 			return nil, err
+		}
+	}
+	recurrenceJustEnabled := !wasRecurring && task.RecurrenceRule != nil
+	if recurrenceJustEnabled && !hasOccurrenceContext {
+		description := task.Description
+		if strings.TrimSpace(description) != "" {
+			if anchor, ok := resolveTaskOccurrenceAnchorDate(task); ok {
+				anchorDate := anchor.UTC().Truncate(24 * time.Hour)
+				if err := s.upsertRecurringOccurrence(task, anchorDate, nil, &description); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if task.RecurrenceRule != nil && hasOccurrenceContext && (occurrenceStatusValue != nil || occurrenceDescriptionValue != nil) {

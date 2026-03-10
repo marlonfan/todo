@@ -299,6 +299,70 @@ func TestUpdateRecurringOccurrenceDescriptionKeepsSeriesStatus(t *testing.T) {
 	}
 }
 
+func TestEnableRecurrenceSeedsFirstOccurrenceDescription(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID:      userID,
+		Title:       "Seed recurring description",
+		Description: "keep me on first occurrence",
+		Status:      models.TaskStatusPending,
+		Priority:    models.PriorityMedium,
+		StartTime:   &start,
+		Revision:    1,
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	revision := int64(1)
+	_, err := svc.Update(
+		userID,
+		task.ID,
+		&models.UpdateTaskRequest{
+			RecurrenceRule: &models.RecurrenceRule{
+				Freq:     "daily",
+				Interval: 1,
+			},
+		},
+		map[string]bool{"recurrence_rule": true},
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("enable recurrence: %v", err)
+	}
+
+	anchorDate := start.UTC().Truncate(24 * time.Hour)
+	occurrence, err := taskRepo.GetTaskOccurrence(userID, task.ID, anchorDate)
+	if err != nil {
+		t.Fatalf("load seeded occurrence: %v", err)
+	}
+	if occurrence.Description != "keep me on first occurrence" {
+		t.Fatalf("seeded occurrence description = %q, want keep me on first occurrence", occurrence.Description)
+	}
+
+	nextInstances, err := svc.ListNextPendingOccurrences(userID, start.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("list next pending occurrences: %v", err)
+	}
+	found := false
+	for _, instance := range nextInstances {
+		if instance.TaskID != task.ID {
+			continue
+		}
+		found = true
+		if instance.Description != "keep me on first occurrence" {
+			t.Fatalf("next occurrence description = %q, want keep me on first occurrence", instance.Description)
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("next pending occurrence for task %d not found", task.ID)
+	}
+}
+
 func TestRecurringOccurrenceCompletedReschedulesReminderToNextPendingInstance(t *testing.T) {
 	svc, taskRepo, notifyRepo, userID := newTestTaskServiceWithReminder(t)
 
