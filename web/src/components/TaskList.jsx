@@ -18,9 +18,11 @@ import {
   coerceLunarSelection,
   lunarSelectionFromLocalInput,
   LUNAR_TIMEZONE,
+  nextLocalInputFromLunarSelection,
   parseLunarYearlyRule,
   solarDateFromLunarSelection,
 } from '../utils/lunar';
+import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import {
   getShowCategoryEmoji,
   onUIPrefsChanged,
@@ -47,6 +49,7 @@ import {
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
+import { shouldHideRecurringSeriesAnchorInPending } from './taskListRecurringVisibility';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import { tasksAPI } from '../api/client';
@@ -67,6 +70,17 @@ const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled';
 const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
 const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
 const DELETE_DIALOG_KIND_TASK = 'task';
+const DETAIL_PANELS_REQUIRING_CONFIRM = new Set(['time', 'recurrence']);
+const TIME_PANEL_DRAFT_FIELDS = ['all_day', 'start_time', 'end_time'];
+const RECURRENCE_PANEL_DRAFT_FIELDS = [
+  'recurrence_enabled',
+  'recurrence_type',
+  'recurrence_days',
+  'recurrence_date',
+  'recurrence_lunar_month',
+  'recurrence_lunar_day',
+  'recurrence_lunar_is_leap_month',
+];
 
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
@@ -814,7 +828,11 @@ function TaskList({ forcedView = '' }) {
       const taskID = Number(task?.id || 0);
       const nextPending = recurringNextPendingMap.get(taskID);
       if (!nextPending) {
-        if (recurringNextOccurrencesFetched && String(task?.status || '') === 'pending') {
+        if (shouldHideRecurringSeriesAnchorInPending({
+          task,
+          hasNextPending: false,
+          nextOccurrencesFetched: recurringNextOccurrencesFetched,
+        })) {
           // Recurring series with no next pending occurrence should not fall back to series anchor in pending list.
           return [];
         }
@@ -962,11 +980,146 @@ function TaskList({ forcedView = '' }) {
   const isSavingDraftRef = useRef(false);
   const leaveFlushInFlightRef = useRef(false);
   const flushDraftOnLeaveRef = useRef(null);
+  const detailPanelSnapshotRef = useRef(null);
 
   const markDraftTouched = useCallback(() => {
     draftTouchedRef.current = true;
     draftEditVersionRef.current += 1;
   }, []);
+
+  const isDetailPanelRequiringConfirm = useCallback(
+    (panelName) => DETAIL_PANELS_REQUIRING_CONFIRM.has(String(panelName || '')),
+    []
+  );
+
+  const createDetailPanelSnapshot = useCallback((panelName, draftValue) => {
+    if (!draftValue || !isDetailPanelRequiringConfirm(panelName)) return null;
+    const fields = panelName === 'time' ? TIME_PANEL_DRAFT_FIELDS : RECURRENCE_PANEL_DRAFT_FIELDS;
+    const draftState = {};
+    fields.forEach((field) => {
+      const value = draftValue[field];
+      draftState[field] = Array.isArray(value) ? [...value] : value;
+    });
+    if (panelName === 'time') {
+      return {
+        panel: panelName,
+        draftState,
+        uiState: {
+          draftTimeRangeEnabled: !!draftTimeRangeEnabled,
+          draftTimeRangeEditing: draftTimeRangeEditing === 'end' ? 'end' : 'start',
+          draftTimeCalendarMode: draftTimeCalendarMode === 'lunar' ? 'lunar' : 'solar',
+        },
+      };
+    }
+    return {
+      panel: panelName,
+      draftState,
+      uiState: {
+        showDraftCustomRecurrenceMenu: !!showDraftCustomRecurrenceMenu,
+        showDraftMonthlyDatePicker: !!showDraftMonthlyDatePicker,
+        draftRecurrenceLunarYear: Number.parseInt(draftRecurrenceLunarYear, 10) || dayjs().tz(LUNAR_TIMEZONE).year(),
+      },
+    };
+  }, [
+    draftRecurrenceLunarYear,
+    draftTimeCalendarMode,
+    draftTimeRangeEditing,
+    draftTimeRangeEnabled,
+    isDetailPanelRequiringConfirm,
+    showDraftCustomRecurrenceMenu,
+    showDraftMonthlyDatePicker,
+  ]);
+
+  const restoreDetailPanelSnapshot = useCallback((snapshot) => {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const draftState = snapshot.draftState && typeof snapshot.draftState === 'object'
+      ? snapshot.draftState
+      : {};
+    setDraft((prev) => {
+      if (!prev) return prev;
+      return { ...prev, ...draftState };
+    });
+    if (snapshot.panel === 'time') {
+      setDraftTimeRangeEnabled(!!snapshot?.uiState?.draftTimeRangeEnabled);
+      setDraftTimeRangeEditing(snapshot?.uiState?.draftTimeRangeEditing === 'end' ? 'end' : 'start');
+      setDraftTimeCalendarMode(snapshot?.uiState?.draftTimeCalendarMode === 'lunar' ? 'lunar' : 'solar');
+      return;
+    }
+    if (snapshot.panel === 'recurrence') {
+      setShowDraftCustomRecurrenceMenu(!!snapshot?.uiState?.showDraftCustomRecurrenceMenu);
+      setShowDraftMonthlyDatePicker(!!snapshot?.uiState?.showDraftMonthlyDatePicker);
+      const nextYear = Number.parseInt(snapshot?.uiState?.draftRecurrenceLunarYear, 10);
+      if (Number.isFinite(nextYear)) {
+        setDraftRecurrenceLunarYear(nextYear);
+      }
+    }
+  }, []);
+
+  const closeDetailPanelWithConfirm = useCallback((panelName, shouldApply = false) => {
+    const name = String(panelName || '');
+    const snapshot = detailPanelSnapshotRef.current;
+    if (!shouldApply && snapshot && snapshot.panel === name) {
+      restoreDetailPanelSnapshot(snapshot);
+    }
+    if (snapshot && snapshot.panel === name) {
+      detailPanelSnapshotRef.current = null;
+    }
+    if (name === 'recurrence') {
+      setShowDraftCustomRecurrenceMenu(false);
+      setShowDraftMonthlyDatePicker(false);
+    }
+    setDetailPanel('');
+  }, [restoreDetailPanelSnapshot]);
+
+  const handleDetailPanelToggle = useCallback((panelName) => {
+    const nextPanel = String(panelName || '');
+    const currentPanel = String(detailPanel || '');
+    let nextPanelDraftState = draft;
+
+    if (currentPanel === nextPanel) {
+      if (isDetailPanelRequiringConfirm(currentPanel)) {
+        closeDetailPanelWithConfirm(currentPanel, false);
+      } else {
+        setDetailPanel('');
+      }
+      return;
+    }
+
+    if (currentPanel) {
+      if (isDetailPanelRequiringConfirm(currentPanel)) {
+        const snapshot = detailPanelSnapshotRef.current;
+        if (snapshot && snapshot.panel === currentPanel) {
+          if (nextPanelDraftState && typeof snapshot.draftState === 'object') {
+            nextPanelDraftState = { ...nextPanelDraftState, ...snapshot.draftState };
+          }
+          restoreDetailPanelSnapshot(snapshot);
+          detailPanelSnapshotRef.current = null;
+        }
+        if (currentPanel === 'recurrence') {
+          setShowDraftCustomRecurrenceMenu(false);
+          setShowDraftMonthlyDatePicker(false);
+        }
+        setDetailPanel('');
+      } else {
+        setDetailPanel('');
+      }
+    }
+
+    if (isDetailPanelRequiringConfirm(nextPanel)) {
+      detailPanelSnapshotRef.current = createDetailPanelSnapshot(nextPanel, nextPanelDraftState);
+    } else {
+      detailPanelSnapshotRef.current = null;
+    }
+    setShowActivityPanel(false);
+    setDetailPanel(nextPanel);
+  }, [
+    closeDetailPanelWithConfirm,
+    createDetailPanelSnapshot,
+    detailPanel,
+    draft,
+    isDetailPanelRequiringConfirm,
+    restoreDetailPanelSnapshot,
+  ]);
 
   const params = new URLSearchParams(location.search);
   const isSearchPath = location.pathname === '/search';
@@ -1037,13 +1190,17 @@ function TaskList({ forcedView = '' }) {
     const handlePointerDown = (event) => {
       if (!detailPanelRef.current) return;
       if (!detailPanelRef.current.contains(event.target)) {
-        setDetailPanel('');
+        if (isDetailPanelRequiringConfirm(detailPanel)) {
+          closeDetailPanelWithConfirm(detailPanel, false);
+        } else {
+          setDetailPanel('');
+        }
         setShowActivityPanel(false);
       }
     };
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [detailPanel, showActivityPanel]);
+  }, [closeDetailPanelWithConfirm, detailPanel, isDetailPanelRequiringConfirm, showActivityPanel]);
 
   useEffect(() => {
     if (detailPanel) {
@@ -1404,6 +1561,7 @@ function TaskList({ forcedView = '' }) {
     setDraftTimeRangeEditing('start');
     setDraftTimeCalendarMode('solar');
     setShowActivityPanel(false);
+    detailPanelSnapshotRef.current = null;
   }, [selectedTask?.id]);
 
   useEffect(() => {
@@ -1474,6 +1632,7 @@ function TaskList({ forcedView = '' }) {
     if (!selectedTask) {
       setDraft(null);
       setDraftTimeRangeEnabled(false);
+      detailPanelSnapshotRef.current = null;
       lastSyncedSelectedIDRef.current = 0;
       draftSourceTaskIDRef.current = 0;
       draftTouchedRef.current = false;
@@ -1504,7 +1663,7 @@ function TaskList({ forcedView = '' }) {
 
     // Keep detail draft synced with external updates (drag/drop, modal save, etc.)
     // unless the user is actively editing this draft.
-    if (!draftTouchedRef.current && detailPanel !== 'time') {
+    if (!draftTouchedRef.current && !isDetailPanelRequiringConfirm(detailPanel)) {
       const current = normalizeDraftForCompare(draft);
       const incoming = normalizeDraftForCompare(nextDraft);
       if (JSON.stringify(current) !== JSON.stringify(incoming)) {
@@ -1513,7 +1672,7 @@ function TaskList({ forcedView = '' }) {
         setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
     }
-  }, [selectedTask, draft, detailPanel]);
+  }, [selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm]);
 
   useEffect(() => {
     if (!draft) return;
@@ -1894,12 +2053,75 @@ function TaskList({ forcedView = '' }) {
     };
 
     if (timeChanged || recurrenceChanged) {
-      const startInput = String(draftValue.start_time ?? originalDraft?.start_time ?? '');
-      const endInput = String(draftValue.end_time ?? originalDraft?.end_time ?? '');
+      const fallbackTimeParts = getDefaultStartTimeParts();
+      const fallbackTime = `${String(fallbackTimeParts.hour).padStart(2, '0')}:${String(fallbackTimeParts.minute).padStart(2, '0')}`;
+      const lunarSelection = coerceLunarSelection({
+        year: draftRecurrenceLunarYear,
+        month: Number.parseInt(draftValue.recurrence_lunar_month, 10) || 1,
+        day: Number.parseInt(draftValue.recurrence_lunar_day, 10) || 1,
+        isLeapMonth: !!draftValue.recurrence_lunar_is_leap_month,
+      });
+      const recurrenceType = String(draftValue.recurrence_type || 'daily');
+      const normalizedRecurrenceDays = (draftValue.recurrence_days || [])
+        .map((day) => String(day || '').toUpperCase())
+        .filter((day) => WEEKDAY_ONLY_RE.test(day));
+      const recurrenceDaysForAlignment = normalizedRecurrenceDays.length > 0
+        ? normalizedRecurrenceDays
+        : workDayKeys;
+      const isLunarRecurrence = !!draftValue.recurrence_enabled && draftValue.recurrence_type === 'lunar';
+      const shouldAlignNearestSolarStart = !!(
+        recurrenceChanged
+        && draftValue.recurrence_enabled
+        && !isLunarRecurrence
+        && ['weekly', 'biweekly', 'monthly', 'yearly'].includes(recurrenceType)
+      );
+      const nowLocalInput = dayjs().tz(timezone).format('YYYY-MM-DDTHH:mm');
+      const nowLocalDateInput = dayjs().tz(timezone).format('YYYY-MM-DD');
+      const nowLunarInput = dayjs().tz(LUNAR_TIMEZONE).format('YYYY-MM-DDTHH:mm');
+      const nowLunarDateInput = dayjs().tz(LUNAR_TIMEZONE).format('YYYY-MM-DD');
+
+      const startInputRaw = String(draftValue.start_time ?? originalDraft?.start_time ?? '');
+      const endInputRaw = String(draftValue.end_time ?? originalDraft?.end_time ?? '');
       payload.all_day = !!draftValue.all_day;
       if (payload.all_day) {
-        const startDate = splitDatePart(startInput);
-        let endDate = splitDatePart(endInput);
+        let nextStartInput = startInputRaw;
+        let nextEndInput = endInputRaw;
+        if (isLunarRecurrence) {
+          const lunarAlignedStart = nextLocalInputFromLunarSelection(lunarSelection, {
+            currentValue: nextStartInput,
+            allDay: true,
+            timezoneName: LUNAR_TIMEZONE,
+            fallbackTime,
+            fromValue: nowLunarDateInput,
+          });
+          if (lunarAlignedStart && lunarAlignedStart !== nextStartInput) {
+            const shiftedEnd = shiftEndByDurationLocal(nextStartInput, nextEndInput, lunarAlignedStart);
+            nextStartInput = lunarAlignedStart;
+            if (shiftedEnd) {
+              nextEndInput = shiftedEnd;
+            }
+          }
+        }
+        if (shouldAlignNearestSolarStart) {
+          const alignedStartInput = alignStartInputToNearestRecurrence({
+            startInput: nextStartInput,
+            recurrenceType,
+            recurrenceDays: recurrenceDaysForAlignment,
+            recurrenceDate: draftValue.recurrence_date,
+            allDay: true,
+            referenceInput: nowLocalDateInput,
+            timezoneName: timezone,
+          });
+          if (alignedStartInput && alignedStartInput !== nextStartInput) {
+            const shiftedEnd = shiftEndByDurationLocal(nextStartInput, nextEndInput, alignedStartInput);
+            nextStartInput = alignedStartInput;
+            if (shiftedEnd) {
+              nextEndInput = shiftedEnd;
+            }
+          }
+        }
+        const startDate = splitDatePart(nextStartInput);
+        let endDate = splitDatePart(nextEndInput);
         if (startDate && endDate) {
           const startDay = parseLocalInput(startDate);
           const endDay = parseLocalInput(endDate);
@@ -1912,16 +2134,34 @@ function TaskList({ forcedView = '' }) {
         if (startDate) payload.start_time_local = startDate;
         if (endDate) payload.end_time_local = endDate;
       } else {
-        let nextStartInput = startInput;
-        let nextEndInput = endInput;
-        if (
-          draftValue.recurrence_enabled
-          && (draftValue.recurrence_type === 'weekly' || draftValue.recurrence_type === 'biweekly')
-        ) {
-          const recurrenceDays = (draftValue.recurrence_days || [])
-            .map((day) => String(day || '').toUpperCase())
-            .filter((day) => WEEKDAY_ONLY_RE.test(day));
-          const alignedStartInput = alignStartToWeekdayLocal(nextStartInput, recurrenceDays.length > 0 ? recurrenceDays : workDayKeys);
+        let nextStartInput = startInputRaw;
+        let nextEndInput = endInputRaw;
+        if (isLunarRecurrence) {
+          const lunarAlignedStart = nextLocalInputFromLunarSelection(lunarSelection, {
+            currentValue: nextStartInput,
+            allDay: false,
+            timezoneName: LUNAR_TIMEZONE,
+            fallbackTime,
+            fromValue: nowLunarInput,
+          });
+          if (lunarAlignedStart && lunarAlignedStart !== nextStartInput) {
+            const shiftedEnd = shiftEndByDurationLocal(nextStartInput, nextEndInput, lunarAlignedStart);
+            nextStartInput = lunarAlignedStart;
+            if (shiftedEnd) {
+              nextEndInput = shiftedEnd;
+            }
+          }
+        }
+        if (shouldAlignNearestSolarStart) {
+          const alignedStartInput = alignStartInputToNearestRecurrence({
+            startInput: nextStartInput,
+            recurrenceType,
+            recurrenceDays: recurrenceDaysForAlignment,
+            recurrenceDate: draftValue.recurrence_date,
+            allDay: false,
+            referenceInput: nowLocalInput,
+            timezoneName: timezone,
+          });
           if (alignedStartInput && alignedStartInput !== nextStartInput) {
             const shiftedEnd = shiftEndByDurationLocal(nextStartInput, nextEndInput, alignedStartInput);
             nextStartInput = alignedStartInput;
@@ -1940,8 +2180,8 @@ function TaskList({ forcedView = '' }) {
       logTimeDebug('taskList.buildDraftPayload.time', {
         task_id: Number(taskValue?.id || 0),
         all_day: payload.all_day,
-        start_input: startInput,
-        end_input: endInput,
+        start_input: startInputRaw,
+        end_input: endInputRaw,
         start_time_local: payload.start_time_local || '',
         end_time_local: payload.end_time_local || '',
         start_time: payload.start_time,
@@ -2301,14 +2541,14 @@ function TaskList({ forcedView = '' }) {
     if (!selectedTask || !draft || !isDraftDirty || savingDraft) return;
     if (!draftTouchedRef.current) return;
     if (!(draft.title || '').trim()) return;
-    if (detailPanel === 'time') return;
+    if (isDetailPanelRequiringConfirm(detailPanel)) return;
 
     const timer = window.setTimeout(() => {
       handleSaveDraft();
     }, 800);
 
     return () => window.clearTimeout(timer);
-  }, [detailPanel, draft, isDraftDirty, savingDraft, selectedTask]);
+  }, [detailPanel, draft, isDetailPanelRequiringConfirm, isDraftDirty, savingDraft, selectedTask]);
 
   useEffect(() => {
     if (!isDraftDirty) {
@@ -2734,7 +2974,11 @@ function TaskList({ forcedView = '' }) {
                     <button
                       type="button"
                       onClick={() => {
-                        setDetailPanel('');
+                        if (isDetailPanelRequiringConfirm(detailPanel)) {
+                          closeDetailPanelWithConfirm(detailPanel, false);
+                        } else {
+                          setDetailPanel('');
+                        }
                         setShowActivityPanel((prev) => !prev);
                       }}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
@@ -2753,7 +2997,7 @@ function TaskList({ forcedView = '' }) {
                     )}
                     <button
                       type="button"
-                      onClick={() => setDetailPanel(detailPanel === 'priority' ? '' : 'priority')}
+                      onClick={() => handleDetailPanelToggle('priority')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftPriorityButtonClass}`}
                       title={draftPriorityTitle}
                     >
@@ -2761,7 +3005,7 @@ function TaskList({ forcedView = '' }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDetailPanel(detailPanel === 'category' ? '' : 'category')}
+                      onClick={() => handleDetailPanelToggle('category')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftCategoryButtonClass}`}
                       title={draftCategorySummaryLabel}
                     >
@@ -2769,7 +3013,7 @@ function TaskList({ forcedView = '' }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDetailPanel(detailPanel === 'recurrence' ? '' : 'recurrence')}
+                      onClick={() => handleDetailPanelToggle('recurrence')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftRecurrenceButtonClass}`}
                       title={draftRecurrenceSummaryLabel}
                     >
@@ -2779,7 +3023,7 @@ function TaskList({ forcedView = '' }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDetailPanel(detailPanel === 'time' ? '' : 'time')}
+                      onClick={() => handleDetailPanelToggle('time')}
                       className={`relative inline-flex h-8 min-w-0 items-center gap-1 rounded-md px-2 text-sm ${draftTimeButtonClass}`}
                       title={draftTimeButtonTitle}
                     >
@@ -3009,6 +3253,22 @@ function TaskList({ forcedView = '' }) {
                               }}
                             />
                           </div>
+                        </div>
+                        <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => closeDetailPanelWithConfirm('time', false)}
+                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                          >
+                            {t('common.cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => closeDetailPanelWithConfirm('time', true)}
+                            className="rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+                          >
+                            {t('common.confirm')}
+                          </button>
                         </div>
                       </div>
                     )}
@@ -3307,6 +3567,22 @@ function TaskList({ forcedView = '' }) {
                             )}
                           </div>
                         )}
+                        <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => closeDetailPanelWithConfirm('recurrence', false)}
+                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                          >
+                            {t('common.cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => closeDetailPanelWithConfirm('recurrence', true)}
+                            className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                          >
+                            {t('common.confirm')}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

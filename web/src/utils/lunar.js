@@ -27,6 +27,20 @@ function pad2(value) {
   return String(value).padStart(2, '0');
 }
 
+function resolveTimePart(value, fallbackTime = '09:00') {
+  const fallback = /^\d{2}:\d{2}$/.test(String(fallbackTime || '')) ? String(fallbackTime) : '09:00';
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+  const token = raw.includes('T')
+    ? raw.split('T')[1]
+    : raw.includes(' ')
+      ? raw.split(' ')[1]
+      : '';
+  const match = String(token || '').match(/^(\d{2}):(\d{2})/);
+  if (!match) return fallback;
+  return `${match[1]}:${match[2]}`;
+}
+
 function parseLocalInput(value, allDay = false, timezoneName = LUNAR_TIMEZONE) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -191,6 +205,60 @@ export function localInputFromLunarSelection(
   const timePart = current.includes('T') ? current.split('T')[1] : '';
   const normalizedTime = /^\d{2}:\d{2}/.test(timePart) ? timePart.slice(0, 5) : fallbackTime;
   return `${solarDate}T${normalizedTime}`;
+}
+
+export function nextLocalInputFromLunarSelection(
+  selection,
+  options = {}
+) {
+  const allDay = !!options?.allDay;
+  const timezoneName = String(options?.timezoneName || LUNAR_TIMEZONE);
+  const fallbackTime = resolveTimePart('', options?.fallbackTime || '09:00');
+  const currentValue = String(options?.currentValue || '').trim();
+  const fromValue = String(options?.fromValue || '').trim();
+  const searchYears = Math.max(1, Number.parseInt(options?.searchYears, 10) || 8);
+
+  const now = parseLocalInput(fromValue, allDay, timezoneName) || dayjs().tz(timezoneName);
+  const reference = allDay ? now.startOf('day') : now.startOf('minute');
+  const normalized = normalizeSelection({
+    year: reference.year(),
+    month: selection?.month,
+    day: selection?.day,
+    isLeapMonth: selection?.isLeapMonth,
+  }, reference.year());
+
+  for (let offset = 0; offset <= searchYears; offset += 1) {
+    const year = reference.year() + offset;
+    const withYear = coerceLunarSelection({
+      year,
+      month: normalized.month,
+      day: normalized.day,
+      isLeapMonth: normalized.isLeapMonth,
+    }, year);
+    const candidateInput = localInputFromLunarSelection(
+      withYear,
+      currentValue,
+      allDay,
+      fallbackTime,
+    );
+    if (!candidateInput) continue;
+    const candidate = parseLocalInput(candidateInput, allDay, timezoneName);
+    if (!candidate || candidate.isBefore(reference)) continue;
+    return candidateInput;
+  }
+
+  const fallbackSelection = coerceLunarSelection({
+    year: reference.year(),
+    month: normalized.month,
+    day: normalized.day,
+    isLeapMonth: normalized.isLeapMonth,
+  }, reference.year());
+  return localInputFromLunarSelection(
+    fallbackSelection,
+    currentValue,
+    allDay,
+    fallbackTime,
+  );
 }
 
 export function buildLunarYearlyRuleFromSelection(selection) {

@@ -16,10 +16,12 @@ import {
   buildLunarYearlyRuleFromSelection,
   coerceLunarSelection,
   lunarSelectionFromLocalInput,
+  nextLocalInputFromLunarSelection,
   solarDateFromLunarSelection,
   LUNAR_TIMEZONE,
   parseLunarYearlyRule,
 } from '../utils/lunar';
+import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import {
   IconCalendar,
   IconClock,
@@ -947,11 +949,77 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (shouldFallbackScheduleFromTask) return fallback || '';
         return '';
       };
+      const defaultStartParts = getDefaultStartParts();
+      const defaultStartTime = `${String(defaultStartParts.hour).padStart(2, '0')}:${String(defaultStartParts.minute).padStart(2, '0')}`;
+      const lunarSelection = coerceLunarSelection({
+        year: recurrenceLunarYear,
+        month: Number.parseInt(recurrenceLunarMonth, 10) || 1,
+        day: Number.parseInt(recurrenceLunarDay, 10) || 1,
+        isLeapMonth: !!recurrenceLunarIsLeapMonth,
+      });
+      const shouldAlignLunarStart = !!showRecurrence && recurrenceType === 'lunar';
+      const recurrenceDaysForAlignment = normalizedSelectedDays.length > 0 ? normalizedSelectedDays : workDayKeys;
+      const shouldAlignNearestSolarStart = !!(
+        showRecurrence
+        && recurrenceType !== 'lunar'
+        && ['weekly', 'biweekly', 'monthly', 'yearly'].includes(recurrenceType)
+        && (!isEditing || recurrenceChanged)
+      );
+      const nowLocalInput = dayjs().tz(clientTimezone).format('YYYY-MM-DDTHH:mm');
+      const nowLocalDateInput = dayjs().tz(clientTimezone).format('YYYY-MM-DD');
+      const nowLunarInput = dayjs().tz(LUNAR_TIMEZONE).format('YYYY-MM-DDTHH:mm');
+      const nowLunarDateInput = dayjs().tz(LUNAR_TIMEZONE).format('YYYY-MM-DD');
 
       // 处理日期时间
       if (data.all_day) {
-        const startDate = splitDatePart(resolveInputValue(data.start_time, fallbackStartInput));
-        let endDate = splitDatePart(resolveInputValue(data.end_time, fallbackEndInput));
+        let startInput = resolveInputValue(data.start_time, fallbackStartInput);
+        let endInput = resolveInputValue(data.end_time, fallbackEndInput);
+        if (shouldAlignLunarStart) {
+          const lunarAlignedStart = nextLocalInputFromLunarSelection(lunarSelection, {
+            currentValue: startInput,
+            allDay: true,
+            timezoneName: LUNAR_TIMEZONE,
+            fallbackTime: defaultStartTime,
+            fromValue: nowLunarDateInput,
+          });
+          if (lunarAlignedStart && lunarAlignedStart !== startInput) {
+            const shiftedEndTime = shiftEndByDuration(
+              startInput,
+              endInput,
+              lunarAlignedStart,
+              clientTimezone
+            );
+            startInput = lunarAlignedStart;
+            if (shiftedEndTime) {
+              endInput = shiftedEndTime;
+            }
+          }
+        }
+        if (shouldAlignNearestSolarStart) {
+          const nextStartInput = alignStartInputToNearestRecurrence({
+            startInput,
+            recurrenceType,
+            recurrenceDays: recurrenceDaysForAlignment,
+            recurrenceDate: monthlyDate,
+            allDay: true,
+            referenceInput: nowLocalDateInput,
+            timezoneName: clientTimezone,
+          });
+          if (nextStartInput && nextStartInput !== startInput) {
+            const shiftedEndTime = shiftEndByDuration(
+              startInput,
+              endInput,
+              nextStartInput,
+              clientTimezone
+            );
+            startInput = nextStartInput;
+            if (shiftedEndTime) {
+              endInput = shiftedEndTime;
+            }
+          }
+        }
+        const startDate = splitDatePart(startInput);
+        let endDate = splitDatePart(endInput);
         if (startDate && endDate) {
           const startDay = parseLocalInput(startDate);
           const endDay = parseLocalInput(endDate);
@@ -987,12 +1055,37 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (typeof data.end_time === 'string' && data.end_time) {
           originalEndInput = data.end_time;
         }
-        if (showRecurrence && (recurrenceType === 'weekly' || recurrenceType === 'biweekly')) {
-          const nextStartInput = alignStartInputToWeekday(
-            originalStartInput,
-            normalizedSelectedDays.length > 0 ? normalizedSelectedDays : workDayKeys,
-            clientTimezone
-          );
+        if (shouldAlignLunarStart) {
+          const lunarAlignedStart = nextLocalInputFromLunarSelection(lunarSelection, {
+            currentValue: originalStartInput,
+            allDay: false,
+            timezoneName: LUNAR_TIMEZONE,
+            fallbackTime: defaultStartTime,
+            fromValue: nowLunarInput,
+          });
+          if (lunarAlignedStart && lunarAlignedStart !== originalStartInput) {
+            const shiftedEndTime = shiftEndByDuration(
+              originalStartInput,
+              originalEndInput,
+              lunarAlignedStart,
+              clientTimezone
+            );
+            originalStartInput = lunarAlignedStart;
+            if (shiftedEndTime) {
+              originalEndInput = shiftedEndTime;
+            }
+          }
+        }
+        if (shouldAlignNearestSolarStart) {
+          const nextStartInput = alignStartInputToNearestRecurrence({
+            startInput: originalStartInput,
+            recurrenceType,
+            recurrenceDays: recurrenceDaysForAlignment,
+            recurrenceDate: monthlyDate,
+            allDay: false,
+            referenceInput: nowLocalInput,
+            timezoneName: clientTimezone,
+          });
           if (nextStartInput && nextStartInput !== originalStartInput) {
             const shiftedEndTime = shiftEndByDuration(
               originalStartInput,
