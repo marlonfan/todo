@@ -129,7 +129,6 @@
     "saved": "已保存",
     "resetChanges": "重置",
     "lastSavedAt": "上次保存 {{time}}",
-    "autoSubmitHint": "自动提交已开启（空闲约 {{seconds}} 秒后提交）",
     "quickToday": "今天",
     "quickTomorrow": "明天",
     "quickTonight": "今晚",
