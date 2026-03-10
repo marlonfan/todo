@@ -115,6 +115,15 @@ function normalizeDraftForCompare(draft) {
   };
 }
 
+function isDetailPanelFloatingLayerTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return !!(
+    target.closest('.task-time-selectbox-menu--floating')
+    || target.closest('.react-datepicker-popper')
+    || target.closest('.react-datepicker__portal')
+  );
+}
+
 function getDefaultStartTimeParts() {
   try {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -979,13 +988,34 @@ function TaskList({ forcedView = '' }) {
   const isDraftDirtyRef = useRef(false);
   const isSavingDraftRef = useRef(false);
   const isSubmittingDraftRef = useRef(false);
-  const leaveFlushInFlightRef = useRef(false);
+  const flushDraftQueueRef = useRef(Promise.resolve());
   const flushDraftOnLeaveRef = useRef(null);
   const detailPanelSnapshotRef = useRef(null);
+  const switchTaskRequestRef = useRef(0);
+  const activeRenderTaskIDRef = useRef(0);
+  const draftDescriptionEditorRef = useRef(null);
+
+  const hasStaleDraftEventContext = useCallback((closureTaskID) => {
+    const closureID = Number(closureTaskID || 0);
+    const activeID = Number(activeRenderTaskIDRef.current || 0);
+    if (closureID > 0 && activeID > 0 && closureID !== activeID) {
+      return true;
+    }
+    return false;
+  }, []);
 
   const markDraftTouched = useCallback(() => {
     draftTouchedRef.current = true;
     draftEditVersionRef.current += 1;
+  }, []);
+
+  const setDraftWithSnapshot = useCallback((updater) => {
+    const prevSnapshot = draftSnapshotRef.current;
+    const next = typeof updater === 'function' ? updater(prevSnapshot) : updater;
+    const normalizedNext = next ?? null;
+    draftSnapshotRef.current = normalizedNext;
+    setDraft(normalizedNext);
+    return normalizedNext;
   }, []);
 
   const isDetailPanelRequiringConfirm = useCallback(
@@ -1036,7 +1066,7 @@ function TaskList({ forcedView = '' }) {
     const draftState = snapshot.draftState && typeof snapshot.draftState === 'object'
       ? snapshot.draftState
       : {};
-    setDraft((prev) => {
+    setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       return { ...prev, ...draftState };
     });
@@ -1054,7 +1084,7 @@ function TaskList({ forcedView = '' }) {
         setDraftRecurrenceLunarYear(nextYear);
       }
     }
-  }, []);
+  }, [setDraftWithSnapshot]);
 
   const closeDetailPanelWithConfirm = useCallback((panelName, shouldApply = false) => {
     const name = String(panelName || '');
@@ -1189,6 +1219,7 @@ function TaskList({ forcedView = '' }) {
   useEffect(() => {
     if (!detailPanel && !showActivityPanel) return undefined;
     const handlePointerDown = (event) => {
+      if (isDetailPanelFloatingLayerTarget(event.target)) return;
       if (!detailPanelRef.current) return;
       if (!detailPanelRef.current.contains(event.target)) {
         if (isDetailPanelRequiringConfirm(detailPanel)) {
@@ -1463,7 +1494,7 @@ function TaskList({ forcedView = '' }) {
     if (filteredTasks.length === 0) {
       if (shouldPreserveCurrentSelection) return;
       setSelectedTaskID(0);
-      setDraft(null);
+      setDraftWithSnapshot(null);
       draftSourceTaskIDRef.current = 0;
       return;
     }
@@ -1475,7 +1506,7 @@ function TaskList({ forcedView = '' }) {
     if (!exists) {
       setSelectedTaskID(filteredTasks[0].id);
     }
-  }, [filteredTasks, pendingSubmitTaskID, savingDraft, selectedTaskID, submittingDraft, tasks]);
+  }, [filteredTasks, pendingSubmitTaskID, savingDraft, selectedTaskID, setDraftWithSnapshot, submittingDraft, tasks]);
 
   useEffect(() => {
     if (!focusTaskID) return;
@@ -1498,6 +1529,7 @@ function TaskList({ forcedView = '' }) {
     const fromAllTasks = tasks.find((task) => Number(task?.id) === Number(selectedTaskID || 0));
     return fromAllTasks || null;
   }, [filteredTasks, selectedTaskID, tasks]);
+  activeRenderTaskIDRef.current = Number(selectedTask?.id || 0);
   const parsedDraftPriority = parsePriorityFromTitle(String(draft?.title || ''));
   const draftPriorityValue = Number.isInteger(parsedDraftPriority?.priority)
     ? parsedDraftPriority.priority
@@ -1649,7 +1681,7 @@ function TaskList({ forcedView = '' }) {
 
   useEffect(() => {
     if (!selectedTask) {
-      setDraft(null);
+      setDraftWithSnapshot(null);
       setDraftTimeRangeEnabled(false);
       detailPanelSnapshotRef.current = null;
       lastSyncedSelectedIDRef.current = 0;
@@ -1665,7 +1697,7 @@ function TaskList({ forcedView = '' }) {
       draftSourceTaskIDRef.current = selectedTask.id;
       draftTouchedRef.current = false;
       draftEditVersionRef.current = 0;
-      setDraft(nextDraft);
+      setDraftWithSnapshot(nextDraft);
       setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       setDetailPanel('');
       return;
@@ -1675,7 +1707,7 @@ function TaskList({ forcedView = '' }) {
       draftTouchedRef.current = false;
       draftSourceTaskIDRef.current = selectedTask.id;
       draftEditVersionRef.current = 0;
-      setDraft(nextDraft);
+      setDraftWithSnapshot(nextDraft);
       setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       return;
     }
@@ -1687,11 +1719,11 @@ function TaskList({ forcedView = '' }) {
       const incoming = normalizeDraftForCompare(nextDraft);
       if (JSON.stringify(current) !== JSON.stringify(incoming)) {
         draftSourceTaskIDRef.current = selectedTask.id;
-        setDraft(nextDraft);
+        setDraftWithSnapshot(nextDraft);
         setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
     }
-  }, [selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm]);
+  }, [selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot]);
 
   useEffect(() => {
     if (!draft) return;
@@ -1700,7 +1732,7 @@ function TaskList({ forcedView = '' }) {
       const nextStart = draft.start_time && draft.start_time.includes('T') ? draft.start_time.split('T')[0] : draft.start_time;
       const nextEnd = draft.end_time && draft.end_time.includes('T') ? draft.end_time.split('T')[0] : draft.end_time;
       if (nextStart !== draft.start_time || nextEnd !== draft.end_time) {
-        setDraft((prev) => (prev ? { ...prev, start_time: nextStart || '', end_time: nextEnd || '' } : prev));
+        setDraftWithSnapshot((prev) => (prev ? { ...prev, start_time: nextStart || '', end_time: nextEnd || '' } : prev));
       }
       return;
     }
@@ -1712,9 +1744,9 @@ function TaskList({ forcedView = '' }) {
       : draft.start_time;
     const nextEnd = draft.end_time && !draft.end_time.includes('T') ? `${draft.end_time}T23:59` : draft.end_time;
     if (nextStart !== draft.start_time || nextEnd !== draft.end_time) {
-      setDraft((prev) => (prev ? { ...prev, start_time: nextStart || '', end_time: nextEnd || '' } : prev));
+      setDraftWithSnapshot((prev) => (prev ? { ...prev, start_time: nextStart || '', end_time: nextEnd || '' } : prev));
     }
-  }, [draft]);
+  }, [draft, setDraftWithSnapshot]);
 
   const isDraftDirty = useMemo(() => {
     if (!selectedTask || !draft) return false;
@@ -1905,10 +1937,12 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftFieldChange = (field, value, options = {}) => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     const submitNow = !!options?.submitNow;
     const submitSource = options?.submitSource || 'realtime';
     markDraftTouched();
-    setDraft((prev) => {
+    setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       if (field !== 'start_time') return { ...prev, [field]: value };
 
@@ -1935,9 +1969,11 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftStartDateTimeChange = (nextValue) => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     const nextStart = String(nextValue || '');
     markDraftTouched();
-    setDraft((prev) => {
+    setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       if (!draftTimeRangeEnabled) {
         return { ...prev, start_time: nextStart, end_time: '' };
@@ -1951,13 +1987,17 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftEndDateTimeChange = (nextValue) => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraft((prev) => (prev ? { ...prev, end_time: String(nextValue || '') } : prev));
+    setDraftWithSnapshot((prev) => (prev ? { ...prev, end_time: String(nextValue || '') } : prev));
   };
 
   const applyQuickDatePreset = (preset) => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraft((prev) => {
+    setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       if (preset === 'clear') {
         return { ...prev, start_time: '', end_time: '' };
@@ -1997,8 +2037,10 @@ function TaskList({ forcedView = '' }) {
   };
 
   const toggleDraftCategory = (catID) => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraft((prev) => {
+    setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       const id = String(catID);
       const exists = prev.category_ids.includes(id);
@@ -2013,8 +2055,10 @@ function TaskList({ forcedView = '' }) {
   };
 
   const toggleDraftRecurrenceDay = (dayKey) => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraft((prev) => {
+    setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       const current = Array.isArray(prev.recurrence_days) ? prev.recurrence_days : [];
       const exists = current.includes(dayKey);
@@ -2255,10 +2299,16 @@ function TaskList({ forcedView = '' }) {
 
   const submitPendingDraft = useCallback(async (taskIDOverride = 0, submitSource = 'idle') => {
     const pending = pendingDraftSubmitRef.current;
-    if (!pending?.taskID || !pending?.payload) return;
+    if (!pending?.taskID || !pending?.payload) {
+      return;
+    }
     const taskID = Number(taskIDOverride || pending.taskID || 0);
-    if (!taskID || taskID !== Number(pending.taskID)) return;
-    if (submittingDraft) return;
+    if (!taskID || taskID !== Number(pending.taskID)) {
+      return;
+    }
+    if (submittingDraft) {
+      return;
+    }
 
     setSubmittingDraft(true);
     try {
@@ -2302,22 +2352,38 @@ function TaskList({ forcedView = '' }) {
   }, [submitPendingDraft]);
 
   const handleSaveDraft = async ({ submitAfter = false, submitSource = 'idle' } = {}) => {
-    if (!selectedTask || !draft) return;
-    if (selectedTask.read_only) return;
-    if (savingDraft) return;
-    if (draftSourceTaskIDRef.current !== selectedTask.id) return;
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) {
+      return;
+    }
+    if (!selectedTask || !draft) {
+      return;
+    }
+    if (selectedTask.read_only) {
+      return;
+    }
+    if (savingDraft) {
+      return;
+    }
+    if (draftSourceTaskIDRef.current !== selectedTask.id) {
+      return;
+    }
     const title = (draft.title || '').trim();
-    if (!title) return;
+    if (!title) {
+      return;
+    }
 
     const targetTaskID = selectedTask.id;
     const editVersionAtStart = draftEditVersionRef.current;
     const built = buildDraftPayload(selectedTask, draft);
-    if (!built?.payload) return;
+    if (!built?.payload) {
+      return;
+    }
 
     setSavingDraft(true);
     try {
       if (built.normalizedTitle !== title || String(built.normalizedPriority) !== String(draft.priority)) {
-        setDraft((prev) => (prev ? {
+        setDraftWithSnapshot((prev) => (prev ? {
           ...prev,
           title: built.normalizedTitle,
           priority: String(built.normalizedPriority),
@@ -2367,37 +2433,69 @@ function TaskList({ forcedView = '' }) {
     }, 0);
   }, [handleSaveDraft]);
 
-  const flushDraftOnLeave = useCallback(async (submitSource = 'leave') => {
-    if (leaveFlushInFlightRef.current) return;
-    const pending = pendingDraftSubmitRef.current;
-    const pendingTaskID = Number(pending?.taskID || 0);
-    const pendingPayload = pending?.payload && typeof pending.payload === 'object' ? pending.payload : null;
-    const hasPendingSubmit = pendingTaskID > 0 && !!pendingPayload;
+  const flushDraftOnLeave = useCallback((submitSource = 'leave', options = {}) => {
+    const runFlush = async () => {
+      const pending = pendingDraftSubmitRef.current;
+      const pendingTaskID = Number(pending?.taskID || 0);
+      const pendingPayload = pending?.payload && typeof pending.payload === 'object' ? pending.payload : null;
+      const hasPendingSubmit = pendingTaskID > 0 && !!pendingPayload;
 
-    const taskValue = selectedTaskSnapshotRef.current;
-    const draftValue = draftSnapshotRef.current;
-    const hasDirtyDraft = !!(
-      taskValue
-      && draftValue
-      && !taskValue.read_only
-      && isDraftDirtyRef.current
-      && draftTouchedRef.current
-      && !isSavingDraftRef.current
-      && (draftValue.title || '').trim()
-    );
-    if (!hasPendingSubmit && !hasDirtyDraft) return;
+      const taskValue = options?.taskValue || selectedTaskSnapshotRef.current;
+      const draftValue = options?.draftValue || draftSnapshotRef.current;
+      const draftSourceTaskID = Number(options?.draftSourceTaskID || draftSourceTaskIDRef.current || 0);
+      const taskID = Number(taskValue?.id || 0);
+      const draftBoundToTask = taskID > 0 && draftSourceTaskID === taskID;
+      const draftTitle = String(draftValue?.title || '').trim();
+      const snapshotDirty = !!(
+        taskValue
+        && draftValue
+        && draftBoundToTask
+        && JSON.stringify(normalizeDraftForCompare(draftValue))
+          !== JSON.stringify(normalizeDraftForCompare(buildDraftFromTask(taskValue)))
+      );
+      const hasDirtyDraft = !!(
+        taskValue
+        && draftValue
+        && draftBoundToTask
+        && !taskValue.read_only
+        && draftTitle
+        && snapshotDirty
+      );
+      if (!hasPendingSubmit && !hasDirtyDraft) {
+        return;
+      }
 
-    leaveFlushInFlightRef.current = true;
-    try {
-      if (hasDirtyDraft) {
-        const built = buildDraftPayload(taskValue, draftValue);
-        if (built?.payload) {
-          await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+      try {
+        if (hasDirtyDraft) {
+          const built = buildDraftPayload(taskValue, draftValue);
+          if (built?.payload) {
+            await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+              scheduleSync: false,
+              localOnly: true,
+              awaitPersist: true,
+            });
+            await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+              scheduleSync: true,
+              localOnly: false,
+              skipOptimistic: true,
+              submitMeta: {
+                submittedAt: new Date().toISOString(),
+                submitSource,
+              },
+              awaitPersist: true,
+            });
+            if (Number(pendingDraftSubmitRef.current?.taskID || 0) === Number(taskValue.id)) {
+              pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+              setPendingSubmitTaskID(0);
+            }
+          }
+        } else if (hasPendingSubmit) {
+          await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
             scheduleSync: false,
             localOnly: true,
             awaitPersist: true,
           });
-          await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+          await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
             scheduleSync: true,
             localOnly: false,
             skipOptimistic: true,
@@ -2407,34 +2505,19 @@ function TaskList({ forcedView = '' }) {
             },
             awaitPersist: true,
           });
-          pendingDraftSubmitRef.current = { taskID: 0, payload: null };
-          setPendingSubmitTaskID(0);
+          if (Number(pendingDraftSubmitRef.current?.taskID || 0) === Number(pendingTaskID || 0)) {
+            pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+            setPendingSubmitTaskID(0);
+          }
         }
-      } else if (hasPendingSubmit) {
-        await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
-          scheduleSync: false,
-          localOnly: true,
-          awaitPersist: true,
-        });
-        await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
-          scheduleSync: true,
-          localOnly: false,
-          skipOptimistic: true,
-          submitMeta: {
-            submittedAt: new Date().toISOString(),
-            submitSource,
-          },
-          awaitPersist: true,
-        });
-        pendingDraftSubmitRef.current = { taskID: 0, payload: null };
-        setPendingSubmitTaskID(0);
+      } catch (error) {
+        console.error('Failed to flush draft on leave:', error);
       }
-    } catch (error) {
-      console.error('Failed to flush draft on leave:', error);
-    } finally {
-      leaveFlushInFlightRef.current = false;
-    }
-  }, [buildDraftPayload, queryClient]);
+    };
+    const queued = flushDraftQueueRef.current.then(runFlush, runFlush);
+    flushDraftQueueRef.current = queued.catch(() => {});
+    return queued;
+  }, [buildDraftFromTask, buildDraftPayload, queryClient]);
 
   useEffect(() => {
     flushDraftOnLeaveRef.current = flushDraftOnLeave;
@@ -2489,8 +2572,18 @@ function TaskList({ forcedView = '' }) {
         && pending?.payload
         && typeof pending.payload === 'object'
       );
+      const taskValue = selectedTaskSnapshotRef.current;
+      const draftValue = draftSnapshotRef.current;
+      const hasDraftSessionEdits = !!(
+        taskValue
+        && draftValue
+        && !taskValue.read_only
+        && draftTouchedRef.current
+        && (draftValue.title || '').trim()
+      );
       const hasUnsyncedChanges = !!(
-        isDraftDirtyRef.current
+        hasDraftSessionEdits
+        || isDraftDirtyRef.current
         || hasPendingSubmit
         || isSavingDraftRef.current
         || isSubmittingDraftRef.current
@@ -2506,6 +2599,8 @@ function TaskList({ forcedView = '' }) {
   }, []);
 
   const handleSubmitDraft = async () => {
+    const closureTaskID = Number(selectedTask?.id || 0);
+    if (hasStaleDraftEventContext(closureTaskID)) return;
     if (!selectedTask || selectedTask.read_only) return;
     if (isDraftDirtyRef.current) {
       let queued = await handleSaveDraft({ submitAfter: false, submitSource: 'manual' });
@@ -2697,7 +2792,7 @@ function TaskList({ forcedView = '' }) {
     markPending: t('task.markPending'),
   }), [i18n.language, t]);
 
-  const handleSelectTask = useCallback((task) => {
+  const handleSelectTask = useCallback(async (task) => {
     if (task?.virtual_occurrence) {
       const sourceTaskID = Number(task?.source_task_id || task?.task_id || 0);
       if (!sourceTaskID) return;
@@ -2708,11 +2803,62 @@ function TaskList({ forcedView = '' }) {
       });
       return;
     }
-    setSelectedTaskID(task.id);
+    const nextTaskID = Number(task?.id || 0);
+    if (!nextTaskID) return;
+    const requestID = switchTaskRequestRef.current + 1;
+    switchTaskRequestRef.current = requestID;
+    const currentTaskID = Number(selectedTaskSnapshotRef.current?.id || 0);
+    const currentTaskSnapshot = selectedTaskSnapshotRef.current;
+    let currentDraftSnapshot = draftSnapshotRef.current;
+    const currentDraftSourceTaskID = Number(draftSourceTaskIDRef.current || 0);
+    if (
+      currentTaskID > 0
+      && nextTaskID !== currentTaskID
+      && currentDraftSnapshot
+      && currentDraftSourceTaskID === currentTaskID
+    ) {
+      const liveDescription = String(draftDescriptionEditorRef.current?.getValue?.() || '');
+      const draftDescription = String(currentDraftSnapshot.description || '');
+      if (liveDescription !== draftDescription) {
+        currentDraftSnapshot = {
+          ...currentDraftSnapshot,
+          description: liveDescription,
+        };
+      }
+    }
+    if (currentTaskID > 0 && nextTaskID === currentTaskID) {
+      if (isMobileViewport) {
+        openAdvancedModal(task);
+      }
+      return;
+    }
+    if (currentTaskID > 0 && nextTaskID !== currentTaskID) {
+      await flushDraftOnLeave('switch_task', {
+        taskValue: currentTaskSnapshot,
+        draftValue: currentDraftSnapshot,
+        draftSourceTaskID: currentDraftSourceTaskID,
+      });
+    }
+    if (requestID !== switchTaskRequestRef.current) {
+      return;
+    }
+    const nextDraftSnapshot = buildDraftFromTask(task);
+    draftSourceTaskIDRef.current = nextTaskID;
+    draftTouchedRef.current = false;
+    draftEditVersionRef.current = 0;
+    activeRenderTaskIDRef.current = nextTaskID;
+    setDraftWithSnapshot(nextDraftSnapshot);
+    setDraftTimeRangeEnabled(!!nextDraftSnapshot?.end_time);
+    setDraftTimeRangeEditing('start');
+    setDraftTimeCalendarMode('solar');
+    setShowActivityPanel(false);
+    detailPanelSnapshotRef.current = null;
+    setDetailPanel('');
+    setSelectedTaskID(nextTaskID);
     if (isMobileViewport) {
       openAdvancedModal(task);
     }
-  }, [isMobileViewport, openAdvancedModal]);
+  }, [buildDraftFromTask, flushDraftOnLeave, isMobileViewport, openAdvancedModal, setDraftWithSnapshot]);
 
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
@@ -3695,6 +3841,7 @@ function TaskList({ forcedView = '' }) {
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
+                    ref={draftDescriptionEditorRef}
                     key={`task-editor-${selectedTask.id}`}
                     value={draft.description}
                     onChange={(nextValue) => handleDraftFieldChange('description', nextValue)}

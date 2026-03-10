@@ -437,6 +437,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [showActivityPanel, setShowActivityPanel] = useState(false);
   const basicPanelRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
+  const descriptionEditorRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
 
   const isEditing = !!task;
@@ -866,6 +867,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     setError('');
 
     try {
+      const liveDescription = String(descriptionEditorRef.current?.getValue?.() ?? data.description ?? '');
+      if (liveDescription !== String(data.description || '')) {
+        data.description = liveDescription;
+        setValue('description', liveDescription, { shouldDirty: true });
+      }
       const clientTimezone = getUserTimezone();
       logTimeDebug('taskModal.submit.start', {
         task_id: Number(task?.id || 0),
@@ -2089,6 +2095,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
+                    ref={descriptionEditorRef}
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
                     value={descriptionValue}
                     onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}

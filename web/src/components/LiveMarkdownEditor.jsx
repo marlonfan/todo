@@ -1,8 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useImperativeHandle, useRef } from 'react';
 import Vditor from 'vditor';
 import 'vditor/dist/index.css';
 
-function LiveMarkdownEditor({
+const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   value,
   onChange,
   onSaveShortcut,
@@ -10,7 +10,7 @@ function LiveMarkdownEditor({
   minHeight = 220,
   fill = false,
   className = '',
-}) {
+}, ref) {
   const mountRef = useRef(null);
   const editorRef = useRef(null);
   const readyRef = useRef(false);
@@ -33,6 +33,17 @@ function LiveMarkdownEditor({
 
   const resolveHeight = () => (fill ? '100%' : `${minHeight}px`);
   const normalize = (text) => String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
+  const getCurrentValue = () => {
+    const editor = editorRef.current;
+    if (editor && typeof editor.getValue === 'function') {
+      try {
+        return String(editor.getValue() || '');
+      } catch {
+        return String(lastInternalValueRef.current || pendingExternalValueRef.current || '');
+      }
+    }
+    return String(lastInternalValueRef.current || pendingExternalValueRef.current || '');
+  };
   const safeDestroy = (instance) => {
     if (!instance || typeof instance.destroy !== 'function') return;
     if (!instance.vditor || !instance.vditor.element) return;
@@ -190,11 +201,17 @@ function LiveMarkdownEditor({
     }
   }, [value]);
 
+  useImperativeHandle(ref, () => ({
+    getValue: getCurrentValue,
+  }), []);
+
   return (
     <div className={`live-md-toast ${className}`}>
       <div ref={mountRef} id={mountIDRef.current} />
     </div>
   );
-}
+});
+
+LiveMarkdownEditor.displayName = 'LiveMarkdownEditor';
 
 export default LiveMarkdownEditor;
