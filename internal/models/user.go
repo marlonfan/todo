@@ -1,6 +1,8 @@
 package models
 
 import (
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +22,7 @@ type User struct {
 	DefaultAfternoonTime   string    `json:"default_afternoon_time" gorm:"size:5;default:'15:00'"`
 	DefaultEveningTime     string    `json:"default_evening_time" gorm:"size:5;default:'20:00'"`
 	MobileDefaultTab       string    `json:"mobile_default_tab" gorm:"size:20;default:'tasks'"`
+	MobileDefaultTaskView  string    `json:"mobile_default_task_view" gorm:"size:40;default:'all'"`
 	MobileTabPreset        string    `json:"mobile_tab_preset" gorm:"size:60;default:'tasks_calendar_settings'"`
 	CreatedAt              time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt              time.Time `json:"updated_at" gorm:"autoUpdateTime"`
@@ -53,6 +56,7 @@ type UpdateProfileRequest struct {
 	DefaultAfternoonTime   string `json:"default_afternoon_time" binding:"omitempty,len=5"`
 	DefaultEveningTime     string `json:"default_evening_time" binding:"omitempty,len=5"`
 	MobileDefaultTab       string `json:"mobile_default_tab" binding:"omitempty,oneof=tasks calendar settings"`
+	MobileDefaultTaskView  string `json:"mobile_default_task_view" binding:"omitempty,max=40"`
 	MobileTabPreset        string `json:"mobile_tab_preset" binding:"omitempty,oneof=tasks_calendar_settings tasks_calendar_categories_settings tasks_inbox_calendar_settings"`
 }
 
@@ -71,8 +75,25 @@ type UserResponse struct {
 	DefaultAfternoonTime   string    `json:"default_afternoon_time"`
 	DefaultEveningTime     string    `json:"default_evening_time"`
 	MobileDefaultTab       string    `json:"mobile_default_tab"`
+	MobileDefaultTaskView  string    `json:"mobile_default_task_view"`
 	MobileTabPreset        string    `json:"mobile_tab_preset"`
 	CreatedAt              time.Time `json:"created_at"`
+}
+
+func NormalizeMobileDefaultTaskView(value string) string {
+	normalized := strings.TrimSpace(value)
+	switch normalized {
+	case "all", "inbox", "today", "upcoming":
+		return normalized
+	}
+	if strings.HasPrefix(normalized, "category:") {
+		rawID := strings.TrimSpace(strings.TrimPrefix(normalized, "category:"))
+		categoryID, err := strconv.ParseInt(rawID, 10, 64)
+		if err == nil && categoryID > 0 {
+			return "category:" + strconv.FormatInt(categoryID, 10)
+		}
+	}
+	return "all"
 }
 
 func (u *User) ToResponse() UserResponse {
@@ -114,6 +135,7 @@ func (u *User) ToResponse() UserResponse {
 	if mobileDefaultTab != "tasks" && mobileDefaultTab != "calendar" && mobileDefaultTab != "settings" {
 		mobileDefaultTab = "tasks"
 	}
+	mobileDefaultTaskView := NormalizeMobileDefaultTaskView(u.MobileDefaultTaskView)
 	mobileTabPreset := u.MobileTabPreset
 	switch mobileTabPreset {
 	case "tasks_calendar_settings", "tasks_calendar_categories_settings", "tasks_inbox_calendar_settings":
@@ -136,6 +158,7 @@ func (u *User) ToResponse() UserResponse {
 		DefaultAfternoonTime:   defaultAfternoonTime,
 		DefaultEveningTime:     defaultEveningTime,
 		MobileDefaultTab:       mobileDefaultTab,
+		MobileDefaultTaskView:  mobileDefaultTaskView,
 		MobileTabPreset:        mobileTabPreset,
 		CreatedAt:              u.CreatedAt,
 	}

@@ -1646,17 +1646,132 @@ body {
 }
 
 @media (max-width: 640px) {
+  .time-panel-card {
+    width: min(calc(100vw - 0.85rem), 22.4rem) !important;
+    max-height: calc(100dvh - 10.5rem) !important;
+    padding: 0.5rem !important;
+    border-radius: 15px !important;
+  }
+
+  .time-panel-card .time-panel-toolbar {
+    margin-bottom: 0.45rem !important;
+    padding-bottom: 0.45rem !important;
+  }
+
+  .time-panel-card .time-panel-toolbar > .flex {
+    gap: 0.35rem !important;
+  }
+
+  .time-panel-card .time-panel-toolbar .inline-flex {
+    max-width: 100%;
+  }
+
   .task-datepicker-inline .react-datepicker__day-name,
   .task-datepicker-inline .react-datepicker__day,
   .task-datepicker-inline .react-datepicker__time-name {
-    width: 1.82rem;
+    width: 1.68rem;
+    margin: 0;
   }
 
   .task-datepicker-inline .react-datepicker__day {
-    height: 1.9rem;
+    height: 1.82rem;
+  }
+
+  .task-datepicker-inline .react-datepicker__month {
+    margin: 0.08rem 0 0.2rem !important;
+  }
+
+  .task-datepicker-inline .react-datepicker__day-names {
+    margin-top: 0 !important;
+  }
+
+  .task-datepicker-day-with-lunar {
+    gap: 0;
+    padding-top: 1px;
+  }
+
+  .task-datepicker-day-solar {
+    font-size: 0.72rem;
+  }
+
+  .task-datepicker-day-lunar {
+    font-size: 0.54rem;
+  }
+
+  .task-lunar-toolbar {
+    padding: 0.05rem 0.12rem 0.16rem;
+  }
+
+  .task-lunar-toolbar-title {
+    font-size: 0.8rem;
+  }
+
+  .task-lunar-panel,
+  .time-panel-card .task-datepicker-inline.task-datepicker-lunar-mode .task-lunar-panel {
+    padding: 0.08rem 0 0.12rem;
+  }
+
+  .task-lunar-weekday {
+    font-size: 0.66rem;
+    padding-bottom: 0.1rem;
+  }
+
+  .task-lunar-day {
+    min-height: 1.84rem;
+    padding: 0.05rem 0;
+  }
+
+  .task-lunar-day-solar {
+    font-size: 0.72rem;
+  }
+
+  .task-lunar-day-lunar {
+    font-size: 0.54rem;
+  }
+
+  .task-solar-time-row,
+  .task-lunar-time-row {
+    margin-top: 0.24rem;
+    padding-top: 0.3rem;
+  }
+
+  .task-time-selectbox-trigger {
+    min-height: 2rem;
+    padding: 0.34rem 0.55rem;
+    font-size: 0.78rem;
+  }
+
+  .task-time-selectbox-menu {
+    max-height: 8.6rem;
+  }
+
+  .task-time-selectbox-option {
+    padding: 0.34rem 0.55rem;
+    font-size: 0.78rem;
+  }
+
+  .time-quick-actions {
+    gap: 1px;
+  }
+
+  .time-quick-btn {
+    height: 2rem;
+    width: 2rem;
+  }
+
+  .time-quick-btn svg {
+    height: 1.1rem;
+    width: 1.1rem;
+  }
+
+  .time-panel-card .time-panel-toolbar .inline-flex button,
+  .time-panel-card .time-panel-toolbar > .flex > button {
+    min-width: 0;
+    padding: 0.26rem 0.55rem;
+    font-size: 0.72rem;
   }
 
   .time-panel-card .time-panel-toolbar .inline-flex button {
-    min-width: 3.5rem;
+    min-width: 2.9rem;
   }
 }

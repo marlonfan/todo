@@ -193,6 +193,9 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 	if req.MobileDefaultTab != "" {
 		user.MobileDefaultTab = strings.TrimSpace(req.MobileDefaultTab)
 	}
+	if req.MobileDefaultTaskView != "" {
+		user.MobileDefaultTaskView = models.NormalizeMobileDefaultTaskView(req.MobileDefaultTaskView)
+	}
 	if req.MobileTabPreset != "" {
 		user.MobileTabPreset = strings.TrimSpace(req.MobileTabPreset)
 	}
@@ -225,6 +228,7 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 	if user.MobileDefaultTab != "tasks" && user.MobileDefaultTab != "calendar" && user.MobileDefaultTab != "settings" {
 		user.MobileDefaultTab = "tasks"
 	}
+	user.MobileDefaultTaskView = models.NormalizeMobileDefaultTaskView(user.MobileDefaultTaskView)
 	switch user.MobileTabPreset {
 	case "tasks_calendar_settings", "tasks_calendar_categories_settings", "tasks_inbox_calendar_settings":
 	default:

@@ -21,7 +21,7 @@ import {
 } from '../data/syncEngine';
 import { clearCalendarRanges, clearTasksAndSet, getMeta, readOutbox, readTasks } from '../data/localStore';
 import { queryKeys } from '../query/keys';
-import { useCaldavSourcesQuery } from '../query/hooks';
+import { useCaldavSourcesQuery, useCategoriesQuery } from '../query/hooks';
 
 const TIMEZONES = [
   { value: 'Asia/Shanghai', label: 'China Standard Time (UTC+8)' },
@@ -42,6 +42,7 @@ const TIMEZONES = [
 ];
 
 const MOBILE_DEFAULT_TABS = ['tasks', 'calendar', 'settings'];
+const MOBILE_DEFAULT_TASK_VIEWS = ['all', 'inbox', 'today', 'upcoming'];
 const MOBILE_TAB_PRESETS = [
   'tasks_calendar_settings',
   'tasks_calendar_categories_settings',
@@ -66,6 +67,13 @@ function normalizeMobileDefaultTab(value) {
 
 function normalizeMobileTabPreset(value) {
   return MOBILE_TAB_PRESETS.includes(value) ? value : 'tasks_calendar_settings';
+}
+
+function normalizeMobileDefaultTaskView(value) {
+  const normalized = String(value || '').trim();
+  if (MOBILE_DEFAULT_TASK_VIEWS.includes(normalized)) return normalized;
+  if (/^category:\d+$/.test(normalized)) return normalized;
+  return 'all';
 }
 
 function normalizeCalendarDefaultView(value) {
@@ -123,6 +131,9 @@ function Settings() {
   const [mobileDefaultTab, setMobileDefaultTab] = useState(
     normalizeMobileDefaultTab(cachedUser.mobile_default_tab)
   );
+  const [mobileDefaultTaskView, setMobileDefaultTaskView] = useState(
+    normalizeMobileDefaultTaskView(cachedUser.mobile_default_task_view)
+  );
   const [mobileTabPreset, setMobileTabPreset] = useState(
     normalizeMobileTabPreset(cachedUser.mobile_tab_preset)
   );
@@ -134,6 +145,7 @@ function Settings() {
   const [caldavEditingSourceID, setCaldavEditingSourceID] = useState(null);
   const [caldavBusy, setCaldavBusy] = useState(false);
   const { data: caldavSources = [] } = useCaldavSourcesQuery();
+  const { data: categories = [] } = useCategoriesQuery();
   const [saveToast, setSaveToast] = useState(null);
   const toastTimerRef = useRef(null);
   const defaultReminderOptions = buildReminderOptions(defaultTimeGranularity, defaultReminderMinutes);
@@ -241,6 +253,7 @@ function Settings() {
             : '20:00'
         );
         setMobileDefaultTab(normalizeMobileDefaultTab(user.mobile_default_tab));
+        setMobileDefaultTaskView(normalizeMobileDefaultTaskView(user.mobile_default_task_view));
         setMobileTabPreset(normalizeMobileTabPreset(user.mobile_tab_preset));
       })
       .catch(() => {
@@ -292,6 +305,7 @@ function Settings() {
           : '20:00'
       );
       setMobileDefaultTab(normalizeMobileDefaultTab(user.mobile_default_tab));
+      setMobileDefaultTaskView(normalizeMobileDefaultTaskView(user.mobile_default_task_view));
       setMobileTabPreset(normalizeMobileTabPreset(user.mobile_tab_preset));
       showToast('success', t('settings.saveSuccess'));
     } catch (err) {
@@ -383,6 +397,15 @@ function Settings() {
     setMobileDefaultTab(normalized);
     await persistProfile({ mobile_default_tab: normalized }, () => {
       setMobileDefaultTab(previous);
+    });
+  };
+
+  const handleMobileDefaultTaskViewChange = async (nextValue) => {
+    const previous = mobileDefaultTaskView;
+    const normalized = normalizeMobileDefaultTaskView(nextValue);
+    setMobileDefaultTaskView(normalized);
+    await persistProfile({ mobile_default_task_view: normalized }, () => {
+      setMobileDefaultTaskView(previous);
     });
   };
 
@@ -877,6 +900,26 @@ function Settings() {
                         <option value="settings">{t('settings.mobileTabSettings')}</option>
                       </select>
                     </div>
+                    {mobileDefaultTab === 'tasks' && (
+                      <div>
+                        <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileDefaultTaskView')}</label>
+                        <select
+                          value={mobileDefaultTaskView}
+                          onChange={(e) => handleMobileDefaultTaskViewChange(e.target.value)}
+                          className="form-select"
+                        >
+                          <option value="all">{t('settings.mobileDefaultTaskViewAll')}</option>
+                          <option value="inbox">{t('settings.mobileDefaultTaskViewInbox')}</option>
+                          <option value="today">{t('settings.mobileDefaultTaskViewToday')}</option>
+                          <option value="upcoming">{t('settings.mobileDefaultTaskViewUpcoming')}</option>
+                          {categories.map((cat) => (
+                            <option key={cat.id} value={`category:${cat.id}`}>
+                              {showCategoryEmoji && cat.emoji ? `${cat.emoji} ${cat.name}` : cat.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div>
                       <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileTabPreset')}</label>
                       <select

@@ -35,6 +35,17 @@ function normalizeMobileDefaultTab(value) {
   return 'tasks';
 }
 
+function normalizeMobileDefaultTaskView(value) {
+  const normalized = String(value || '').trim();
+  if (normalized === 'all' || normalized === 'inbox' || normalized === 'today' || normalized === 'upcoming') {
+    return normalized;
+  }
+  if (/^category:\d+$/.test(normalized)) {
+    return normalized;
+  }
+  return 'all';
+}
+
 function normalizeMobileTabPreset(value) {
   if (value === 'tasks_calendar_categories_settings' || value === 'tasks_inbox_calendar_settings') {
     return value;
@@ -42,16 +53,30 @@ function normalizeMobileTabPreset(value) {
   return 'tasks_calendar_settings';
 }
 
+function buildDefaultTasksRoute(defaultTaskView) {
+  const normalized = normalizeMobileDefaultTaskView(defaultTaskView);
+  if (normalized.startsWith('category:')) {
+    const categoryID = Number.parseInt(normalized.slice('category:'.length), 10);
+    if (Number.isFinite(categoryID) && categoryID > 0) {
+      return `/tasks?category_id=${categoryID}`;
+    }
+    return '/tasks?view=all';
+  }
+  return `/tasks?view=${normalized}`;
+}
+
 function readMobilePrefsFromStorage() {
   try {
     const rawUser = JSON.parse(localStorage.getItem('user') || '{}');
     return {
       defaultTab: normalizeMobileDefaultTab(rawUser.mobile_default_tab),
+      defaultTaskView: normalizeMobileDefaultTaskView(rawUser.mobile_default_task_view),
       tabPreset: normalizeMobileTabPreset(rawUser.mobile_tab_preset),
     };
   } catch {
     return {
       defaultTab: 'tasks',
+      defaultTaskView: 'all',
       tabPreset: 'tasks_calendar_settings',
     };
   }
@@ -239,7 +264,6 @@ function MainLayout({ user, setUser }) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (window.innerWidth >= 768) return;
     if (didApplyMobileDefaultRef.current) return;
     didApplyMobileDefaultRef.current = true;
 
@@ -247,13 +271,13 @@ function MainLayout({ user, setUser }) {
     if (initialLocation.pathname !== '/' || initialLocation.search) return;
 
     if (mobilePrefs.defaultTab === 'tasks') {
-      navigate('/tasks?view=all', { replace: true });
+      navigate(buildDefaultTasksRoute(mobilePrefs.defaultTaskView), { replace: true });
       return;
     }
     if (mobilePrefs.defaultTab === 'settings') {
       navigate('/settings', { replace: true });
     }
-  }, [mobilePrefs.defaultTab, navigate]);
+  }, [mobilePrefs.defaultTab, mobilePrefs.defaultTaskView, navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
