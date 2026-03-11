@@ -72,20 +72,98 @@ function isCurrentCalendarCache(entry, timezoneName, start, end) {
   return Array.isArray(entry?.events) || (entry?.events_by_date && typeof entry.events_by_date === 'object');
 }
 
+function buildSegmentIdentityKey(start, end, timezoneName) {
+  return `${timezoneName}|${start}|${end}`;
+}
+
+function normalizeSegmentInfo(segment, fallbackTimezone = 'UTC') {
+  const segmentStart = String(segment?.start || '');
+  const segmentEnd = String(segment?.end || '');
+  const segmentTimezone = normalizeTimezoneName(segment?.timezone || fallbackTimezone);
+  if (!segmentStart || !segmentEnd) return null;
+  return {
+    start: segmentStart,
+    end: segmentEnd,
+    timezone: segmentTimezone,
+  };
+}
+
+function removeSegmentsByIdentity(segments, removedKeys) {
+  const list = Array.isArray(segments) ? segments : [];
+  if (removedKeys.size === 0) return list;
+  return list.filter((segment) => {
+    const normalized = normalizeSegmentInfo(segment);
+    if (!normalized) return true;
+    const key = buildSegmentIdentityKey(normalized.start, normalized.end, normalized.timezone);
+    return !removedKeys.has(key);
+  });
+}
+
+function mergeSegmentsByIdentity(baseSegments, nextSegments) {
+  const merged = new Map();
+  const base = Array.isArray(baseSegments) ? baseSegments : [];
+  const additions = Array.isArray(nextSegments) ? nextSegments : [];
+  base.forEach((segment) => {
+    const normalized = normalizeSegmentInfo(segment);
+    if (!normalized) return;
+    const key = buildSegmentIdentityKey(normalized.start, normalized.end, normalized.timezone);
+    merged.set(key, segment);
+  });
+  additions.forEach((segment) => {
+    const normalized = normalizeSegmentInfo(segment);
+    if (!normalized) return;
+    const key = buildSegmentIdentityKey(normalized.start, normalized.end, normalized.timezone);
+    merged.set(key, segment);
+  });
+  return Array.from(merged.values());
+}
+
+async function fetchCalendarSegmentFromServer(segmentStart, segmentEnd, segmentTimezone) {
+  const res = await calendarAPI.getEvents({
+    start: segmentStart,
+    end: segmentEnd,
+  });
+  const events = Array.isArray(res.data) ? res.data : [];
+  const eventsByDate = decomposeEventsByDay(events, segmentTimezone);
+  await putCalendarRange({
+    key: buildCalendarRangeKey(segmentStart, segmentEnd, segmentTimezone),
+    start: segmentStart,
+    end: segmentEnd,
+    timezone: segmentTimezone,
+    events,
+    events_by_date: eventsByDate,
+    cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
+    updated_at: Date.now(),
+  });
+  return {
+    start: segmentStart,
+    end: segmentEnd,
+    timezone: segmentTimezone,
+    events,
+    eventsByDate,
+  };
+}
+
 async function loadCalendarSegments(startDate, endDate, timezone) {
   const timezoneName = normalizeTimezoneName(timezone);
   const refreshMs = resolveCalendarAutoRefreshMs();
   const now = Date.now();
   const segments = buildRangeSegments(startDate, endDate, timezoneName);
   if (segments.length === 0) {
-    return { timezone: timezoneName, segments: [], staleSegments: [] };
+    return { timezone: timezoneName, segments: [], staleSegments: [], missingSegments: [] };
   }
 
   const loadedSegments = [];
   const staleSegments = [];
-  for (const segment of segments) {
+  const missingSegments = [];
+
+  const localResults = await Promise.all(segments.map(async (segment) => {
     const key = buildCalendarRangeKey(segment.start, segment.end, timezoneName);
     const cached = await getCalendarRange(key);
+    return { segment, cached };
+  }));
+
+  localResults.forEach(({ segment, cached }) => {
     if (isCurrentCalendarCache(cached, timezoneName, segment.start, segment.end)) {
       const cachedEvents = Array.isArray(cached.events) ? cached.events : [];
       const cachedEventsByDate = cached?.events_by_date && typeof cached.events_by_date === 'object'
@@ -105,49 +183,56 @@ async function loadCalendarSegments(startDate, endDate, timezone) {
           timezone: timezoneName,
         });
       }
-      continue;
+      return;
     }
-
-    const res = await calendarAPI.getEvents({
-      start: segment.start,
-      end: segment.end,
-    });
-    const events = Array.isArray(res.data) ? res.data : [];
-    const eventsByDate = decomposeEventsByDay(events, timezoneName);
-    await putCalendarRange({
-      key,
+    missingSegments.push({
       start: segment.start,
       end: segment.end,
       timezone: timezoneName,
-      events,
-      events_by_date: eventsByDate,
-      cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
-      updated_at: Date.now(),
     });
-    loadedSegments.push({
-      ...segment,
-      timezone: timezoneName,
-      events,
-      eventsByDate,
-    });
-  }
+  });
 
   return {
     timezone: timezoneName,
     segments: loadedSegments,
     staleSegments,
+    missingSegments,
+  };
+}
+
+async function loadAndRefreshCalendarSegments(startDate, endDate, timezone) {
+  const local = await loadCalendarSegments(startDate, endDate, timezone);
+  const refreshTargets = mergeSegmentsByIdentity(local.missingSegments, local.staleSegments);
+  if (refreshTargets.length === 0) return local;
+
+  const refreshedSegments = (await Promise.all(refreshTargets.map(async (segment) => {
+    const normalized = normalizeSegmentInfo(segment, local.timezone);
+    if (!normalized) return null;
+    try {
+      return await fetchCalendarSegmentFromServer(normalized.start, normalized.end, normalized.timezone);
+    } catch {
+      return null;
+    }
+  }))).filter(Boolean);
+
+  if (refreshedSegments.length === 0) return local;
+  return {
+    ...local,
+    segments: mergeSegmentsByIdentity(local.segments, refreshedSegments),
+    staleSegments: [],
+    missingSegments: [],
   };
 }
 
 /**
  * 主 Hook：获取并缓存日历数据
- * 数据流: TanStack Query -> IndexedDB (hit) / API (miss -> write IndexedDB) -> Zustand
+ * 数据流: TanStack Query -> IndexedDB (hit) -> Zustand, 然后缺失/过期段后台并行补拉 API -> write IndexedDB -> Zustand
  */
 export function useCalendarFetch(startDate, endDate, timezone, options = {}) {
   const { enabled = true } = options;
   const queryClient = useQueryClient();
   const processedSignatureRef = useRef('');
-  const staleRefreshInFlightRef = useRef(new Set());
+  const backgroundRefreshInFlightRef = useRef(new Set());
   const timezoneName = normalizeTimezoneName(timezone);
   const queryKey = ['calendar', 'range', startDate, endDate, timezoneName];
 
@@ -193,90 +278,67 @@ export function useCalendarFetch(startDate, endDate, timezone, options = {}) {
 
   useEffect(() => {
     const staleSegments = Array.isArray(data?.staleSegments) ? data.staleSegments : [];
-    if (!enabled || staleSegments.length === 0) return undefined;
+    const missingSegments = Array.isArray(data?.missingSegments) ? data.missingSegments : [];
+    const refreshTargets = mergeSegmentsByIdentity(staleSegments, missingSegments);
+    if (!enabled || refreshTargets.length === 0) return undefined;
     let cancelled = false;
 
-    const refreshStaleSegments = async () => {
-      const refreshedSegments = [];
-      for (const segment of staleSegments) {
-        if (cancelled) break;
-        const segmentStart = String(segment?.start || '');
-        const segmentEnd = String(segment?.end || '');
-        if (!segmentStart || !segmentEnd) continue;
-        const segmentTimezone = normalizeTimezoneName(segment?.timezone || data?.timezone || timezoneName);
-        const inFlightKey = `${segmentTimezone}|${segmentStart}|${segmentEnd}`;
-        if (staleRefreshInFlightRef.current.has(inFlightKey)) continue;
+    const refreshCalendarSegments = async () => {
+      const pendingTargets = [];
+      refreshTargets.forEach((segment) => {
+        const normalized = normalizeSegmentInfo(segment, data?.timezone || timezoneName);
+        if (!normalized) return;
+        const inFlightKey = buildSegmentIdentityKey(
+          normalized.start,
+          normalized.end,
+          normalized.timezone,
+        );
+        if (backgroundRefreshInFlightRef.current.has(inFlightKey)) return;
+        backgroundRefreshInFlightRef.current.add(inFlightKey);
+        pendingTargets.push(normalized);
+      });
 
-        staleRefreshInFlightRef.current.add(inFlightKey);
+      if (pendingTargets.length === 0) return;
+
+      const refreshedSegments = (await Promise.all(pendingTargets.map(async (segment) => {
+        const inFlightKey = buildSegmentIdentityKey(segment.start, segment.end, segment.timezone);
         try {
-          const res = await calendarAPI.getEvents({
-            start: segmentStart,
-            end: segmentEnd,
-          });
-          const events = Array.isArray(res.data) ? res.data : [];
-          const eventsByDate = decomposeEventsByDay(events, segmentTimezone);
-          await putCalendarRange({
-            key: buildCalendarRangeKey(segmentStart, segmentEnd, segmentTimezone),
-            start: segmentStart,
-            end: segmentEnd,
-            timezone: segmentTimezone,
-            events,
-            events_by_date: eventsByDate,
-            cache_version: CALENDAR_CACHE_SCHEMA_VERSION,
-            updated_at: Date.now(),
-          });
-          refreshedSegments.push({
-            start: segmentStart,
-            end: segmentEnd,
-            timezone: segmentTimezone,
-            events,
-            eventsByDate,
-          });
+          return await fetchCalendarSegmentFromServer(segment.start, segment.end, segment.timezone);
         } catch (refreshError) {
-          console.error('Failed to silently refresh stale calendar segment:', refreshError);
+          console.error('Failed to silently refresh calendar segment:', refreshError);
+          return null;
         } finally {
-          staleRefreshInFlightRef.current.delete(inFlightKey);
+          backgroundRefreshInFlightRef.current.delete(inFlightKey);
         }
-      }
+      }))).filter(Boolean);
 
       if (cancelled || refreshedSegments.length === 0) return;
 
-      useCalendarCacheStore.getState().replaceFetchedSegments(
-        refreshedSegments.map((segment) => ({
-          start: segment.start,
-          end: segment.end,
-          timezone: segment.timezone,
-          eventsByDate: segment.eventsByDate,
-        })),
-      );
+      useCalendarCacheStore.getState().replaceFetchedSegments(refreshedSegments.map((segment) => ({
+        start: segment.start,
+        end: segment.end,
+        timezone: segment.timezone,
+        eventsByDate: segment.eventsByDate,
+      })));
 
-      const refreshedMap = new Map(
-        refreshedSegments.map((segment) => [`${segment.start}|${segment.end}`, segment]),
-      );
+      const refreshedKeys = new Set(refreshedSegments.map((segment) => buildSegmentIdentityKey(
+        segment.start,
+        segment.end,
+        segment.timezone,
+      )));
+
       queryClient.setQueryData(queryKey, (prev) => {
-        if (!prev || !Array.isArray(prev?.segments)) return prev;
-        const nextSegments = prev.segments.map((segment) => {
-          const key = `${segment.start}|${segment.end}`;
-          const refreshed = refreshedMap.get(key);
-          if (!refreshed) return segment;
-          return {
-            ...segment,
-            events: refreshed.events,
-            eventsByDate: refreshed.eventsByDate,
-          };
-        });
-        const nextStale = Array.isArray(prev?.staleSegments)
-          ? prev.staleSegments.filter((segment) => !refreshedMap.has(`${segment.start}|${segment.end}`))
-          : [];
+        if (!prev) return prev;
         return {
           ...prev,
-          segments: nextSegments,
-          staleSegments: nextStale,
+          segments: mergeSegmentsByIdentity(prev?.segments, refreshedSegments),
+          staleSegments: removeSegmentsByIdentity(prev?.staleSegments, refreshedKeys),
+          missingSegments: removeSegmentsByIdentity(prev?.missingSegments, refreshedKeys),
         };
       });
     };
 
-    refreshStaleSegments().catch(() => {});
+    refreshCalendarSegments().catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -309,7 +371,7 @@ export function useCalendarPrefetch(startDate, endDate, timezone) {
     if (!startDate || !endDate) return;
     queryClient.prefetchQuery({
       queryKey: ['calendar', 'range', startDate, endDate, timezoneName],
-      queryFn: () => loadCalendarSegments(startDate, endDate, timezoneName),
+      queryFn: () => loadAndRefreshCalendarSegments(startDate, endDate, timezoneName),
       staleTime: FETCH_STALE_TIME,
     }).catch(() => {});
   }, [endDate, queryClient, startDate, timezone]);

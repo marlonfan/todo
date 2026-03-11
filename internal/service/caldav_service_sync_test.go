@@ -271,6 +271,21 @@ func TestDefaultCaldavExpansionWindow_UsesThreeMonthsBackAndSixMonthsForward(t *
 	}
 }
 
+func TestBootstrapCaldavExpansionWindow_UsesSevenDaysBackAndFortyFiveDaysForward(t *testing.T) {
+	now := time.Now().UTC()
+	start, end := bootstrapCaldavExpansionWindow(now)
+	wantStart := now.AddDate(0, 0, -7)
+	wantEnd := now.AddDate(0, 0, 45)
+	const tolerance = 2 * time.Second
+
+	if diff := start.Sub(wantStart); diff < -tolerance || diff > tolerance {
+		t.Fatalf("start diff=%v want within ±%v", diff, tolerance)
+	}
+	if diff := end.Sub(wantEnd); diff < -tolerance || diff > tolerance {
+		t.Fatalf("end diff=%v want within ±%v", diff, tolerance)
+	}
+}
+
 func TestSyncCalendarCache_FeishuIncrementalSkipsCoverageExtension(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
 		NowFunc: func() time.Time { return time.Now().UTC() },

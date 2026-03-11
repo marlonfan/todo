@@ -3,6 +3,7 @@ module todo-app
 go 1.25.5
 
 require (
+	github.com/6tail/lunar-go v1.4.6
 	github.com/gin-gonic/gin v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/teambition/rrule-go v1.8.2
@@ -14,7 +15,6 @@ require (
 )
 
 require (
-	github.com/6tail/lunar-go v1.4.6 // indirect
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect

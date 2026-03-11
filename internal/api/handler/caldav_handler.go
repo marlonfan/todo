@@ -18,6 +18,11 @@ type CaldavHandler struct {
 	caldavService *service.CaldavService
 }
 
+const (
+	caldavBootstrapSyncTimeout = 90 * time.Second
+	caldavFullSyncTimeout      = 15 * time.Minute
+)
+
 func NewCaldavHandler(caldavService *service.CaldavService) *CaldavHandler {
 	return &CaldavHandler{caldavService: caldavService}
 }
@@ -59,6 +64,9 @@ func (h *CaldavHandler) CreateSource(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if source.IsActive {
+		h.startSourceSyncPipeline(userID, source.ID)
+	}
 	c.JSON(http.StatusCreated, source)
 }
 
@@ -78,6 +86,9 @@ func (h *CaldavHandler) UpdateSource(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if source.IsActive {
+		h.startSourceSyncPipeline(userID, sourceID)
 	}
 	c.JSON(http.StatusOK, source)
 }
@@ -104,7 +115,7 @@ func (h *CaldavHandler) SyncSource(c *gin.Context) {
 		return
 	}
 	go func(uid, sid int64) {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), caldavFullSyncTimeout)
 		defer cancel()
 		if runErr := h.caldavService.SyncSourceNow(ctx, uid, sid); runErr != nil {
 			log.Printf("manual caldav sync failed (user=%d source=%d): %v", uid, sid, runErr)
@@ -112,6 +123,16 @@ func (h *CaldavHandler) SyncSource(c *gin.Context) {
 	}(userID, sourceID)
 
 	c.JSON(http.StatusAccepted, gin.H{"message": "sync started"})
+}
+
+func (h *CaldavHandler) startSourceSyncPipeline(userID, sourceID int64) {
+	go func(uid, sid int64) {
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), caldavBootstrapSyncTimeout)
+		defer bootstrapCancel()
+		if err := h.caldavService.SyncSourceBootstrapNow(bootstrapCtx, uid, sid); err != nil {
+			log.Printf("caldav bootstrap sync failed (user=%d source=%d): %v", uid, sid, err)
+		}
+	}(userID, sourceID)
 }
 
 func (h *CaldavHandler) ListReadOnlyTasks(c *gin.Context) {

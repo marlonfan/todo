@@ -43,6 +43,7 @@ import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, upd
 const DEFAULT_TASK_START_TIME = '09:00';
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
+const BASIC_PANELS_REQUIRING_CONFIRM = new Set(['time', 'recurrence']);
 
 function getStoredUser() {
   try {
@@ -80,6 +81,15 @@ function parseRecurrenceRule(rawRule) {
   } catch {
     return null;
   }
+}
+
+function isBasicPanelFloatingLayerTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return !!(
+    target.closest('.task-time-selectbox-menu--floating')
+    || target.closest('.react-datepicker-popper')
+    || target.closest('.react-datepicker__portal')
+  );
 }
 
 function getDefaultStartParts() {
@@ -436,6 +446,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [showActivityPanel, setShowActivityPanel] = useState(false);
   const basicPanelRef = useRef(null);
+  const detailPanelSnapshotRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const descriptionEditorRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
@@ -518,6 +529,158 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     || dayjs().tz(getUserTimezone()).format('YYYY-MM-DD')
   );
 
+  const isBasicPanelRequiringConfirm = useCallback(
+    (panelName) => BASIC_PANELS_REQUIRING_CONFIRM.has(String(panelName || '')),
+    []
+  );
+
+  const createBasicPanelSnapshot = useCallback((panelName) => {
+    const name = String(panelName || '');
+    if (!isBasicPanelRequiringConfirm(name)) return null;
+    if (name === 'time') {
+      return {
+        panel: name,
+        draftState: {
+          all_day: !!getValues('all_day'),
+          start_time: String(getValues('start_time') || ''),
+          end_time: String(getValues('end_time') || ''),
+        },
+        uiState: {
+          timeRangeEnabled: !!timeRangeEnabled,
+          timeRangeEditing: timeRangeEditing === 'end' ? 'end' : 'start',
+          timeCalendarMode: timeCalendarMode === 'lunar' ? 'lunar' : 'solar',
+          timeTouched: !!timeTouched,
+          parsePreview: String(parsePreview || ''),
+        },
+      };
+    }
+    return {
+      panel: name,
+      draftState: {
+        showRecurrence: !!showRecurrence,
+        recurrenceType: recurrenceType || 'daily',
+        selectedDays: [...selectedDays],
+        monthlyDate: clampMonthlyDate(monthlyDate, 1),
+        recurrenceLunarYear: Number.parseInt(recurrenceLunarYear, 10) || dayjs().tz(LUNAR_TIMEZONE).year(),
+        recurrenceLunarMonth: Number.parseInt(recurrenceLunarMonth, 10) || 1,
+        recurrenceLunarDay: Number.parseInt(recurrenceLunarDay, 10) || 1,
+        recurrenceLunarIsLeapMonth: !!recurrenceLunarIsLeapMonth,
+      },
+      uiState: {
+        showCustomRecurrenceMenu: !!showCustomRecurrenceMenu,
+        showMonthlyDatePicker: !!showMonthlyDatePicker,
+      },
+    };
+  }, [
+    getValues,
+    isBasicPanelRequiringConfirm,
+    monthlyDate,
+    parsePreview,
+    recurrenceLunarDay,
+    recurrenceLunarIsLeapMonth,
+    recurrenceLunarMonth,
+    recurrenceLunarYear,
+    recurrenceType,
+    selectedDays,
+    showCustomRecurrenceMenu,
+    showMonthlyDatePicker,
+    showRecurrence,
+    timeCalendarMode,
+    timeRangeEditing,
+    timeRangeEnabled,
+    timeTouched,
+  ]);
+
+  const restoreBasicPanelSnapshot = useCallback((snapshot) => {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const panelName = String(snapshot.panel || '');
+    const draftState = snapshot.draftState && typeof snapshot.draftState === 'object'
+      ? snapshot.draftState
+      : {};
+    if (panelName === 'time') {
+      setValue('all_day', !!draftState.all_day, { shouldDirty: true });
+      setValue('start_time', String(draftState.start_time || ''), { shouldDirty: true });
+      setValue('end_time', String(draftState.end_time || ''), { shouldDirty: true });
+      setTimeRangeEnabled(!!snapshot?.uiState?.timeRangeEnabled);
+      setTimeRangeEditing(snapshot?.uiState?.timeRangeEditing === 'end' ? 'end' : 'start');
+      setTimeCalendarMode(snapshot?.uiState?.timeCalendarMode === 'lunar' ? 'lunar' : 'solar');
+      setTimeTouched(!!snapshot?.uiState?.timeTouched);
+      setParsePreview(String(snapshot?.uiState?.parsePreview || ''));
+      return;
+    }
+    if (panelName === 'recurrence') {
+      setShowRecurrence(!!draftState.showRecurrence);
+      setRecurrenceType(String(draftState.recurrenceType || 'daily'));
+      setSelectedDays(Array.isArray(draftState.selectedDays) ? [...draftState.selectedDays] : []);
+      setMonthlyDate(clampMonthlyDate(draftState.monthlyDate, 1));
+      setRecurrenceLunarYear(Number.parseInt(draftState.recurrenceLunarYear, 10) || dayjs().tz(LUNAR_TIMEZONE).year());
+      setRecurrenceLunarMonth(Number.parseInt(draftState.recurrenceLunarMonth, 10) || 1);
+      setRecurrenceLunarDay(Number.parseInt(draftState.recurrenceLunarDay, 10) || 1);
+      setRecurrenceLunarIsLeapMonth(!!draftState.recurrenceLunarIsLeapMonth);
+      setShowCustomRecurrenceMenu(!!snapshot?.uiState?.showCustomRecurrenceMenu);
+      setShowMonthlyDatePicker(!!snapshot?.uiState?.showMonthlyDatePicker);
+    }
+  }, [setValue]);
+
+  const closeBasicPanelWithConfirm = useCallback((panelName, shouldApply = false) => {
+    const name = String(panelName || '');
+    const snapshot = detailPanelSnapshotRef.current;
+    if (!shouldApply && snapshot && snapshot.panel === name) {
+      restoreBasicPanelSnapshot(snapshot);
+    }
+    if (snapshot && snapshot.panel === name) {
+      detailPanelSnapshotRef.current = null;
+    }
+    if (name === 'recurrence') {
+      setShowCustomRecurrenceMenu(false);
+      setShowMonthlyDatePicker(false);
+    }
+    setBasicPanel('');
+  }, [restoreBasicPanelSnapshot]);
+
+  const handleBasicPanelToggle = useCallback((panelName) => {
+    const nextPanel = String(panelName || '');
+    const currentPanel = String(basicPanel || '');
+
+    if (currentPanel === nextPanel) {
+      if (isBasicPanelRequiringConfirm(currentPanel)) {
+        closeBasicPanelWithConfirm(currentPanel, false);
+      } else {
+        setBasicPanel('');
+      }
+      return;
+    }
+
+    if (currentPanel) {
+      if (isBasicPanelRequiringConfirm(currentPanel)) {
+        const snapshot = detailPanelSnapshotRef.current;
+        if (snapshot && snapshot.panel === currentPanel) {
+          restoreBasicPanelSnapshot(snapshot);
+          detailPanelSnapshotRef.current = null;
+        }
+        if (currentPanel === 'recurrence') {
+          setShowCustomRecurrenceMenu(false);
+          setShowMonthlyDatePicker(false);
+        }
+      }
+      setBasicPanel('');
+    }
+
+    if (isBasicPanelRequiringConfirm(nextPanel)) {
+      detailPanelSnapshotRef.current = createBasicPanelSnapshot(nextPanel);
+    } else {
+      detailPanelSnapshotRef.current = null;
+    }
+    setShowActivityPanel(false);
+    setBasicPanel(nextPanel);
+  }, [
+    basicPanel,
+    closeBasicPanelWithConfirm,
+    createBasicPanelSnapshot,
+    isBasicPanelRequiringConfirm,
+    restoreBasicPanelSnapshot,
+  ]);
+
   const normalizeSelectionByYear = (selection) => coerceLunarSelection(selection, dayjs().tz(LUNAR_TIMEZONE).year());
   const handleStartDateTimeChange = (nextValue) => {
     const nextStart = String(nextValue || '');
@@ -546,15 +709,20 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   useEffect(() => {
     if (!basicPanel && !showActivityPanel) return undefined;
     const handlePointerDown = (event) => {
+      if (isBasicPanelFloatingLayerTarget(event.target)) return;
       if (!basicPanelRef.current) return;
       if (!basicPanelRef.current.contains(event.target)) {
-        setBasicPanel('');
+        if (basicPanel && isBasicPanelRequiringConfirm(basicPanel)) {
+          closeBasicPanelWithConfirm(basicPanel, false);
+        } else {
+          setBasicPanel('');
+        }
         setShowActivityPanel(false);
       }
     };
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [basicPanel, showActivityPanel]);
+  }, [basicPanel, closeBasicPanelWithConfirm, isBasicPanelRequiringConfirm, showActivityPanel]);
 
   useEffect(() => {
     if (basicPanel) {
@@ -564,6 +732,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
   useEffect(() => {
     setShowActivityPanel(false);
+    detailPanelSnapshotRef.current = null;
   }, [task?.id]);
 
   useEffect(() => {
@@ -793,6 +962,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setValue('priority', '0');
       setValue('category_ids', []);
     }
+    detailPanelSnapshotRef.current = null;
     setBasicPanel('');
   }, [task, initialRange, setValue]);
 
@@ -863,8 +1033,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     return parsed;
   };
 
-  const onSubmit = async (data) => {
+  const onSubmit = async (data, options = {}) => {
     setError('');
+    const submitOptions = options && typeof options === 'object' ? options : {};
+    const silent = !!submitOptions.silent;
+    const submitSource = String(submitOptions.submitSource || 'manual');
 
     try {
       const liveDescription = String(descriptionEditorRef.current?.getValue?.() ?? data.description ?? '');
@@ -1206,7 +1379,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
 
       const submitMeta = {
         submittedAt: new Date().toISOString(),
-        submitSource: 'manual',
+        submitSource,
       };
       const saveContext = {
         is_occurrence_scoped: hasOccurrenceContext,
@@ -1227,16 +1400,20 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           skipOptimistic: true,
           submitMeta,
         });
-        onSaved(localSavedTask || null, saveContext);
+        if (!silent) {
+          onSaved(localSavedTask || null, saveContext);
+        }
       } else {
         savePromise = createTaskLocal(queryClient, payload, { submitMeta });
-        onSaved(null, saveContext);
+        if (!silent) {
+          onSaved(null, saveContext);
+        }
       }
 
       // Close immediately with optimistic UI; persistence/sync continues in background.
       void Promise.resolve(savePromise)
         .then((savedTask) => {
-          if (savedTask?.id) {
+          if (!silent && savedTask?.id) {
             onSaved(savedTask, saveContext);
           }
         })
@@ -1248,6 +1425,14 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setError(err.response?.data?.error || t('task.saveFailed'));
     }
   };
+
+  const triggerRealtimeSave = useCallback((submitSource) => {
+    if (!isEditing || loading) return;
+    void handleSubmit((formData) => onSubmit(formData, {
+      silent: true,
+      submitSource,
+    }))();
+  }, [handleSubmit, isEditing, loading, onSubmit]);
 
   const handleDescriptionSaveShortcut = useCallback(() => {
     if (loading) return;
@@ -1501,7 +1686,13 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                         <button
                           type="button"
                           onClick={() => {
-                            setBasicPanel('');
+                            const currentPanel = String(basicPanel || '');
+                            if (currentPanel && isBasicPanelRequiringConfirm(currentPanel)) {
+                              closeBasicPanelWithConfirm(currentPanel, false);
+                            } else if (currentPanel) {
+                              setBasicPanel('');
+                              detailPanelSnapshotRef.current = null;
+                            }
                             setShowActivityPanel((prev) => !prev);
                           }}
                           className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
@@ -1522,7 +1713,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     )}
                     <button
                       type="button"
-                      onClick={() => setBasicPanel(basicPanel === 'priority' ? '' : 'priority')}
+                      onClick={() => handleBasicPanelToggle('priority')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${priorityButtonClass}`}
                       title={priorityButtonTitle}
                     >
@@ -1530,7 +1721,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBasicPanel(basicPanel === 'category' ? '' : 'category')}
+                      onClick={() => handleBasicPanelToggle('category')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${categoryButtonClass}`}
                       title={categorySummaryLabel}
                     >
@@ -1538,7 +1729,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBasicPanel(basicPanel === 'recurrence' ? '' : 'recurrence')}
+                      onClick={() => handleBasicPanelToggle('recurrence')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${recurrenceButtonClass}`}
                       title={recurrenceSummaryLabel}
                     >
@@ -1548,7 +1739,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBasicPanel(basicPanel === 'time' ? '' : 'time')}
+                      onClick={() => handleBasicPanelToggle('time')}
                       className={`relative inline-flex h-8 min-w-0 items-center gap-1 rounded-md px-2 text-sm ${timeButtonClass}`}
                       title={timeButtonTitle}
                     >
@@ -1572,8 +1763,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             key={priorityOption.value}
                             type="button"
                             onClick={() => {
-                              setValue('priority', priorityOption.value);
+                              setValue('priority', priorityOption.value, { shouldDirty: true });
                               setBasicPanel('');
+                              detailPanelSnapshotRef.current = null;
+                              if (isEditing) {
+                                triggerRealtimeSave('realtime_priority');
+                              }
                             }}
                             className={`rounded-full border px-3 py-1 text-sm ${
                               priorityValue === priorityOption.value
@@ -1789,6 +1984,27 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                           />
                         </div>
                       </div>
+                      <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => closeBasicPanelWithConfirm('time', false)}
+                          className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeBasicPanelWithConfirm('time', true);
+                            if (isEditing) {
+                              triggerRealtimeSave('realtime_time');
+                            }
+                          }}
+                          className="rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+                        >
+                          {t('common.confirm')}
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -1808,8 +2024,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 const next = asArray.includes(String(cat.id))
                                   ? asArray.filter((id) => id !== String(cat.id))
                                   : [...asArray, String(cat.id)];
-                                setValue('category_ids', next);
+                                setValue('category_ids', next, { shouldDirty: true });
                                 setBasicPanel('');
+                                detailPanelSnapshotRef.current = null;
+                                if (isEditing) {
+                                  triggerRealtimeSave('realtime_category');
+                                }
                               }}
                               className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
                                 active
@@ -2086,6 +2306,27 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                           )}
                         </div>
                       )}
+                      <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => closeBasicPanelWithConfirm('recurrence', false)}
+                          className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeBasicPanelWithConfirm('recurrence', true);
+                            if (isEditing) {
+                              triggerRealtimeSave('realtime_recurrence');
+                            }
+                          }}
+                          className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                        >
+                          {t('common.confirm')}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

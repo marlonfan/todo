@@ -26,11 +26,13 @@ import (
 )
 
 const (
-	caldavSourceName         = "caldav"
-	caldavHTTPTimeout        = 90 * time.Second
-	caldavWindowPastMonths   = 3
-	caldavWindowFutureMonths = 6
-	feishuRangeSpanDays      = 28
+	caldavSourceName          = "caldav"
+	caldavHTTPTimeout         = 90 * time.Second
+	caldavWindowPastMonths    = 3
+	caldavWindowFutureMonths  = 6
+	caldavBootstrapPastDays   = 7
+	caldavBootstrapFutureDays = 45
+	feishuRangeSpanDays       = 28
 )
 
 type CaldavService struct {
@@ -149,11 +151,6 @@ func (s *CaldavService) CreateSource(ctx context.Context, userID int64, req *mod
 	if err := s.repo.ReplaceCalendars(userID, source.ID, calendars); err != nil {
 		return nil, err
 	}
-	if active {
-		if err := s.SyncSourceNow(ctx, userID, source.ID); err != nil {
-			return nil, fmt.Errorf("source saved but initial sync failed: %w", err)
-		}
-	}
 	created, err := s.repo.GetSourceByID(userID, source.ID)
 	if err != nil {
 		return nil, err
@@ -197,11 +194,6 @@ func (s *CaldavService) UpdateSource(ctx context.Context, userID, sourceID int64
 	if err := s.repo.ReplaceCalendars(userID, sourceID, calendars); err != nil {
 		return nil, err
 	}
-	if source.IsActive {
-		if err := s.SyncSourceNow(ctx, userID, sourceID); err != nil {
-			return nil, fmt.Errorf("source updated but sync failed: %w", err)
-		}
-	}
 	updated, err := s.repo.GetSourceByID(userID, sourceID)
 	if err != nil {
 		return nil, err
@@ -241,6 +233,60 @@ func (s *CaldavService) SyncSourceNow(ctx context.Context, userID, sourceID int6
 		var syncErr error
 		for _, cal := range calendars {
 			err := s.syncCalendarCache(ctx, source, password, &cal)
+			if err != nil {
+				syncErr = err
+				cal.LastError = err.Error()
+			} else {
+				cal.LastError = ""
+				cal.LastSyncAt = &now
+			}
+			_ = s.repo.UpdateCalendar(&cal)
+		}
+		source.LastSyncAt = &now
+		if syncErr != nil {
+			source.LastError = syncErr.Error()
+		} else {
+			source.LastError = ""
+		}
+		_ = s.repo.UpdateSource(source)
+		return syncErr
+	})
+}
+
+func (s *CaldavService) SyncSourceBootstrapNow(ctx context.Context, userID, sourceID int64) error {
+	return s.withSourceLock(userID, sourceID, func() error {
+		source, err := s.repo.GetSourceByID(userID, sourceID)
+		if err != nil {
+			return err
+		}
+		if !source.IsActive {
+			return nil
+		}
+		password, err := decryptSecret(source.PasswordEnc, s.secret)
+		if err != nil {
+			source.LastError = "failed to decrypt credentials"
+			_ = s.repo.UpdateSource(source)
+			return err
+		}
+		calendars, err := s.repo.ListSelectedCalendarsBySource(userID, sourceID)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		windowStart, windowEnd := bootstrapCaldavExpansionWindow(now)
+		var syncErr error
+		for _, cal := range calendars {
+			err := s.replaceCalendarCacheFromRemote(ctx, source, password, &cal, windowStart, windowEnd)
+			if err == nil {
+				if ctag, token, stateErr := s.fetchCalendarState(ctx, source, password, cal.CalendarURL); stateErr == nil {
+					if ctag != "" {
+						cal.CTag = ctag
+					}
+					if token != "" {
+						cal.SyncToken = token
+					}
+				}
+			}
 			if err != nil {
 				syncErr = err
 				cal.LastError = err.Error()
@@ -480,7 +526,7 @@ func (s *CaldavService) syncCalendarCache(ctx context.Context, source *models.Ca
 		return s.extendCalendarCacheCoverage(ctx, source, password, calendar)
 	}
 
-	if err := s.replaceCalendarCacheFromRemote(ctx, source, password, calendar); err != nil {
+	if err := s.replaceCalendarCacheFromRemote(ctx, source, password, calendar, time.Time{}, time.Time{}); err != nil {
 		return err
 	}
 	if remoteCTag != "" {
@@ -497,8 +543,10 @@ func (s *CaldavService) replaceCalendarCacheFromRemote(
 	source *models.CaldavSource,
 	password string,
 	calendar *models.CaldavCalendar,
+	windowStart time.Time,
+	windowEnd time.Time,
 ) error {
-	items, err := s.fetchCalendarRemoteEventsWindowed(ctx, source, password, calendar)
+	items, err := s.fetchCalendarRemoteEventsWindowed(ctx, source, password, calendar, windowStart, windowEnd)
 	if err != nil {
 		return err
 	}
@@ -537,7 +585,7 @@ func (s *CaldavService) reconcileFeishuCacheConsistency(
 	if sameCaldavHrefSet(remoteHrefs, localHrefs) {
 		return nil
 	}
-	return s.replaceCalendarCacheFromRemote(ctx, source, password, calendar)
+	return s.replaceCalendarCacheFromRemote(ctx, source, password, calendar, windowStart, windowEnd)
 }
 
 func (s *CaldavService) extendCalendarCacheCoverage(
@@ -658,9 +706,16 @@ func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
 	source *models.CaldavSource,
 	password string,
 	calendar *models.CaldavCalendar,
+	windowStart time.Time,
+	windowEnd time.Time,
 ) ([]models.CaldavEventCache, error) {
+	if !windowEnd.After(windowStart) {
+		windowStart, windowEnd = defaultCaldavExpansionWindow()
+	} else {
+		windowStart = windowStart.UTC()
+		windowEnd = windowEnd.UTC()
+	}
 	if detectCaldavProvider(source.BaseURL) == "feishu" {
-		windowStart, windowEnd := defaultCaldavExpansionWindow()
 		windows := buildCaldavSyncWindows(windowStart, windowEnd, feishuRangeSpanDays)
 		if len(windows) == 0 {
 			windows = append(windows, [2]time.Time{windowStart, windowEnd})
@@ -676,7 +731,6 @@ func (s *CaldavService) fetchCalendarRemoteEventsWindowed(
 		return dedupeCaldavEvents(merged), nil
 	}
 
-	windowStart, windowEnd := defaultCaldavExpansionWindow()
 	wholeRangeItems, _, wholeRangeErr := s.fetchCalendarRemoteEvents(ctx, source, password, calendar, windowStart, windowEnd, true)
 	if wholeRangeErr == nil && len(wholeRangeItems) > 0 {
 		return dedupeCaldavEvents(wholeRangeItems), nil
@@ -1133,6 +1187,11 @@ func parseHTTPStatusCode(statusLine string) int {
 func defaultCaldavExpansionWindow() (time.Time, time.Time) {
 	now := time.Now().UTC()
 	return now.AddDate(0, -caldavWindowPastMonths, 0), now.AddDate(0, caldavWindowFutureMonths, 0)
+}
+
+func bootstrapCaldavExpansionWindow(now time.Time) (time.Time, time.Time) {
+	base := now.UTC()
+	return base.AddDate(0, 0, -caldavBootstrapPastDays), base.AddDate(0, 0, caldavBootstrapFutureDays)
 }
 
 func buildCaldavSyncWindows(start, end time.Time, spanDays int) [][2]time.Time {
