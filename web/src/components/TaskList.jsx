@@ -2370,37 +2370,39 @@ function TaskList({ forcedView = '' }) {
   }, [submitPendingDraft]);
 
   const handleSaveDraft = async ({ submitAfter = false, submitSource = 'idle' } = {}) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const taskValue = selectedTaskSnapshotRef.current || selectedTask;
+    const draftValue = draftSnapshotRef.current || draft;
+    const closureTaskID = Number(taskValue?.id || 0);
     if (hasStaleDraftEventContext(closureTaskID)) {
       return;
     }
-    if (!selectedTask || !draft) {
+    if (!taskValue || !draftValue) {
       return;
     }
-    if (selectedTask.read_only) {
+    if (taskValue.read_only) {
       return;
     }
     if (savingDraft) {
       return;
     }
-    if (draftSourceTaskIDRef.current !== selectedTask.id) {
+    if (draftSourceTaskIDRef.current !== taskValue.id) {
       return;
     }
-    const title = (draft.title || '').trim();
+    const title = (draftValue.title || '').trim();
     if (!title) {
       return;
     }
 
-    const targetTaskID = selectedTask.id;
+    const targetTaskID = taskValue.id;
     const editVersionAtStart = draftEditVersionRef.current;
-    const built = buildDraftPayload(selectedTask, draft);
+    const built = buildDraftPayload(taskValue, draftValue);
     if (!built?.payload) {
       return;
     }
 
     setSavingDraft(true);
     try {
-      if (built.normalizedTitle !== title || String(built.normalizedPriority) !== String(draft.priority)) {
+      if (built.normalizedTitle !== title || String(built.normalizedPriority) !== String(draftValue.priority)) {
         setDraftWithSnapshot((prev) => (prev ? {
           ...prev,
           title: built.normalizedTitle,

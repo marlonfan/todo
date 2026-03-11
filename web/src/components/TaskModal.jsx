@@ -1426,12 +1426,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     }
   };
 
-  const triggerRealtimeSave = useCallback((submitSource) => {
+  const triggerRealtimeSave = useCallback((submitSource, overrides = null) => {
     if (!isEditing || loading) return;
-    void handleSubmit((formData) => onSubmit(formData, {
-      silent: true,
-      submitSource,
-    }))();
+    void handleSubmit((formData) => onSubmit(
+      overrides && typeof overrides === 'object'
+        ? { ...formData, ...overrides }
+        : formData,
+      {
+        silent: true,
+        submitSource,
+      }
+    ))();
   }, [handleSubmit, isEditing, loading, onSubmit]);
 
   const handleDescriptionSaveShortcut = useCallback(() => {
@@ -1767,7 +1772,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               setBasicPanel('');
                               detailPanelSnapshotRef.current = null;
                               if (isEditing) {
-                                triggerRealtimeSave('realtime_priority');
+                                triggerRealtimeSave('realtime_priority', { priority: priorityOption.value });
                               }
                             }}
                             className={`rounded-full border px-3 py-1 text-sm ${
@@ -2028,7 +2033,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 setBasicPanel('');
                                 detailPanelSnapshotRef.current = null;
                                 if (isEditing) {
-                                  triggerRealtimeSave('realtime_category');
+                                  triggerRealtimeSave('realtime_category', { category_ids: next });
                                 }
                               }}
                               className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${

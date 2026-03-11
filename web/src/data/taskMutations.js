@@ -150,6 +150,35 @@ function patchOccurrenceDescriptionInItems(items, taskID, scopedInstanceID, scop
   return changed ? next : items;
 }
 
+function patchOccurrenceStatusInItems(items, taskID, scopedInstanceID, scopedDate, nextStatus) {
+  if (!Array.isArray(items) || items.length === 0) return items;
+  let changed = false;
+  const next = items.map((item) => {
+    const itemTaskID = Number(item?.task_id || item?.taskID || item?.source_task_id || item?.sourceTaskID || item?.id || 0);
+    if (!itemTaskID || itemTaskID !== taskID) return item;
+    const itemInstanceID = String(item?.instance_id || item?.instanceId || '').trim();
+    const itemDate = normalizeOccurrenceDateText(
+      item?.occurrence_date
+      || item?.occurrenceDate
+      || item?.original_date
+      || item?.originalDate
+      || item?.start_time
+      || item?.startTime
+      || '',
+    );
+    const scopedByInstance = !!(scopedInstanceID && itemInstanceID && scopedInstanceID === itemInstanceID);
+    const scopedByDate = !!(scopedDate && itemDate && scopedDate === itemDate);
+    if (!scopedByInstance && !scopedByDate) return item;
+    if (String(item?.status || '') === nextStatus) return item;
+    changed = true;
+    return {
+      ...item,
+      status: nextStatus,
+    };
+  });
+  return changed ? next : items;
+}
+
 function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
   if (!queryClient || !payload || typeof payload !== 'object') return;
   if (!Object.prototype.hasOwnProperty.call(payload, 'description')) return;
@@ -184,6 +213,50 @@ function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
       scopedInstanceID,
       scopedDate,
       nextDescription,
+    );
+    if (nextItems !== value.items) {
+      queryClient.setQueryData(queryKey, {
+        ...value,
+        items: nextItems,
+      });
+    }
+  });
+}
+
+function patchRecurringOccurrenceStatus(queryClient, taskID, payload) {
+  if (!queryClient || !payload || typeof payload !== 'object') return;
+  const nextStatus = String(payload?.status || '').trim();
+  if (!nextStatus) return;
+  const scopedInstanceID = String(payload?.instance_id || '').trim();
+  const scopedDate = normalizeOccurrenceDateText(payload?.occurrence_date || '');
+  if (!scopedInstanceID && !scopedDate) return;
+
+  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
+    patchOccurrenceStatusInItems(prev, Number(taskID) || 0, scopedInstanceID, scopedDate, nextStatus)
+  ));
+
+  const occurrenceQueries = queryClient.getQueriesData({ queryKey: ['tasks', 'occurrences'] });
+  occurrenceQueries.forEach(([queryKey, value]) => {
+    if (Array.isArray(value)) {
+      const nextItems = patchOccurrenceStatusInItems(
+        value,
+        Number(taskID) || 0,
+        scopedInstanceID,
+        scopedDate,
+        nextStatus,
+      );
+      if (nextItems !== value) {
+        queryClient.setQueryData(queryKey, nextItems);
+      }
+      return;
+    }
+    if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return;
+    const nextItems = patchOccurrenceStatusInItems(
+      value.items,
+      Number(taskID) || 0,
+      scopedInstanceID,
+      scopedDate,
+      nextStatus,
     );
     if (nextItems !== value.items) {
       queryClient.setQueryData(queryKey, {
@@ -395,6 +468,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
   const persistWork = async () => {
     if (occurrenceScoped) {
       patchRecurringOccurrenceCalendarStatus(taskID, payload);
+      patchRecurringOccurrenceStatus(queryClient, taskID, payload);
     }
     await enqueueTaskOperation({
       op_id: createOpID(),
@@ -406,7 +480,9 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
       ...submitMeta,
     });
     await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: shouldRevalidateCalendarQuery });
-    await invalidateTaskOccurrenceQueries(queryClient);
+    if (!occurrenceScoped) {
+      await invalidateTaskOccurrenceQueries(queryClient);
+    }
   };
   if (awaitPersist) {
     await persistWork();
