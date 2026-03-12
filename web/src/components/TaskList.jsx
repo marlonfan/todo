@@ -609,7 +609,6 @@ const TaskRow = React.memo(function TaskRow({
   selected,
   timezone,
   labels,
-  showLunar,
   onSelectTask,
   onToggleStatus,
 }) {
@@ -623,9 +622,6 @@ const TaskRow = React.memo(function TaskRow({
       ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-emerald-600' }
       : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-sky-600' };
   const primaryTime = getTaskPrimaryTime(task);
-  const lunarAnnotation = showLunar && primaryTime ? (() => {
-    try { return getLunarInfo(new Date(primaryTime)).displayLabel; } catch { return ''; }
-  })() : '';
 
   return (
     <div
@@ -679,7 +675,6 @@ const TaskRow = React.memo(function TaskRow({
               )}
               <span className="text-[10px] text-slate-400">
                 {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
-                {lunarAnnotation && <span className="ml-0.5 text-slate-300">{lunarAnnotation}</span>}
               </span>
             </div>
           </div>
@@ -691,7 +686,6 @@ const TaskRow = React.memo(function TaskRow({
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
             <span className="text-slate-400 sm:hidden">
               {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
-              {lunarAnnotation && <span className="ml-0.5 text-slate-300">{lunarAnnotation}</span>}
             </span>
             {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
             {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
@@ -3108,7 +3102,6 @@ function TaskList({ forcedView = '' }) {
                           selected={selectedTaskID === task.id}
                           timezone={timezone}
                           labels={listLabels}
-                          showLunar={i18n.language === 'zh-CN'}
                           onSelectTask={handleSelectTask}
                           onToggleStatus={handleStatusChange}
                         />
