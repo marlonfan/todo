@@ -1405,16 +1405,14 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         }
       } else {
         savePromise = createTaskLocal(queryClient, payload, { submitMeta });
-        if (!silent) {
-          onSaved(null, saveContext);
-        }
+        // onSaved called once from Promise.resolve below, with the created task (temp ID)
       }
 
       // Close immediately with optimistic UI; persistence/sync continues in background.
       void Promise.resolve(savePromise)
         .then((savedTask) => {
-          if (!silent && savedTask?.id) {
-            onSaved(savedTask, saveContext);
+          if (!silent && (isEditing ? savedTask?.id : true)) {
+            onSaved(savedTask || null, saveContext);
           }
         })
         .catch((err) => {

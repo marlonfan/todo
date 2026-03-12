@@ -57,6 +57,7 @@ import {
   cancelTaskLocal,
   createTaskLocal,
   deleteTaskLocal,
+  setTasksCache,
   updateTaskLocal,
   updateTaskStatusLocal,
 } from '../data/taskMutations';
@@ -1254,13 +1255,6 @@ function TaskList({ forcedView = '' }) {
   }, [listToolbarPanel]);
 
   const loading = tasksLoading && tasks.length === 0;
-  const setTasksCache = (updater) => {
-    queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
-      const base = Array.isArray(prev) ? prev : [];
-      const next = typeof updater === 'function' ? updater(base) : updater;
-      return Array.isArray(next) ? next : base;
-    });
-  };
 
   useEffect(() => {
     if (view === 'search') {
@@ -1460,6 +1454,22 @@ function TaskList({ forcedView = '' }) {
 
   const filteredTasks = useMemo(() => taskGroups.flatMap((group) => group.tasks), [taskGroups]);
 
+  // Stable primitives for the auto-reset effect — only changes when task IDs change,
+  // so background syncs that fetch the same tasks don't trigger the effect.
+  const filteredTaskIDsRef = useRef([]);
+  const tasksRef = useRef(tasks);
+  filteredTaskIDsRef.current = useMemo(() => filteredTasks.map((t) => t.id), [filteredTasks]);
+  tasksRef.current = tasks;
+  const filteredTaskIDsKey = filteredTaskIDsRef.current.join(',');
+  // Guard refs — read inside the effect but NOT in deps, so their transitions
+  // (e.g. savingDraft true→false) don't trigger spurious resets mid-save.
+  const savingDraftRef = useRef(savingDraft);
+  const submittingDraftRef = useRef(submittingDraft);
+  const pendingSubmitTaskIDRef = useRef(pendingSubmitTaskID);
+  savingDraftRef.current = savingDraft;
+  submittingDraftRef.current = submittingDraft;
+  pendingSubmitTaskIDRef.current = pendingSubmitTaskID;
+
   const activeCategory = categories.find((cat) => cat.id === activeCategoryID);
   const viewTitle = activeCategory
     ? showCategoryEmoji && activeCategory.emoji
@@ -1480,19 +1490,23 @@ function TaskList({ forcedView = '' }) {
             : t('task.allTasks');
 
   useEffect(() => {
-    const selectedExistsInAllTasks = tasks.some((task) => Number(task?.id) === Number(selectedTaskID || 0));
+    const currentFilteredIDs = filteredTaskIDsRef.current;
+    const currentTasks = tasksRef.current;
+    const selectedExistsInAllTasks = currentTasks.some((task) => Number(task?.id) === Number(selectedTaskID || 0));
+    // Read save-state from refs so that transitions (e.g. savingDraft true→false)
+    // don't re-trigger this effect and cause a spurious mid-save reset.
     const shouldPreserveCurrentSelection = !!(
       selectedTaskID
       && selectedExistsInAllTasks
       && (
         draftTouchedRef.current
-        || savingDraft
-        || submittingDraft
-        || Number(pendingSubmitTaskID || 0) === Number(selectedTaskID || 0)
+        || savingDraftRef.current
+        || submittingDraftRef.current
+        || Number(pendingSubmitTaskIDRef.current || 0) === Number(selectedTaskID || 0)
       )
     );
 
-    if (filteredTasks.length === 0) {
+    if (currentFilteredIDs.length === 0) {
       if (shouldPreserveCurrentSelection) return;
       setSelectedTaskID(0);
       setDraftWithSnapshot(null);
@@ -1500,7 +1514,7 @@ function TaskList({ forcedView = '' }) {
       return;
     }
 
-    const exists = filteredTasks.some((task) => task.id === selectedTaskID);
+    const exists = currentFilteredIDs.includes(selectedTaskID);
     if (!exists && shouldPreserveCurrentSelection) {
       return;
     }
@@ -1510,9 +1524,10 @@ function TaskList({ forcedView = '' }) {
       return;
     }
     if (!exists) {
-      setSelectedTaskID(filteredTasks[0].id);
+      setSelectedTaskID(currentFilteredIDs[0]);
     }
-  }, [filteredTasks, pendingSubmitTaskID, savingDraft, selectedTaskID, setDraftWithSnapshot, submittingDraft, tasks]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredTaskIDsKey, selectedTaskID, setDraftWithSnapshot]);
 
   useEffect(() => {
     return onTaskIDRemapped(({ fromID, toID }) => {
@@ -2799,16 +2814,9 @@ function TaskList({ forcedView = '' }) {
     setModalTask(null);
   };
 
-  const handleTaskSaved = async (savedTask) => {
+  const handleTaskSaved = (savedTask) => {
     handleModalClose();
     if (savedTask?.id) {
-      setTasksCache((prev) => {
-        const exists = prev.some((taskItem) => taskItem.id === savedTask.id);
-        if (exists) {
-          return prev.map((taskItem) => (taskItem.id === savedTask.id ? savedTask : taskItem));
-        }
-        return [savedTask, ...prev];
-      });
       setSelectedTaskID(savedTask.id);
     }
   };

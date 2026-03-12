@@ -39,7 +39,7 @@ function createTempTaskID() {
   return -(Date.now() + Math.floor(Math.random() * 1000));
 }
 
-function setTasksCache(queryClient, updater) {
+export function setTasksCache(queryClient, updater) {
   queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
     const base = Array.isArray(prev) ? prev : [];
     const next = typeof updater === 'function' ? updater(base) : updater;
@@ -47,12 +47,15 @@ function setTasksCache(queryClient, updater) {
   });
 }
 
-function runMutationSideEffects(label, work) {
+function runMutationSideEffects(label, work, rollback) {
   void (async () => {
     try {
       await work();
     } catch (error) {
       console.error(`[taskMutations] ${label} failed:`, error);
+      if (rollback) {
+        try { rollback(); } catch (e) { console.error(`[taskMutations] rollback failed:`, e); }
+      }
     }
   })();
 }
@@ -325,19 +328,20 @@ export async function createTaskLocal(queryClient, payload, options = {}) {
     client_updated_at: nowISO(),
   };
 
+  const snapshot = queryClient.getQueryData(queryKeys.tasks.all);
   setTasksCache(queryClient, (prev) => [optimisticTask, ...prev]);
   runMutationSideEffects('createTaskLocal', async () => {
     await upsertTask(optimisticTask);
-      await enqueueTaskOperation({
-        op_id: createOpID(),
-        entity_type: 'task',
-        entity_id: tempTaskID,
-        op_type: 'create',
-        payload,
-        ...submitMeta,
-      });
+    await enqueueTaskOperation({
+      op_id: createOpID(),
+      entity_type: 'task',
+      entity_id: tempTaskID,
+      op_type: 'create',
+      payload,
+      ...submitMeta,
+    });
     await invalidateCalendarCaches(queryClient, null, { revalidateQuery: true });
-  });
+  }, () => setTasksCache(queryClient, Array.isArray(snapshot) ? snapshot : []));
 
   return optimisticTask;
 }
@@ -355,6 +359,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
   if (occurrenceScoped) {
     patchRecurringOccurrenceDescription(queryClient, taskID, payload);
   }
+  const snapshot = !skipOptimistic ? queryClient.getQueryData(queryKeys.tasks.all) : null;
   let nextTask = null;
   let baseRevision = 0;
   if (!skipOptimistic) {
@@ -394,10 +399,11 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
       }
       await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
     };
+    const rollback = snapshot ? () => setTasksCache(queryClient, snapshot) : undefined;
     if (awaitPersist) {
       await persistWork();
     } else {
-      runMutationSideEffects('updateTaskLocal', persistWork);
+      runMutationSideEffects('updateTaskLocal', persistWork, rollback);
     }
     return nextTask;
   }
@@ -437,6 +443,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
   const shouldRevalidateCalendarQuery = typeof options?.revalidateCalendarQuery === 'boolean'
     ? options.revalidateCalendarQuery
     : shouldPatchBaseTask;
+  const snapshot = shouldPatchBaseTask ? queryClient.getQueryData(queryKeys.tasks.all) : null;
   let nextTask = null;
   let baseRevision = 0;
 
@@ -457,15 +464,12 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
     if (nextTask) {
       baseRevision = Number((nextTask.revision || 1) - 1);
     }
-
-    if (nextTask) {
-      runMutationSideEffects('updateTaskStatusLocalBasePatch', async () => {
-        await upsertTask(nextTask);
-      });
-    }
   }
 
   const persistWork = async () => {
+    if (nextTask) {
+      await upsertTask(nextTask);
+    }
     if (occurrenceScoped) {
       patchRecurringOccurrenceCalendarStatus(taskID, payload);
       patchRecurringOccurrenceStatus(queryClient, taskID, payload);
@@ -484,10 +488,11 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
       await invalidateTaskOccurrenceQueries(queryClient);
     }
   };
+  const rollback = snapshot ? () => setTasksCache(queryClient, snapshot) : undefined;
   if (awaitPersist) {
     await persistWork();
   } else {
-    runMutationSideEffects('updateTaskStatusLocal', persistWork);
+    runMutationSideEffects('updateTaskStatusLocal', persistWork, rollback);
   }
 
   return nextTask;
@@ -495,6 +500,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
 
 export async function updateTaskScheduleLocal(queryClient, taskID, payload, options = {}) {
   const submitMeta = normalizeSubmitMeta(options?.submitMeta || {});
+  const snapshot = queryClient.getQueryData(queryKeys.tasks.all);
   let nextTask = null;
   let baseRevision = 0;
 
@@ -515,13 +521,10 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload, opti
     return nextTask;
   }));
 
-  if (nextTask) {
-    runMutationSideEffects('updateTaskScheduleLocalBasePatch', async () => {
-      await upsertTask(nextTask);
-    });
-  }
-
   runMutationSideEffects('updateTaskScheduleLocal', async () => {
+    if (nextTask) {
+      await upsertTask(nextTask);
+    }
     await enqueueTaskOperation({
       op_id: createOpID(),
       entity_type: 'task',
@@ -532,7 +535,7 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload, opti
       ...submitMeta,
     });
     await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: true });
-  });
+  }, snapshot ? () => setTasksCache(queryClient, snapshot) : undefined);
 
   return nextTask;
 }
@@ -572,5 +575,5 @@ export async function deleteTaskLocal(queryClient, taskID) {
     }
 
     await invalidateCalendarCaches(queryClient, numericID, { revalidateQuery: true });
-  });
+  }, () => setTasksCache(queryClient, Array.isArray(currentList) ? currentList : []));
 }
