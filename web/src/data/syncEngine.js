@@ -26,7 +26,8 @@ import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } fr
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
-import { CALENDAR_CACHE_SCHEMA_VERSION } from '../hooks/useCalendarFetch';
+// Keep in sync with CALENDAR_CACHE_SCHEMA_VERSION in useCalendarFetch.js
+const CALENDAR_CACHE_SCHEMA_VERSION = 2;
 
 const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
