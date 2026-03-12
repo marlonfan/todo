@@ -60,6 +60,7 @@ import {
   updateTaskLocal,
   updateTaskStatusLocal,
 } from '../data/taskMutations';
+import { onTaskIDRemapped } from '../data/syncEngine';
 
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
@@ -1503,10 +1504,21 @@ function TaskList({ forcedView = '' }) {
     if (!exists && shouldPreserveCurrentSelection) {
       return;
     }
+    // Don't reset when selectedTaskID is a negative temp ID — the task is being synced
+    // and onTaskIDRemapped will update it to the real ID shortly.
+    if (!exists && Number(selectedTaskID) < 0) {
+      return;
+    }
     if (!exists) {
       setSelectedTaskID(filteredTasks[0].id);
     }
   }, [filteredTasks, pendingSubmitTaskID, savingDraft, selectedTaskID, setDraftWithSnapshot, submittingDraft, tasks]);
+
+  useEffect(() => {
+    return onTaskIDRemapped(({ fromID, toID }) => {
+      setSelectedTaskID((prev) => (Number(prev) === Number(fromID) ? toID : prev));
+    });
+  }, []);
 
   useEffect(() => {
     if (!focusTaskID) return;

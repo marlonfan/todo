@@ -38,6 +38,7 @@ let running = false;
 let rerunRequested = false;
 let intervalID = null;
 const syncFinishedListeners = new Set();
+const taskIDRemappedListeners = new Set();
 
 function clampSyncIntervalSeconds(value) {
   const parsed = Number.parseInt(value, 10);
@@ -187,6 +188,7 @@ async function applyServerTask(task, replaceTempID = null) {
   });
 
   if (replaceTempID !== null) {
+    taskIDRemappedListeners.forEach((listener) => listener({ fromID: replaceTempID, toID: normalizedTask.id }));
     await replaceTaskID(replaceTempID, normalizedTask);
     await remapOutboxEntityID(replaceTempID, normalizedTask.id);
     return;
@@ -772,5 +774,15 @@ export function onSyncCycleFinished(callback) {
   syncFinishedListeners.add(callback);
   return () => {
     syncFinishedListeners.delete(callback);
+  };
+}
+
+export function onTaskIDRemapped(callback) {
+  if (typeof callback !== 'function') {
+    return () => {};
+  }
+  taskIDRemappedListeners.add(callback);
+  return () => {
+    taskIDRemappedListeners.delete(callback);
   };
 }
