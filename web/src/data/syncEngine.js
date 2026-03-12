@@ -6,6 +6,7 @@ import {
   getDueOutbox,
   getMeta,
   invalidateCalendarRangesByTask,
+  listCalendarRanges,
   readCategories,
   readOutbox,
   readTasks,
@@ -24,6 +25,8 @@ import { getCoalescePlan } from './outboxCoalesce';
 import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } from './taskMerge';
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
+import useCalendarCacheStore from '../stores/calendarCacheStore';
+import { CALENDAR_CACHE_SCHEMA_VERSION } from '../hooks/useCalendarFetch';
 
 const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
@@ -269,6 +272,13 @@ async function executeOutboxOperation(op) {
         clientSubmittedAt: op.client_submitted_at,
         submitSource: op.submit_source,
       });
+      // When recurrence_rule changes, the server generates occurrence data synchronously.
+      // Refetch nextOccurrences BEFORE applying the server task (which sets sync_state:'synced'),
+      // so that shouldHideRecurringSeriesAnchorInPending never sees the state where
+      // sync_state='synced' but nextOccurrences has no pending entry for this task.
+      if (res?.data?.id && Object.prototype.hasOwnProperty.call(op?.payload || {}, 'recurrence_rule')) {
+        await queryClientRef?.refetchQueries({ queryKey: queryKeys.tasks.nextOccurrences() });
+      }
       if (res?.data?.id) {
         await applyServerTask(res.data);
       } else {
@@ -546,10 +556,11 @@ async function pullServerData() {
 
 async function hydrateFromLocal() {
   if (!queryClientRef) return;
-  const [tasks, categories, lastPullAt] = await Promise.all([
+  const [tasks, categories, lastPullAt, calendarRanges] = await Promise.all([
     safeLocalCall(() => readTasks(), [], 'readTasks'),
     safeLocalCall(() => readCategories(), [], 'readCategories'),
     safeLocalCall(() => getMeta('last_pull_at', ''), '', 'getMeta:last_pull_at'),
+    safeLocalCall(() => listCalendarRanges(), [], 'listCalendarRanges'),
   ]);
 
   if (Array.isArray(tasks) && tasks.length > 0) {
@@ -560,6 +571,21 @@ async function hydrateFromLocal() {
   }
   if (lastPullAt) {
     queryClientRef.setQueryData(queryKeys.sync.lastPull, lastPullAt);
+  }
+
+  if (Array.isArray(calendarRanges) && calendarRanges.length > 0) {
+    const validRanges = calendarRanges.filter(
+      (r) => r.cache_version === CALENDAR_CACHE_SCHEMA_VERSION
+    );
+    if (validRanges.length > 0) {
+      const segments = validRanges.map((r) => ({
+        start: r.start,
+        end: r.end,
+        timezone: r.timezone,
+        eventsByDate: r.events_by_date || {},
+      }));
+      useCalendarCacheStore.getState().replaceFetchedSegments(segments);
+    }
   }
 }
 

@@ -15,7 +15,7 @@ dayjs.extend(timezonePlugin);
 
 const FETCH_STALE_TIME = 10 * 60 * 1000; // 10 minutes
 const FETCH_SEGMENT_MAX_DAYS = 120;
-const CALENDAR_CACHE_SCHEMA_VERSION = 2;
+export const CALENDAR_CACHE_SCHEMA_VERSION = 2;
 
 function normalizeTimezoneName(value) {
   const next = String(value || '').trim();

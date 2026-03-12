@@ -12,7 +12,7 @@ import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { toServerRangeBoundary } from '../utils/syncTime';
 import { queryKeys } from '../query/keys';
 import { IconSearch } from './icons/TaskIcons';
-import { updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
+import { setTasksCache, updateTaskScheduleLocal, updateTaskStatusLocal } from '../data/taskMutations';
 import { useTasksQuery } from '../query/hooks';
 import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvents } from './calendarEventMerge';
 import { openSearchDialog } from '../state/searchOverlay';
@@ -200,8 +200,38 @@ function CalendarView() {
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const [readonlyEventOpen, setReadonlyEventOpen] = useState(false);
   const [readonlyEventDetail, setReadonlyEventDetail] = useState(null);
-  const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [calendarPool, setCalendarPool] = useState({ start: '', end: '' });
+  const [dateRange, setDateRange] = useState(() => {
+    const view = readCalendarDefaultView();
+    const now = dayjs();
+    let start, end;
+    if (view === 'dayGridMonth') {
+      start = now.startOf('month').startOf('week');
+      end = now.endOf('month').endOf('week');
+    } else if (view === 'timeGridDay') {
+      start = now.startOf('day');
+      end = now.endOf('day');
+    } else {
+      start = now.startOf('week');
+      end = now.endOf('week');
+    }
+    return { start: start.toISOString(), end: end.toISOString() };
+  });
+  const [calendarPool, setCalendarPool] = useState(() => {
+    const view = readCalendarDefaultView();
+    const now = dayjs();
+    let start, end;
+    if (view === 'dayGridMonth') {
+      start = now.startOf('month').startOf('week');
+      end = now.endOf('month').endOf('week');
+    } else if (view === 'timeGridDay') {
+      start = now.startOf('day');
+      end = now.endOf('day');
+    } else {
+      start = now.startOf('week');
+      end = now.endOf('week');
+    }
+    return buildCalendarPoolRange(start.toISOString(), end.toISOString());
+  });
   const [calendarDefaultView, setCalendarDefaultView] = useState(readCalendarDefaultView);
   const [isCompactMobile, setIsCompactMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
@@ -1236,13 +1266,12 @@ function CalendarView() {
         }));
       }
     } else if (savedTask?.id) {
-      queryClient.setQueryData(queryKeys.tasks.all, (prev) => {
-        const base = Array.isArray(prev) ? prev : [];
-        const exists = base.some((task) => Number(task?.id) === Number(savedTask.id));
+      setTasksCache(queryClient, (prev) => {
+        const exists = prev.some((task) => Number(task?.id) === Number(savedTask.id));
         if (exists) {
-          return base.map((task) => (Number(task?.id) === Number(savedTask.id) ? savedTask : task));
+          return prev.map((task) => (Number(task?.id) === Number(savedTask.id) ? savedTask : task));
         }
-        return [savedTask, ...base];
+        return [savedTask, ...prev];
       });
     }
     if (!hasOccurrenceScope) {
