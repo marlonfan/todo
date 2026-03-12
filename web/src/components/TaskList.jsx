@@ -23,6 +23,7 @@ import {
   solarDateFromLunarSelection,
 } from '../utils/lunar';
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
+import { getLunarInfo } from '../utils/holidays';
 import {
   getShowCategoryEmoji,
   onUIPrefsChanged,
@@ -242,26 +243,33 @@ function alignStartToWeekdayLocal(startInput, weekdayKeys) {
   return start.add(bestDiff, 'day').format('YYYY-MM-DDTHH:mm');
 }
 
-function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
+function lunarDateLabel(d) {
+  try {
+    const info = getLunarInfo(d.toDate());
+    return info.monthLabel + info.dayLabel;
+  } catch {
+    return d.format('MM/DD');
+  }
+}
+
+function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, lunarMode = false) {
   const start = parseLocalInput(startInput);
   const end = parseLocalInput(endInput);
   if (!start && !end) return noDateLabel;
+  const dateFmt = (d) => lunarMode ? lunarDateLabel(d) : d.format('MM/DD');
   if (!isAllDay) {
     if (start && end) {
       if (start.isSame(end, 'day')) {
-        return `${start.format('MM/DD HH:mm')}-${end.format('HH:mm')}`;
+        return `${dateFmt(start)} ${start.format('HH:mm')}-${end.format('HH:mm')}`;
       }
-      return `${start.format('MM/DD HH:mm')}-${end.format('MM/DD HH:mm')}`;
+      return `${dateFmt(start)} ${start.format('HH:mm')}-${dateFmt(end)} ${end.format('HH:mm')}`;
     }
-    if (start) return start.format('MM/DD HH:mm');
-    return end.format('MM/DD HH:mm');
+    if (start) return `${dateFmt(start)} ${start.format('HH:mm')}`;
+    return `${dateFmt(end)} ${end.format('HH:mm')}`;
   }
-  if (!start && end) return end.format('MM/DD');
-  if (start && !end) return start.format('MM/DD');
-  if (isAllDay) {
-    return `${start.format('MM/DD')}-${end.format('MM/DD')}`;
-  }
-  return start.format('MM/DD');
+  if (!start && end) return dateFmt(end);
+  if (start && !end) return dateFmt(start);
+  return `${dateFmt(start)}-${dateFmt(end)}`;
 }
 
 function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, fallbackLabel) {
@@ -601,6 +609,7 @@ const TaskRow = React.memo(function TaskRow({
   selected,
   timezone,
   labels,
+  showLunar,
   onSelectTask,
   onToggleStatus,
 }) {
@@ -614,6 +623,9 @@ const TaskRow = React.memo(function TaskRow({
       ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-emerald-600' }
       : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-sky-600' };
   const primaryTime = getTaskPrimaryTime(task);
+  const lunarAnnotation = showLunar && primaryTime ? (() => {
+    try { return getLunarInfo(new Date(primaryTime)).displayLabel; } catch { return ''; }
+  })() : '';
 
   return (
     <div
@@ -667,6 +679,7 @@ const TaskRow = React.memo(function TaskRow({
               )}
               <span className="text-[10px] text-slate-400">
                 {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
+                {lunarAnnotation && <span className="ml-0.5 text-slate-300">{lunarAnnotation}</span>}
               </span>
             </div>
           </div>
@@ -678,6 +691,7 @@ const TaskRow = React.memo(function TaskRow({
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
             <span className="text-slate-400 sm:hidden">
               {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
+              {lunarAnnotation && <span className="ml-0.5 text-slate-300">{lunarAnnotation}</span>}
             </span>
             {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
             {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
@@ -947,6 +961,14 @@ function TaskList({ forcedView = '' }) {
     });
   }, [timezone]);
 
+  useEffect(() => {
+    if (!selectedTaskID) return;
+    const timer = setTimeout(() => {
+      draftTitleInputRef.current?.focus();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [selectedTaskID]);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTask, setModalTask] = useState(null);
   const [selectedTaskID, setSelectedTaskID] = useState(0);
@@ -996,6 +1018,7 @@ function TaskList({ forcedView = '' }) {
   const switchTaskRequestRef = useRef(0);
   const activeRenderTaskIDRef = useRef(0);
   const draftDescriptionEditorRef = useRef(null);
+  const draftTitleInputRef = useRef(null);
 
   const hasStaleDraftEventContext = useCallback((closureTaskID) => {
     const closureID = Number(closureTaskID || 0);
@@ -1582,7 +1605,8 @@ function TaskList({ forcedView = '' }) {
     draft?.start_time || '',
     draft?.end_time || '',
     !!draft?.all_day,
-    t('task.noDate')
+    t('task.noDate'),
+    draftTimeCalendarMode === 'lunar'
   );
   const hasDraftParsedTimeHint = !!draftParsePreview;
   const hasDraftTimeValue = !!(draft?.start_time || draft?.end_time);
@@ -3084,6 +3108,7 @@ function TaskList({ forcedView = '' }) {
                           selected={selectedTaskID === task.id}
                           timezone={timezone}
                           labels={listLabels}
+                          showLunar={i18n.language === 'zh-CN'}
                           onSelectTask={handleSelectTask}
                           onToggleStatus={handleStatusChange}
                         />
@@ -3201,6 +3226,7 @@ function TaskList({ forcedView = '' }) {
               <div className="border-b border-blue-100 px-3 py-2.5">
                 <div className="px-1 py-0.5">
                   <input
+                    ref={draftTitleInputRef}
                     value={draft.title}
                     onChange={(e) => {
                       setDraftParsePreview('');
@@ -3239,7 +3265,7 @@ function TaskList({ forcedView = '' }) {
                       }
                       setDraftParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
                     }}
-                    className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 sm:text-xl"
+                    className="w-full rounded-md border-none bg-transparent px-1 text-lg font-semibold text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:bg-slate-50 sm:text-xl"
                     placeholder={t('task.title')}
                   />
                 </div>
@@ -3878,8 +3904,11 @@ function TaskList({ forcedView = '' }) {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5">
-                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
+                <div
+                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors focus-within:border-blue-200 focus-within:bg-blue-50/20"
+                  onClick={() => draftDescriptionEditorRef.current?.focus()}
+                >
+                  <label className="mb-1 block cursor-text text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
                     ref={draftDescriptionEditorRef}
                     key={`task-editor-${selectedTask.id}`}

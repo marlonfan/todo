@@ -203,6 +203,18 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   useImperativeHandle(ref, () => ({
     getValue: getCurrentValue,
+    focus: () => {
+      try {
+        const el = mountRef.current?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset');
+        if (el) {
+          el.focus();
+        } else {
+          editorRef.current?.focus?.();
+        }
+      } catch {
+        // ignore
+      }
+    },
   }), []);
 
   return (

@@ -22,6 +22,7 @@ import {
   parseLunarYearlyRule,
 } from '../utils/lunar';
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
+import { getLunarInfo } from '../utils/holidays';
 import {
   IconCalendar,
   IconClock,
@@ -267,26 +268,33 @@ function splitDatePart(value) {
   return value && value.includes('T') ? value.split('T')[0] : value || '';
 }
 
-function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel) {
+function lunarDateLabel(d) {
+  try {
+    const info = getLunarInfo(d.toDate());
+    return info.monthLabel + info.dayLabel;
+  } catch {
+    return d.format('MM/DD');
+  }
+}
+
+function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, lunarMode = false) {
   const start = parseLocalInput(startInput);
   const end = parseLocalInput(endInput);
   if (!start && !end) return noDateLabel;
+  const dateFmt = (d) => lunarMode ? lunarDateLabel(d) : d.format('MM/DD');
   if (!isAllDay) {
     if (start && end) {
       if (start.isSame(end, 'day')) {
-        return `${start.format('MM/DD HH:mm')}-${end.format('HH:mm')}`;
+        return `${dateFmt(start)} ${start.format('HH:mm')}-${end.format('HH:mm')}`;
       }
-      return `${start.format('MM/DD HH:mm')}-${end.format('MM/DD HH:mm')}`;
+      return `${dateFmt(start)} ${start.format('HH:mm')}-${dateFmt(end)} ${end.format('HH:mm')}`;
     }
-    if (start) return start.format('MM/DD HH:mm');
-    return end.format('MM/DD HH:mm');
+    if (start) return `${dateFmt(start)} ${start.format('HH:mm')}`;
+    return `${dateFmt(end)} ${end.format('HH:mm')}`;
   }
-  if (!start && end) return end.format('MM/DD');
-  if (start && !end) return start.format('MM/DD');
-  if (isAllDay) {
-    return `${start.format('MM/DD')}-${end.format('MM/DD')}`;
-  }
-  return start.format('MM/DD');
+  if (!start && end) return dateFmt(end);
+  if (start && !end) return dateFmt(start);
+  return `${dateFmt(start)}-${dateFmt(end)}`;
 }
 
 function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, fallbackLabel) {
@@ -486,7 +494,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     : priorityIconTone === 'medium'
       ? t('task.priorityMedium')
       : t('task.priorityLow');
-  const timeSummaryLabel = buildTimeSummaryLabel(startInputValue, endInputValue, isAllDay, t('task.noDate'));
+  const timeSummaryLabel = buildTimeSummaryLabel(startInputValue, endInputValue, isAllDay, t('task.noDate'), timeCalendarMode === 'lunar');
   const hasParsedTimeHint = !!parsePreview;
   const hasTimeValue = !!(startInputValue || endInputValue);
   const timeButtonClass = basicPanel === 'time'
@@ -1649,13 +1657,14 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <input
+                  autoFocus
                   value={titleValue}
                   onChange={(e) => {
                     setParsePreview('');
                     setValue('title', e.target.value, { shouldDirty: true });
                   }}
                   onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
-                  className="w-full border-none bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-300 md:text-xl"
+                  className="w-full rounded-md border-none bg-transparent px-1 text-lg font-semibold text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:bg-slate-50 md:text-xl"
                   placeholder={t('task.title')}
                 />
               </div>
@@ -2336,8 +2345,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               </div>
 
               <div className="flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5">
-                  <label className="mb-1 block text-xs font-medium text-slate-500">{t('task.description')}</label>
+                <div
+                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors focus-within:border-blue-200 focus-within:bg-blue-50/20"
+                  onClick={() => descriptionEditorRef.current?.focus()}
+                >
+                  <label className="mb-1 block cursor-text text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
                     ref={descriptionEditorRef}
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
