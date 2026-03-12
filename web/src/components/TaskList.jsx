@@ -961,14 +961,6 @@ function TaskList({ forcedView = '' }) {
     });
   }, [timezone]);
 
-  useEffect(() => {
-    if (!selectedTaskID) return;
-    const timer = setTimeout(() => {
-      draftTitleInputRef.current?.focus();
-    }, 50);
-    return () => clearTimeout(timer);
-  }, [selectedTaskID]);
-
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTask, setModalTask] = useState(null);
   const [selectedTaskID, setSelectedTaskID] = useState(0);
@@ -1019,6 +1011,14 @@ function TaskList({ forcedView = '' }) {
   const activeRenderTaskIDRef = useRef(0);
   const draftDescriptionEditorRef = useRef(null);
   const draftTitleInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!selectedTaskID) return;
+    const timer = setTimeout(() => {
+      draftTitleInputRef.current?.focus();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [selectedTaskID]);
 
   const hasStaleDraftEventContext = useCallback((closureTaskID) => {
     const closureID = Number(closureTaskID || 0);
