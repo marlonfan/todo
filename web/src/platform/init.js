@@ -2,20 +2,23 @@ function isTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+// App.jsx 可以 await 这个 Promise，等 Keychain 读完再检查 token
+let _resolveReady;
+const _ready = new Promise((resolve) => { _resolveReady = resolve; });
+export const tokenReady = _ready;
+
 export async function initPlatform() {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    // Web 环境：直接用 localStorage，无需等待
+    _resolveReady();
+    return;
+  }
 
   const { invoke } = await import('@tauri-apps/api/core');
 
-  // 启动时从 Keychain 加载 token 到内存
   let _token = null;
-  try {
-    _token = await invoke('get_token');
-  } catch {
-    // 首次启动 Keychain 无记录，忽略
-  }
 
-  // 注入同步接口（内存读，异步 Keychain 写）
+  // 先注入接口（token 暂 null），让 React 可以立即渲染
   window.__tokenStore = {
     get: () => _token,
     set: (token) => {
@@ -28,6 +31,13 @@ export async function initPlatform() {
     },
   };
 
-  // window.__todoPlatform 不需要覆盖：Tauri WebView 中
-  // window.setInterval / addEventListener 均正常工作
+  // 异步从 Keychain 加载 token
+  try {
+    _token = await invoke('get_token');
+  } catch {
+    // 首次启动，Keychain 无记录
+  }
+
+  // 通知等待方：token 已就绪
+  _resolveReady();
 }

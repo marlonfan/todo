@@ -19,7 +19,8 @@ import { initPlatform } from './platform/init'
     });
   }
 
-  await initPlatform();  // 在 Tauri 中注入 __tokenStore
+  // 不阻塞——先渲染，Keychain 读取在后台进行
+  initPlatform();
 
   initializeSyncEngine(queryClient);
 

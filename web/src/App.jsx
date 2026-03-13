@@ -4,6 +4,7 @@ import Login from './components/Login';
 import Register from './components/Register';
 import MainLayout from './components/MainLayout';
 import { authAPI, getToken, getTokenStore } from './api/client';
+import { tokenReady } from './platform/init';
 import { setUserTimezone } from './utils/time';
 
 function App() {
@@ -11,33 +12,35 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    try {
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
-      if (user.timezone) {
-        setUserTimezone(user.timezone, false);
+    tokenReady.then(() => {
+      try {
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        if (user.timezone) {
+          setUserTimezone(user.timezone, false);
+        }
+      } catch {
+        // ignore invalid cached user data
       }
-    } catch {
-      // ignore invalid cached user data
-    }
 
-    const token = getToken();
-    if (token) {
-      authAPI.me()
-        .then((res) => {
-          setUser(res.data);
-          localStorage.setItem('user', JSON.stringify(res.data));
-          if (res.data.timezone) {
-            setUserTimezone(res.data.timezone, false);
-          }
-        })
-        .catch(() => {
-          getTokenStore().remove();
-          localStorage.removeItem('user');
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+      const token = getToken();
+      if (token) {
+        authAPI.me()
+          .then((res) => {
+            setUser(res.data);
+            localStorage.setItem('user', JSON.stringify(res.data));
+            if (res.data.timezone) {
+              setUserTimezone(res.data.timezone, false);
+            }
+          })
+          .catch(() => {
+            getTokenStore().remove();
+            localStorage.removeItem('user');
+          })
+          .finally(() => setLoading(false));
+      } else {
+        setLoading(false);
+      }
+    });
   }, []);
 
   if (loading) {
