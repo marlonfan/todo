@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import Select from './ui/Select';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -730,14 +731,14 @@ function Settings() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('settings.language')}
                   </label>
-                  <select
+                  <Select
                     value={language}
                     onChange={(e) => handleLanguageChange(e.target.value)}
                     className="form-select"
                   >
                     <option value="zh-CN">简体中文</option>
                     <option value="en-US">English</option>
-                  </select>
+                  </Select>
                 </div>
 
                 {/* Timezone */}
@@ -745,7 +746,7 @@ function Settings() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('settings.timezone')}
                   </label>
-                  <select
+                  <Select
                     value={timezone}
                     onChange={(e) => handleTimezoneChange(e.target.value)}
                     className="form-select"
@@ -755,7 +756,7 @@ function Settings() {
                         {tz.label}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                   <p className="text-xs text-gray-500 mt-1">
                     {t('settings.timezoneHint')}
                   </p>
@@ -765,7 +766,7 @@ function Settings() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('settings.calendarDefaultView')}
                   </label>
-                  <select
+                  <Select
                     value={calendarDefaultView}
                     onChange={(e) => handleCalendarDefaultViewChange(e.target.value)}
                     className="form-select"
@@ -773,7 +774,7 @@ function Settings() {
                     <option value="dayGridMonth">{t('settings.calendarViewMonth')}</option>
                     <option value="timeGridWeek">{t('settings.calendarViewWeek')}</option>
                     <option value="timeGridDay">{t('settings.calendarViewDay')}</option>
-                  </select>
+                  </Select>
                 </div>
 
                 <div>
@@ -791,7 +792,7 @@ function Settings() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('settings.defaultReminderMinutes')}
                   </label>
-                  <select
+                  <Select
                     value={defaultReminderMinutes}
                     onChange={(e) => handleDefaultReminderMinutesChange(e.target.value)}
                     className="form-input"
@@ -801,7 +802,7 @@ function Settings() {
                         {minutes} {t('task.minutes')}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
 
                 <div>
@@ -821,7 +822,7 @@ function Settings() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('settings.defaultTimeGranularity')}
                   </label>
-                  <select
+                  <Select
                     value={defaultTimeGranularity}
                     onChange={(e) => handleTimeGranularityChange(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -831,7 +832,7 @@ function Settings() {
                         {minutes} {t('task.minutes')}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
 
                 <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
@@ -907,7 +908,7 @@ function Settings() {
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
                       <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileDefaultTab')}</label>
-                      <select
+                      <Select
                         value={mobileDefaultTab}
                         onChange={(e) => handleMobileDefaultTabChange(e.target.value)}
                         className="form-select"
@@ -915,12 +916,12 @@ function Settings() {
                         <option value="tasks">{t('settings.mobileTabTasks')}</option>
                         <option value="calendar">{t('settings.mobileTabCalendar')}</option>
                         <option value="settings">{t('settings.mobileTabSettings')}</option>
-                      </select>
+                      </Select>
                     </div>
                     {mobileDefaultTab === 'tasks' && (
                       <div>
                         <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileDefaultTaskView')}</label>
-                        <select
+                        <Select
                           value={mobileDefaultTaskView}
                           onChange={(e) => handleMobileDefaultTaskViewChange(e.target.value)}
                           className="form-select"
@@ -934,12 +935,12 @@ function Settings() {
                               {showCategoryEmoji && cat.emoji ? `${cat.emoji} ${cat.name}` : cat.name}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       </div>
                     )}
                     <div>
                       <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileTabPreset')}</label>
-                      <select
+                      <Select
                         value={mobileTabPreset}
                         onChange={(e) => handleMobileTabPresetChange(e.target.value)}
                         className="form-select"
@@ -947,7 +948,7 @@ function Settings() {
                         <option value="tasks_calendar_settings">{t('settings.mobilePresetBasic')}</option>
                         <option value="tasks_calendar_categories_settings">{t('settings.mobilePresetWithCategories')}</option>
                         <option value="tasks_inbox_calendar_settings">{t('settings.mobilePresetInbox')}</option>
-                      </select>
+                      </Select>
                     </div>
                   </div>
                 </div>
@@ -978,7 +979,7 @@ function Settings() {
               <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
                 <p className="text-sm font-medium text-gray-700">Auto sync interval</p>
                 <p className="mt-1 text-sm text-gray-500">Longer interval avoids overlapping slow calendar/task pulls.</p>
-                <select
+                <Select
                   value={String(syncIntervalSeconds)}
                   onChange={(e) => handleSyncIntervalChange(e.target.value)}
                   className="form-select mt-3 max-w-xs"
@@ -989,7 +990,7 @@ function Settings() {
                   <option value="120">2 minutes (recommended)</option>
                   <option value="300">5 minutes</option>
                   <option value="600">10 minutes</option>
-                </select>
+                </Select>
               </div>
 
               <div className="rounded-md border border-blue-200 bg-blue-50 p-4">

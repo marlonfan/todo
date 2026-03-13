@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { notifyAPI } from '../api/client';
+import Select from './ui/Select';
 
 function NotificationSettings() {
   const { t } = useTranslation();
@@ -196,14 +197,14 @@ function NotificationSettings() {
             </div>
             <div>
               <label className="form-label">{t('notification.webhook.method')}</label>
-              <select
+              <Select
                 value={config.method || 'POST'}
                 onChange={(e) => setConfig({ ...config, method: e.target.value })}
                 className="form-select"
               >
                 <option value="POST">POST</option>
                 <option value="PUT">PUT</option>
-              </select>
+              </Select>
             </div>
           </>
         );
@@ -241,7 +242,7 @@ function NotificationSettings() {
         <div className="space-y-4">
           <div>
             <label className="form-label">{t('notification.channel')}</label>
-            <select
+            <Select
               value={selectedChannel}
               onChange={(e) => {
                 setSelectedChannel(e.target.value);
@@ -254,7 +255,7 @@ function NotificationSettings() {
                   {getChannelIcon(ch)} {ch.charAt(0).toUpperCase() + ch.slice(1)}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           {renderConfigFields()}

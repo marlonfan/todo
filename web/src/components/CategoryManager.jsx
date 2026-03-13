@@ -6,6 +6,7 @@ import { categoriesAPI } from '../api/client';
 import { useCategoriesQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import { replaceCategories } from '../data/localStore';
+import Select from './ui/Select';
 
 const EMOJI_OPTIONS = ['📁', '📌', '🧠', '💼', '📚', '🏠', '💡', '🛒', '🏃', '🎯', '💰', '❤️', '🎮', '✈️', '🍜', '🧹'];
 
@@ -16,7 +17,7 @@ function CategoryManager() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [editingCategory, setEditingCategory] = useState(null);
-  const { register, handleSubmit, reset, setValue } = useForm();
+  const { register, handleSubmit, reset, setValue, watch } = useForm();
 
   const persistCategoriesSnapshot = async () => {
     const snapshot = queryClient.getQueryData(queryKeys.categories.all);
@@ -139,9 +140,9 @@ function CategoryManager() {
                 />
               </div>
               <div className="w-32">
-                <select
-                  {...register('emoji')}
-                  defaultValue="📁"
+                <Select
+                  value={watch('emoji') || '📁'}
+                  onChange={(e) => setValue('emoji', e.target.value)}
                   className="form-select"
                 >
                   {EMOJI_OPTIONS.map((emoji) => (
@@ -149,7 +150,7 @@ function CategoryManager() {
                       {emoji}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <input
