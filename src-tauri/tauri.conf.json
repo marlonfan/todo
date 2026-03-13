@@ -5,8 +5,8 @@
   "build": {
     "frontendDist": "../web/dist",
     "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "npm run dev --prefix ../web",
-    "beforeBuildCommand": "npm run build --prefix ../web"
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
   },
   "app": {
     "withGlobalTauri": false,
