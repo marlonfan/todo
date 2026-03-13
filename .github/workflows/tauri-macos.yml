@@ -37,16 +37,21 @@ jobs:
         run: npm install
         working-directory: web
 
+      - name: Build frontend
+        run: npm run build
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://todo.marlon.life/api' }}
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: Build Tauri app
-        # VITE_API_BASE_URL is forwarded into beforeBuildCommand (npm run build)
-        # so the frontend is built exactly once with the correct API URL.
-        run: cargo tauri build
+        # Frontend already built above with the correct VITE_API_BASE_URL.
+        # Override beforeBuildCommand to empty so Tauri doesn't rebuild it.
+        run: cargo tauri build --config '{"build":{"beforeBuildCommand":""}}'
         working-directory: src-tauri
         env:
-          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://todo.marlon.life/api' }}
           TAURI_SIGNING_PRIVATE_KEY: ''
 
       - name: Upload macOS app
