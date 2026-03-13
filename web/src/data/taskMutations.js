@@ -398,6 +398,9 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
         }, { schedule: shouldScheduleSync });
       }
       await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
+      if (typeof payload.recurrence_rule !== 'undefined') {
+        await invalidateTaskOccurrenceQueries(queryClient);
+      }
     };
     const rollback = snapshot ? () => setTasksCache(queryClient, snapshot) : undefined;
     if (awaitPersist) {
@@ -421,6 +424,9 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
       }, { schedule: shouldScheduleSync });
     }
     await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
+    if (typeof payload.recurrence_rule !== 'undefined') {
+      await invalidateTaskOccurrenceQueries(queryClient);
+    }
   };
   if (awaitPersist) {
     await persistNoTaskWork();
