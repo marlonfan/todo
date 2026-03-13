@@ -178,6 +178,7 @@ function CalendarView() {
   const touchDraggingEventRef = useRef(false);
   const wheelGestureRef = useRef({ sumX: 0, sumY: 0, lastAt: 0 });
   const wheelNavLockUntilRef = useRef(0);
+  const datesSetTimerRef = useRef(null);
   const desktopSwipeRef = useRef({ active: false, startX: 0, startY: 0, allow: false });
   const mobileContentSwipeRef = useRef({ active: false, startX: 0, startY: 0, lastX: 0, lastY: 0, allow: false, pointerId: null, lockedAxis: '' });
   const mobileNavAnimatingRef = useRef(false);
@@ -485,11 +486,6 @@ function CalendarView() {
     timezone
   );
 
-  // 保留任务投影更新到缓存的逻辑
-  useEffect(() => {
-    if (!calendarPool.start || !calendarPool.end) return;
-    // 任务投影逻辑会在 useEventsForRange 中自动处理
-  }, [tasksForProjection, calendarPool.start, calendarPool.end, timezone]);
 
   useEffect(() => {
     if (!dateRange.start || !dateRange.end) return;
@@ -548,26 +544,29 @@ function CalendarView() {
   }, [events.length, calendarLoading]);
 
   const handleDatesSet = (dateInfo) => {
-    setCurrentViewTitle(dateInfo?.view?.title || '');
-    setDateRange({
-      start: dayjs(dateInfo.start).toISOString(),
-      end: dayjs(dateInfo.end).toISOString(),
-    });
+    clearTimeout(datesSetTimerRef.current);
+    datesSetTimerRef.current = setTimeout(() => {
+      setCurrentViewTitle(dateInfo?.view?.title || '');
+      setDateRange({
+        start: dayjs(dateInfo.start).toISOString(),
+        end: dayjs(dateInfo.end).toISOString(),
+      });
 
-    if (isCompactMobile) {
-      const normalizedView = normalizeMobileView(dateInfo.view.type);
-      const focusedDate = pendingFocusDateRef.current
-        ? dayjs(pendingFocusDateRef.current).format('YYYY-MM-DD')
-        : normalizedView === 'timeGridThreeDay'
-          ? dayjs(dateInfo.start).add(1, 'day').format('YYYY-MM-DD')
-          : dayjs(calendarRef.current?.getApi()?.getDate() || dateInfo.start).format('YYYY-MM-DD');
-      setMobileCurrentDate(focusedDate);
-      setMobileStripStartDate(getMobileStripStart(focusedDate, normalizedView));
-      pendingFocusDateRef.current = '';
-      if (normalizedView !== mobileView) {
-        setMobileView(normalizedView);
+      if (isCompactMobile) {
+        const normalizedView = normalizeMobileView(dateInfo.view.type);
+        const focusedDate = pendingFocusDateRef.current
+          ? dayjs(pendingFocusDateRef.current).format('YYYY-MM-DD')
+          : normalizedView === 'timeGridThreeDay'
+            ? dayjs(dateInfo.start).add(1, 'day').format('YYYY-MM-DD')
+            : dayjs(calendarRef.current?.getApi()?.getDate() || dateInfo.start).format('YYYY-MM-DD');
+        setMobileCurrentDate(focusedDate);
+        setMobileStripStartDate(getMobileStripStart(focusedDate, normalizedView));
+        pendingFocusDateRef.current = '';
+        if (normalizedView !== mobileView) {
+          setMobileView(normalizedView);
+        }
       }
-    }
+    }, 100);
   };
 
   const openCreateRange = useCallback((range) => {
