@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { authAPI } from '../api/client';
+import { authAPI, getTokenStore } from '../api/client';
 import { setUserTimezone } from '../utils/time';
 
 function Login({ setUser }) {
@@ -17,7 +17,7 @@ function Login({ setUser }) {
 
     try {
       const res = await authAPI.login(formData);
-      localStorage.setItem('token', res.data.token);
+      getTokenStore().set(res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data.user));
       if (res.data.user?.timezone) {
         setUserTimezone(res.data.user.timezone, false);

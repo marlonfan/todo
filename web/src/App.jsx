@@ -3,7 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Register from './components/Register';
 import MainLayout from './components/MainLayout';
-import { authAPI } from './api/client';
+import { authAPI, getToken, getTokenStore } from './api/client';
 import { setUserTimezone } from './utils/time';
 
 function App() {
@@ -20,7 +20,7 @@ function App() {
       // ignore invalid cached user data
     }
 
-    const token = localStorage.getItem('token');
+    const token = getToken();
     if (token) {
       authAPI.me()
         .then((res) => {
@@ -31,7 +31,7 @@ function App() {
           }
         })
         .catch(() => {
-          localStorage.removeItem('token');
+          getTokenStore().remove();
           localStorage.removeItem('user');
         })
         .finally(() => setLoading(false));

@@ -9,7 +9,7 @@ const defaultTokenStore = {
   remove: () => localStorage.removeItem('token'),
 };
 
-function getTokenStore() {
+export function getTokenStore() {
   if (typeof window !== 'undefined' && window.__tokenStore) {
     return window.__tokenStore;
   }

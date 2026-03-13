@@ -19,6 +19,7 @@ import {
   IconTag,
   IconTrash,
 } from './icons/TaskIcons';
+import { getTokenStore } from '../api/client';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { useCategoriesQuery } from '../query/hooks';
 import { moveTaskToCategoryLocal, updateTaskLocal } from '../data/taskMutations';
@@ -280,7 +281,7 @@ function MainLayout({ user, setUser }) {
   }, [mobilePrefs.defaultTab, mobilePrefs.defaultTaskView, navigate]);
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
+    getTokenStore().remove();
     localStorage.removeItem('user');
     setUser(null);
   };
