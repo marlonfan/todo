@@ -1,4 +1,4 @@
-import { categoriesAPI, tasksAPI } from '../api/client';
+import { categoriesAPI, tasksAPI, getToken } from '../api/client';
 import { queryKeys } from '../query/keys';
 import {
   clearAllLocalData,
@@ -26,6 +26,41 @@ import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } fr
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
+
+// --- Platform abstraction layer ---
+// Tauri (or any other shell) can override before the app boots via window.__todoPlatform:
+//   window.__todoPlatform = { setInterval, onOnline, onVisibilityChange, isVisible }
+//
+// setInterval(fn, ms)       → returns a cancel function () => void
+// onOnline(fn)              → returns an unlisten function () => void
+// onVisibilityChange(fn)    → returns an unlisten function () => void; fn() called on each change
+// isVisible()               → returns boolean
+const defaultPlatform = {
+  setInterval: (fn, ms) => {
+    if (typeof window === 'undefined') return () => {};
+    const id = window.setInterval(fn, ms);
+    return () => window.clearInterval(id);
+  },
+  onOnline: (fn) => {
+    if (typeof window === 'undefined') return () => {};
+    window.addEventListener('online', fn);
+    return () => window.removeEventListener('online', fn);
+  },
+  onVisibilityChange: (fn) => {
+    if (typeof document === 'undefined') return () => {};
+    document.addEventListener('visibilitychange', fn);
+    return () => document.removeEventListener('visibilitychange', fn);
+  },
+  isVisible: () => {
+    if (typeof document === 'undefined') return true;
+    return !document.hidden;
+  },
+};
+
+const platform = (typeof window !== 'undefined' && window.__todoPlatform)
+  ? { ...defaultPlatform, ...window.__todoPlatform }
+  : defaultPlatform;
+
 // Keep in sync with CALENDAR_CACHE_SCHEMA_VERSION in useCalendarFetch.js
 const CALENDAR_CACHE_SCHEMA_VERSION = 2;
 
@@ -40,7 +75,8 @@ let queryClientRef = null;
 let initialized = false;
 let running = false;
 let rerunRequested = false;
-let intervalID = null;
+let intervalCancelFn = null;
+let platformUnlisteners = [];
 const syncFinishedListeners = new Set();
 const taskIDRemappedListeners = new Set();
 
@@ -73,14 +109,13 @@ function isAutoSyncEnabled() {
 }
 
 function resetSyncIntervalTimer() {
-  if (typeof window === 'undefined') return;
-  if (intervalID) {
-    window.clearInterval(intervalID);
-    intervalID = null;
+  if (intervalCancelFn) {
+    intervalCancelFn();
+    intervalCancelFn = null;
   }
   const intervalMs = getSyncIntervalMs();
   if (intervalMs <= 0) return;
-  intervalID = window.setInterval(() => {
+  intervalCancelFn = platform.setInterval(() => {
     scheduleSync();
   }, intervalMs);
 }
@@ -124,7 +159,7 @@ async function safeLocalCall(fn, fallback, label) {
 
 function hasToken() {
   if (typeof window === 'undefined') return false;
-  return Boolean(localStorage.getItem('token'));
+  return Boolean(getToken());
 }
 
 function nowISO() {
@@ -748,27 +783,28 @@ export function initializeSyncEngine(queryClient) {
     runSyncCycle({ silent: true });
   });
 
-  if (typeof window !== 'undefined') {
-    const onOnline = () => {
-      if (!isAutoSyncEnabled()) return;
-      scheduleSync();
-    };
-    const onVisible = () => {
-      if (document.hidden || !isAutoSyncEnabled()) return;
-      scheduleSync();
-    };
-    window.addEventListener('online', onOnline);
-    document.addEventListener('visibilitychange', onVisible);
-
-    resetSyncIntervalTimer();
-  }
+  const onOnline = () => {
+    if (!isAutoSyncEnabled()) return;
+    scheduleSync();
+  };
+  const onVisible = () => {
+    if (!platform.isVisible() || !isAutoSyncEnabled()) return;
+    scheduleSync();
+  };
+  platformUnlisteners = [
+    platform.onOnline(onOnline),
+    platform.onVisibilityChange(onVisible),
+  ];
+  resetSyncIntervalTimer();
 }
 
 export function stopSyncEngine() {
-  if (intervalID && typeof window !== 'undefined') {
-    window.clearInterval(intervalID);
+  if (intervalCancelFn) {
+    intervalCancelFn();
+    intervalCancelFn = null;
   }
-  intervalID = null;
+  platformUnlisteners.forEach((fn) => fn());
+  platformUnlisteners = [];
   initialized = false;
   running = false;
   rerunRequested = false;
@@ -781,15 +817,13 @@ export function getConfiguredSyncIntervalSeconds() {
 
 export function setConfiguredSyncIntervalSeconds(seconds) {
   const normalized = clampSyncIntervalSeconds(seconds);
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(SYNC_INTERVAL_STORAGE_KEY, String(normalized));
-    } catch {
-      // ignore storage write error
-    }
-    if (initialized) {
-      resetSyncIntervalTimer();
-    }
+  try {
+    localStorage.setItem(SYNC_INTERVAL_STORAGE_KEY, String(normalized));
+  } catch {
+    // ignore storage write error
+  }
+  if (initialized) {
+    resetSyncIntervalTimer();
   }
   return normalized;
 }
