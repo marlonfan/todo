@@ -55,3 +55,7 @@ build/
 # Config (keep example)
 config.yaml
 !config.yaml.example
+
+# Tauri
+src-tauri/target/
+src-tauri/icons/app-icon.png

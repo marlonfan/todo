@@ -1,7 +1,29 @@
 import axios from 'axios';
 
+// --- Platform-agnostic token storage ---
+// In Tauri, inject a Keychain-backed implementation via window.__tokenStore before the app boots:
+//   window.__tokenStore = { get, set, remove }
+const defaultTokenStore = {
+  get: () => localStorage.getItem('token'),
+  set: (token) => localStorage.setItem('token', token),
+  remove: () => localStorage.removeItem('token'),
+};
+
+function getTokenStore() {
+  if (typeof window !== 'undefined' && window.__tokenStore) {
+    return window.__tokenStore;
+  }
+  return defaultTokenStore;
+}
+
+export function getToken() {
+  return getTokenStore().get();
+}
+
+// In Tauri the WebView origin is tauri://localhost, so relative '/api' won't reach the server.
+// Set VITE_API_BASE_URL at build time (e.g. https://todo.marlon.life/api) to override.
 const apiClient = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -10,7 +32,7 @@ const apiClient = axios.create({
 // Request interceptor to add auth token
 apiClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = getTokenStore().get();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -19,14 +41,78 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// --- Token refresh state ---
+let isRefreshing = false;
+let refreshQueue = [];
+
+function resolveRefreshQueue(token) {
+  refreshQueue.forEach(({ resolve }) => resolve(token));
+  refreshQueue = [];
+}
+
+function rejectRefreshQueue(err) {
+  refreshQueue.forEach(({ reject }) => reject(err));
+  refreshQueue = [];
+}
+
+function clearAuthAndRedirect() {
+  const store = getTokenStore();
+  store.remove();
+  localStorage.removeItem('user');
+  if (typeof window !== 'undefined') {
+    window.location.href = '/login';
+  }
+}
+
+async function attemptTokenRefresh() {
+  const store = getTokenStore();
+  const currentToken = store.get();
+  if (!currentToken) throw new Error('no token');
+  // Use raw axios to avoid triggering our own interceptors
+  const base = import.meta.env.VITE_API_BASE_URL ?? '/api';
+  const res = await axios.post(`${base}/auth/refresh`, null, {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${currentToken}`,
+    },
+  });
+  const newToken = res.data?.token;
+  if (!newToken) throw new Error('no token in refresh response');
+  store.set(newToken);
+  return newToken;
+}
+
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response?.status === 401 && !originalRequest._retried) {
+      originalRequest._retried = true;
+
+      if (isRefreshing) {
+        // Queue this request until refresh completes
+        return new Promise((resolve, reject) => {
+          refreshQueue.push({ resolve, reject });
+        }).then((token) => {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+          return apiClient(originalRequest);
+        });
+      }
+
+      isRefreshing = true;
+      try {
+        const newToken = await attemptTokenRefresh();
+        resolveRefreshQueue(newToken);
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return apiClient(originalRequest);
+      } catch {
+        rejectRefreshQueue(error);
+        clearAuthAndRedirect();
+        return Promise.reject(error);
+      } finally {
+        isRefreshing = false;
+      }
     }
     return Promise.reject(error);
   }

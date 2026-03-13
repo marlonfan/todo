@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2",
     "@fullcalendar/core": "^6.1.15",
     "@fullcalendar/daygrid": "^6.1.15",
     "@fullcalendar/interaction": "^6.1.15",
