@@ -1,4 +1,4 @@
-name: Build macOS Desktop App
+name: Build Desktop App
 
 on:
   push:
@@ -12,8 +12,23 @@ on:
         default: 'https://todo.marlon.life/api'
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: Todo-macOS
+            paths: |
+              src-tauri/target/release/bundle/macos/Todo.app
+              src-tauri/target/release/bundle/dmg/*.dmg
+          - os: windows-latest
+            artifact: Todo-Windows
+            paths: |
+              src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/release/bundle/nsis/*.exe
+
+    runs-on: ${{ matrix.os }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,18 +62,14 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: Build Tauri app
-        # Frontend already built above with the correct VITE_API_BASE_URL.
-        # Override beforeBuildCommand to empty so Tauri doesn't rebuild it.
         run: cargo tauri build --config '{"build":{"beforeBuildCommand":""}}'
         working-directory: src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
 
-      - name: Upload macOS app
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Todo-macOS
-          path: |
-            src-tauri/target/release/bundle/macos/Todo.app
-            src-tauri/target/release/bundle/dmg/*.dmg
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
           retention-days: 7
