@@ -772,9 +772,15 @@ function MainLayout({ user, setUser }) {
 
       {/* Main Content */}
       <div className="flex-1 overflow-hidden pb-14 md:pb-0">
+        {/* CalendarView 和 TaskList 常驻，用 CSS 切换，避免 FullCalendar 反复初始化 */}
+        <div className={location.pathname === '/' ? 'h-full' : 'hidden'}>
+          <CalendarView />
+        </div>
+        <div className={location.pathname === '/tasks' ? 'h-full' : 'hidden'}>
+          <TaskList />
+        </div>
+
         <Routes>
-          <Route path="/" element={<CalendarView />} />
-          <Route path="/tasks" element={<TaskList />} />
           <Route path="/search" element={<TaskList forcedView="search" />} />
           <Route path="/categories" element={<CategoryManager />} />
           <Route path="/settings" element={<Settings />} />
