@@ -1372,7 +1372,7 @@ export default function InfiniteCalendarCanvas({
       const sorted = [...list].sort((a, b) => {
         const diff = a.start.valueOf() - b.start.valueOf();
         if (diff !== 0) return diff;
-        return a.end.valueOf() - b.end.valueOf();
+        return b.end.valueOf() - a.end.valueOf();  // 长事件优先占低列号
       });
       const active = [];
       const clusterItems = [];
@@ -1380,9 +1380,46 @@ export default function InfiniteCalendarCanvas({
 
       const finalizeCluster = () => {
         if (!clusterItems.length) return;
-        clusterItems.forEach((item) => {
-          layoutBySegmentKey.set(String(item.segmentKey), { col: item.col, cols: clusterMaxCols });
+        const maxCol = Math.max(...clusterItems.map(e => e.col));
+
+        // 按列分组
+        const byCol = new Map();
+        clusterItems.forEach(e => {
+          const colList = byCol.get(e.col) || [];
+          colList.push(e);
+          byCol.set(e.col, colList);
         });
+
+        const SAME_START_THRESHOLD = 5 * 60 * 1000; // 5 分钟
+
+        clusterItems.forEach(item => {
+          let fp = 0;
+          let sameStartForward = false;
+          for (let c = item.col + 1; c <= maxCol; c++) {
+            const colEvents = byCol.get(c) || [];
+            const overlapping = colEvents.filter(
+              o => o.start.isBefore(item.end) && o.end.isAfter(item.start)
+            );
+            if (overlapping.length > 0) {
+              fp++;
+              if (overlapping.some(o =>
+                Math.abs(o.start.valueOf() - item.start.valueOf()) < SAME_START_THRESHOLD
+              )) {
+                sameStartForward = true;
+              }
+            } else {
+              break;
+            }
+          }
+
+          layoutBySegmentKey.set(String(item.segmentKey), {
+            col: item.col,
+            cols: item.col + fp + 1,  // per-event totalCols，非簇级
+            forwardPressure: fp,
+            sameStartForward,
+          });
+        });
+
         clusterItems.length = 0;
         clusterMaxCols = 0;
       };
@@ -1409,12 +1446,22 @@ export default function InfiniteCalendarCanvas({
       const dayIndex = segment.start.startOf('day').diff(reference, 'day');
       const columnBaseLeft = TIME_AXIS_WIDTH + (dayIndex - cameraSteps) * dayWidth + 2;
       const slotWidth = Math.max(20, dayWidth - 6);
-      const layout = layoutBySegmentKey.get(String(segment.segmentKey)) || { col: 0, cols: 1 };
-      const cols = Math.max(1, layout.cols || 1);
+      const layout = layoutBySegmentKey.get(String(segment.segmentKey)) || {
+        col: 0, cols: 1, forwardPressure: 0, sameStartForward: false
+      };
+      const cols = Math.max(1, layout.cols);
       const col = Math.max(0, Math.min(cols - 1, layout.col || 0));
       const colWidth = slotWidth / cols;
       const x = columnBaseLeft + col * colWidth;
-      const width = Math.max(18, colWidth - 2);
+
+      let width;
+      if (layout.sameStartForward) {
+        // 同时开始 → 并排分列，严格占 1 列宽
+        width = Math.max(18, colWidth - 2);
+      } else {
+        // 不同开始时间 或 无右侧邻居 → 延伸到右边界（叠放效果）
+        width = Math.max(18, slotWidth - col * colWidth - 2);
+      }
       const minuteOfDay = segment.start.hour() * 60 + segment.start.minute();
       const y = timeGridBodyTop + (minuteOfDay / 60) * HOUR_HEIGHT + 1;
       const durationMin = clampDurationMinutes(segment.start, segment.end);
@@ -1450,13 +1497,14 @@ export default function InfiniteCalendarCanvas({
           top: y,
           width,
           height: h,
+          zIndex: 20 + col,
         },
-        className: `canvas-event absolute z-20 overflow-hidden rounded-md px-1.5 py-0.5 text-[11px] ${
+        className: `canvas-event absolute overflow-hidden rounded-md px-1.5 py-0.5 text-[11px] border-l-[3px] ring-2 ring-white ${
           readonly
-            ? 'bg-slate-500/85 text-white'
+            ? 'bg-slate-200 border-slate-500 text-slate-700'
             : status === 'completed'
-              ? 'bg-emerald-500/80 text-white line-through'
-              : 'bg-blue-600/80 text-white'
+              ? 'bg-emerald-100 border-emerald-600 text-emerald-900 line-through'
+              : 'bg-blue-100 border-blue-600 text-blue-900'
         }`,
         titleStyle,
       };

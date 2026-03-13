@@ -1009,7 +1009,7 @@ function TaskList({ forcedView = '' }) {
   useEffect(() => {
     if (!selectedTaskID) return;
     const timer = setTimeout(() => {
-      draftTitleInputRef.current?.focus();
+      draftDescriptionEditorRef.current?.focus();
     }, 50);
     return () => clearTimeout(timer);
   }, [selectedTaskID]);

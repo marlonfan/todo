@@ -1657,7 +1657,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <input
-                  autoFocus
                   value={titleValue}
                   onChange={(e) => {
                     setParsePreview('');
