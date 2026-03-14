@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { authAPI, getTokenStore } from '../api/client';
+import { scheduleSync } from '../data/syncEngine';
 import { setUserTimezone } from '../utils/time';
 
 function Login({ setUser }) {
@@ -23,6 +24,7 @@ function Login({ setUser }) {
         setUserTimezone(res.data.user.timezone, false);
       }
       setUser(res.data.user);
+      scheduleSync();
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed');
     } finally {

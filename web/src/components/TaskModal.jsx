@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -1646,7 +1647,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [deleteChoiceOpen, loading, requestClose]);
 
-  return (
+  return createPortal(
     <div className="modal-overlay" onClick={requestClose}>
       <div
         className="modal-content task-modal-shell"
@@ -2447,7 +2448,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
