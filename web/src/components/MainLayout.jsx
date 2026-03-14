@@ -772,11 +772,11 @@ function MainLayout({ user, setUser }) {
 
       {/* Main Content */}
       <div className="relative flex-1 overflow-hidden pb-14 md:pb-0">
-        {/* CalendarView 和 TaskList 常驻，用 visibility 切换，保留布局尺寸避免 FullCalendar ResizeObserver 触发 */}
-        <div className={`absolute inset-0 ${location.pathname === '/' ? 'z-10' : 'invisible pointer-events-none'}`}>
+        {/* CalendarView 和 TaskList 常驻，用 opacity-0 切换（而非 visibility:hidden），避免 GPU 合成层泄漏导致 backdrop-blur 闪烁 */}
+        <div className={`absolute inset-0 ${location.pathname === '/' ? 'z-10' : 'opacity-0 pointer-events-none'}`}>
           <CalendarView />
         </div>
-        <div className={`absolute inset-0 ${location.pathname === '/tasks' ? 'z-10' : 'invisible pointer-events-none'}`}>
+        <div className={`absolute inset-0 ${location.pathname === '/tasks' ? 'z-10' : 'opacity-0 pointer-events-none'}`}>
           <TaskList />
         </div>
 
