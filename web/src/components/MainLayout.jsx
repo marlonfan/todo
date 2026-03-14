@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import CalendarView from './CalendarView';
@@ -220,7 +220,6 @@ function MainLayout({ user, setUser }) {
   const [resolveSelections, setResolveSelections] = useState({});
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [resolveConflictError, setResolveConflictError] = useState('');
-  const didApplyMobileDefaultRef = useRef(false);
   const initialLocationRef = useRef({
     pathname: location.pathname,
     search: location.search,
@@ -263,22 +262,15 @@ function MainLayout({ user, setUser }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (didApplyMobileDefaultRef.current) return;
-    didApplyMobileDefaultRef.current = true;
-
-    const initialLocation = initialLocationRef.current;
-    if (initialLocation.pathname !== '/' || initialLocation.search) return;
-
-    if (mobilePrefs.defaultTab === 'tasks') {
-      navigate(buildDefaultTasksRoute(mobilePrefs.defaultTaskView), { replace: true });
-      return;
-    }
-    if (mobilePrefs.defaultTab === 'settings') {
-      navigate('/settings', { replace: true });
-    }
-  }, [mobilePrefs.defaultTab, mobilePrefs.defaultTaskView, navigate]);
+  // 计算初始重定向目标（仅在首次挂载时、路径为 / 时），lazy initializer 保证只算一次
+  const [initialRedirectTo] = useState(() => {
+    const loc = initialLocationRef.current;
+    if (loc.pathname !== '/' || loc.search) return null;
+    const prefs = readMobilePrefsFromStorage();
+    if (prefs.defaultTab === 'tasks') return buildDefaultTasksRoute(prefs.defaultTaskView);
+    if (prefs.defaultTab === 'settings') return '/settings';
+    return null;
+  });
 
   const handleLogout = () => {
     getTokenStore().remove();
@@ -574,6 +566,11 @@ function MainLayout({ user, setUser }) {
     setResolveConflictError('');
     setResolvingConflict(false);
   }, [resolveConflictID, syncConflicts]);
+
+  // 首次进入 / 时同步重定向，避免先渲染日历再跳转的闪烁
+  if (initialRedirectTo && location.pathname === '/') {
+    return <Navigate to={initialRedirectTo} replace />;
+  }
 
   return (
     <div className="h-screen bg-[#eaf2ff] flex flex-col md:flex-row">
