@@ -59,3 +59,5 @@ config.yaml
 # Tauri
 src-tauri/target/
 src-tauri/icons/app-icon.png
+src-tauri/Cargo.lock
+src-tauri/gen/
