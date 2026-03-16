@@ -1763,12 +1763,29 @@ function TaskList({ forcedView = '' }) {
       const current = normalizeDraftForCompare(draft);
       const incoming = normalizeDraftForCompare(nextDraft);
       if (JSON.stringify(current) !== JSON.stringify(incoming)) {
+        // Guard: for recurring tasks, selectedTask.start_time is overridden by the
+        // next occurrence date from recurringNextPendingMap. After a local save
+        // (updateTaskLocal), tasksRaw is updated immediately but recurringNextPendingMap
+        // may still carry the old occurrence date. If the base task's local date matches
+        // the current draft's date, the "incoming" change is stale occurrence data —
+        // skip the sync to avoid rolling back the user's just-confirmed date change.
+        if (selectedTask.occurrence_start) {
+          const baseTask = (Array.isArray(tasksRaw) ? tasksRaw : [])
+            .find((t) => Number(t?.id) === Number(selectedTask.id));
+          if (baseTask?.start_time) {
+            const baseDateLocal = dayjs(baseTask.start_time).tz(timezone).format('YYYY-MM-DD');
+            const currentDateLocal = (current.start_time || '').split('T')[0];
+            if (baseDateLocal && currentDateLocal && baseDateLocal === currentDateLocal) {
+              return;
+            }
+          }
+        }
         draftSourceTaskIDRef.current = selectedTask.id;
         setDraftWithSnapshot(nextDraft);
         setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
     }
-  }, [selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot]);
+  }, [selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot, tasksRaw, timezone]);
 
   useEffect(() => {
     if (!draft) return;

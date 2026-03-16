@@ -213,10 +213,18 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 		}
 	}
 
-	fromDate := from.UTC().Truncate(24 * time.Hour)
-	if fromDate.IsZero() {
-		fromDate = time.Now().UTC().Truncate(24 * time.Hour)
+	tz := s.resolveUserTimezone(userID)
+	loc := loadLocationOrUTC(tz)
+
+	// Compute "start of today" in the user's local timezone so that today's
+	// occurrences are included even when the user's UTC offset shifts midnight
+	// to a different UTC date (e.g. UTC+8: local 00:00 = UTC-1 16:00 yesterday).
+	fromRef := from
+	if fromRef.IsZero() {
+		fromRef = time.Now()
 	}
+	fromLocal := fromRef.In(loc)
+	fromDate := time.Date(fromLocal.Year(), fromLocal.Month(), fromLocal.Day(), 0, 0, 0, 0, loc).UTC()
 	horizon := fromDate.AddDate(3, 0, 0)
 	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, taskIDs, fromDate, horizon)
 	if err != nil {
@@ -229,9 +237,6 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 		key := fmt.Sprintf("%d|%s", row.TaskID, row.OccurrenceDate.UTC().Format("2006-01-02"))
 		occurrenceByTaskDate[key] = row
 	}
-
-	tz := s.resolveUserTimezone(userID)
-	loc := loadLocationOrUTC(tz)
 	instances := make([]models.TaskInstance, 0, len(recurringTasks))
 	for i := range recurringTasks {
 		task := &recurringTasks[i]
