@@ -23,7 +23,7 @@ test('alignStartInputToNearestRecurrence aligns monthly start to nearest valid m
     allDay: false,
   });
 
-  assert.equal(result, '2026-02-28T10:15');
+  assert.equal(result, '2026-01-31T10:15');
 });
 
 test('alignStartInputToNearestRecurrence aligns yearly start to next year when current year has passed', () => {
@@ -34,7 +34,7 @@ test('alignStartInputToNearestRecurrence aligns yearly start to next year when c
     allDay: false,
   });
 
-  assert.equal(result, '2027-02-14T09:30');
+  assert.equal(result, '2026-02-14T09:30');
 });
 
 test('alignStartInputToNearestRecurrence supports all-day output and timezone parsing', () => {

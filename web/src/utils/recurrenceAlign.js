@@ -79,7 +79,7 @@ export function alignStartInputToNearestRecurrence({
   const start = parseInput(startInput, timezoneName);
   if (!start) return startInput || '';
   const reference = parseInput(referenceInput, timezoneName);
-  const baseline = reference && reference.isAfter(start) ? reference : start;
+  const baseline = start;
   const type = String(recurrenceType || 'daily');
 
   if (type === 'weekly' || type === 'biweekly') {
