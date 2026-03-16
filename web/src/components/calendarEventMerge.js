@@ -84,6 +84,27 @@ function toDateObject(value) {
   return parsed.toDate();
 }
 
+function toFakeUTCDate(isoString, tz) {
+  if (!isoString) return null;
+  if (!tz) return toDateObject(isoString);
+  const local = dayjs(isoString).tz(tz);
+  if (!local.isValid()) return null;
+  return new Date(Date.UTC(
+    local.year(), local.month(), local.date(),
+    local.hour(), local.minute(), local.second(), local.millisecond(),
+  ));
+}
+
+function fromFakeUTCToISO(date, tz) {
+  if (!date) return null;
+  if (!tz) return new Date(date).toISOString();
+  const d = dayjs.utc(date);
+  return dayjs.tz(
+    `${d.format('YYYY-MM-DD')}T${d.format('HH:mm:ss.SSS')}`,
+    tz,
+  ).toISOString();
+}
+
 function resolveTaskDurationMs(rawStart, rawEnd) {
   const start = dayjs(rawStart);
   const end = dayjs(rawEnd);
@@ -160,9 +181,9 @@ function buildRecurringProjectedEvents(task, options) {
   const rule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
   if (!rule) return [];
 
-  const dtStart = toDateObject(rawStart);
-  const rangeStartDate = toDateObject(rangeStart);
-  const rangeEndDate = toDateObject(rangeEnd);
+  const dtStart = toFakeUTCDate(rawStart, timezone);
+  const rangeStartDate = toFakeUTCDate(rangeStart, timezone);
+  const rangeEndDate = toFakeUTCDate(rangeEnd, timezone);
   if (!dtStart || !rangeStartDate || !rangeEndDate) return [];
 
   const freqKey = String(rule.freq || '').trim().toLowerCase();
@@ -180,7 +201,7 @@ function buildRecurringProjectedEvents(task, options) {
     return lunarStarts.reduce((acc, startISO) => {
       const start = dayjs(startISO);
       if (!start.isValid()) return acc;
-      const dayToken = start.utc().format('YYYYMMDD');
+      const dayToken = dayjs(startISO).tz(timezone).format('YYYYMMDD');
       const instanceId = `${task.id}_${dayToken}`;
       if (seen.has(instanceId)) return acc;
       seen.add(instanceId);
@@ -237,7 +258,7 @@ function buildRecurringProjectedEvents(task, options) {
   }
 
   const untilCandidate = task?.recurrence_end_date || task?.recurrenceEndDate || rule?.until;
-  const until = toDateObject(untilCandidate);
+  const until = toFakeUTCDate(untilCandidate, timezone);
   if (until) {
     rruleOptions.until = until;
   }
@@ -261,13 +282,13 @@ function buildRecurringProjectedEvents(task, options) {
   const seen = new Set();
   const projected = [];
   occurrences.forEach((occurrenceDate) => {
-    const startISO = occurrenceDate.toISOString();
-    const dayToken = dayjs(startISO).utc().format('YYYYMMDD');
+    const startISO = fromFakeUTCToISO(occurrenceDate, timezone) || occurrenceDate.toISOString();
+    const dayToken = dayjs(startISO).tz(timezone).format('YYYYMMDD');
     const instanceId = `${task.id}_${dayToken}`;
     if (seen.has(instanceId)) return;
     seen.add(instanceId);
     const eventEndISO = (Number.isFinite(durationMs) && durationMs > 0)
-      ? new Date(occurrenceDate.getTime() + durationMs).toISOString()
+      ? (fromFakeUTCToISO(new Date(occurrenceDate.getTime() + durationMs), timezone) || new Date(occurrenceDate.getTime() + durationMs).toISOString())
       : undefined;
     projected.push(buildProjectedEvent(task, {
       id: instanceId,
@@ -324,7 +345,7 @@ export function buildProjectedEventsFromTasks(tasks, options) {
       if (!rawStart) return [];
       if (!isTaskInRange(task, rangeStart, rangeEnd)) return [];
       const projectedInstanceID = isRecurring
-        ? `${task.id}_${dayjs(rawStart).utc().format('YYYYMMDD')}`
+        ? `${task.id}_${dayjs(rawStart).tz(timezone).format('YYYYMMDD')}`
         : '';
 
       return [buildProjectedEvent(task, {

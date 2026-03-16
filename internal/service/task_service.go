@@ -182,13 +182,14 @@ func (s *TaskService) ListOccurrences(
 		taskByID[tasks[i].ID] = &tasks[i]
 	}
 
+	tz := s.resolveUserTimezone(userID)
 	instances := make([]models.TaskInstance, 0, len(rows))
 	for _, row := range rows {
 		task := taskByID[row.TaskID]
 		if task == nil || task.RecurrenceRule == nil {
 			continue
 		}
-		instance := taskInstanceFromOccurrenceRow(task, &row)
+		instance := taskInstanceFromOccurrenceRow(task, &row, tz)
 		instances = append(instances, instance)
 	}
 
@@ -229,15 +230,19 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 		occurrenceByTaskDate[key] = row
 	}
 
+	tz := s.resolveUserTimezone(userID)
+	loc := loadLocationOrUTC(tz)
 	instances := make([]models.TaskInstance, 0, len(recurringTasks))
 	for i := range recurringTasks {
 		task := &recurringTasks[i]
 		if task.RecurrenceRule == nil {
 			continue
 		}
-		occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon)
+		occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon, tz)
 		for _, occurrenceStart := range occurrences {
-			dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
+			localOcc := occurrenceStart.In(loc)
+			// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
+			dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
 			key := fmt.Sprintf("%d|%s", task.ID, dateOnly.Format("2006-01-02"))
 			override := occurrenceByTaskDate[key]
 			status := task.Status
@@ -337,6 +342,8 @@ func (s *TaskService) Update(
 	if err := checkRevision(expectedRevision, task); err != nil {
 		return nil, err
 	}
+	updateTZ := s.resolveUserTimezone(userID)
+	updateLoc := loadLocationOrUTC(updateTZ)
 	occurrenceDateValue, hasOccurrenceContext, err := parseOccurrenceDate(req.InstanceID, req.OccurrenceDate)
 	if err != nil {
 		return nil, err
@@ -421,7 +428,9 @@ func (s *TaskService) Update(
 			task.Status = models.TaskStatusPending
 			baseChanged = true
 			if anchor, ok := resolveTaskOccurrenceAnchorDate(task); ok {
-				completedAnchorDate = anchor.UTC().Truncate(24 * time.Hour)
+				localAnchor := anchor.In(updateLoc)
+				// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
+				completedAnchorDate = time.Date(localAnchor.Year(), localAnchor.Month(), localAnchor.Day(), 0, 0, 0, 0, time.UTC)
 				hasCompletedAnchor = true
 			}
 		}
@@ -457,7 +466,9 @@ func (s *TaskService) Update(
 		description := task.Description
 		if strings.TrimSpace(description) != "" {
 			if anchor, ok := resolveTaskOccurrenceAnchorDate(task); ok {
-				anchorDate := anchor.UTC().Truncate(24 * time.Hour)
+				localAnchor := anchor.In(updateLoc)
+				// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
+				anchorDate := time.Date(localAnchor.Year(), localAnchor.Month(), localAnchor.Day(), 0, 0, 0, 0, time.UTC)
 				if err := s.upsertRecurringOccurrence(task, anchorDate, nil, &description); err != nil {
 					return nil, err
 				}
@@ -648,6 +659,14 @@ func (s *TaskService) ListChangedSince(userID int64, since time.Time, limit int)
 	return changed, deleted, nil
 }
 
+func (s *TaskService) resolveUserTimezone(userID int64) string {
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil || user == nil || user.Timezone == "" {
+		return "UTC"
+	}
+	return user.Timezone
+}
+
 func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	if task == nil {
 		return nil
@@ -739,9 +758,13 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 		occurrenceByDate[row.OccurrenceDate.UTC().Format("2006-01-02")] = row
 	}
 
-	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon)
+	tz := s.resolveUserTimezone(userID)
+	loc := loadLocationOrUTC(tz)
+	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon, tz)
 	for _, occurrenceStart := range occurrences {
-		dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
+		localOcc := occurrenceStart.In(loc)
+		// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
+		dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
 		override := occurrenceByDate[dateOnly.Format("2006-01-02")]
 
 		status := task.Status
@@ -983,15 +1006,19 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 		occurrenceByTaskDate[key] = row
 	}
 
+	tz := s.resolveUserTimezone(userID)
+	loc := loadLocationOrUTC(tz)
 	var instances []models.TaskInstance
 
 	for _, task := range tasks {
 		if task.RecurrenceRule == nil {
 			continue
 		}
-		occurrences := buildTaskOccurrenceStarts(&task, start, end)
+		occurrences := buildTaskOccurrenceStarts(&task, start, end, tz)
 		for _, occurrenceStart := range occurrences {
-			dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
+			localOcc := occurrenceStart.In(loc)
+			// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
+			dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
 			instanceID := buildOccurrenceInstanceID(task.ID, dateOnly)
 			instance := models.TaskInstance{
 				InstanceID:   instanceID,
@@ -1052,7 +1079,8 @@ func (s *TaskService) upsertRecurringOccurrence(
 		return nil
 	}
 	dateOnly := occurrenceDate.UTC().Truncate(24 * time.Hour)
-	baseStart, baseEnd := deriveOccurrenceRangeFromTask(task, dateOnly)
+	tz := s.resolveUserTimezone(task.UserID)
+	baseStart, baseEnd := deriveOccurrenceRangeFromTask(task, dateOnly, tz)
 
 	existing, err := s.taskRepo.GetTaskOccurrence(task.UserID, task.ID, dateOnly)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1137,8 +1165,8 @@ func taskOccurrenceMatchesSeriesDefault(
 	return true
 }
 
-func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence) models.TaskInstance {
-	baseStart, baseEnd := deriveOccurrenceRangeFromTask(task, row.OccurrenceDate)
+func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence, userTimezone string) models.TaskInstance {
+	baseStart, baseEnd := deriveOccurrenceRangeFromTask(task, row.OccurrenceDate, userTimezone)
 	start := cloneTimePointer(baseStart)
 	end := cloneTimePointer(baseEnd)
 	allDay := task.AllDay
@@ -1182,10 +1210,21 @@ func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence
 	return instance
 }
 
-func deriveOccurrenceRangeFromTask(task *models.Task, occurrenceDate time.Time) (*time.Time, *time.Time) {
+// deriveOccurrenceRangeFromTask computes the start/end UTC instants for one
+// occurrence of a recurring task.
+//
+// occurrenceDate encoding convention: values are stored as
+// time.Date(Y, M, D, 0, 0, 0, 0, time.UTC) where Y/M/D are the user's *local*
+// calendar date, NOT a UTC date. The time.UTC location tag is only a storage
+// marker — the semantic meaning is "local date, time portion stripped". All
+// write paths (ExpandRecurringTasks, ListNextPendingOccurrences, Update, etc.)
+// follow this convention. Consumers must interpret Y/M/D as local-date, not as
+// a UTC instant.
+func deriveOccurrenceRangeFromTask(task *models.Task, occurrenceDate time.Time, userTimezone string) (*time.Time, *time.Time) {
 	if task == nil {
 		return nil, nil
 	}
+	// occurrenceDate carries a local Y/M/D encoded as UTC 00:00; extract it directly.
 	date := occurrenceDate.UTC().Truncate(24 * time.Hour)
 	anchor := task.StartTime
 	if anchor == nil {
@@ -1196,17 +1235,18 @@ func deriveOccurrenceRangeFromTask(task *models.Task, occurrenceDate time.Time) 
 		return &start, nil
 	}
 
-	base := anchor.UTC()
+	loc := loadLocationOrUTC(userTimezone)
+	localAnchor := anchor.In(loc)
 	start := time.Date(
 		date.Year(),
 		date.Month(),
 		date.Day(),
-		base.Hour(),
-		base.Minute(),
-		base.Second(),
-		base.Nanosecond(),
-		time.UTC,
-	)
+		localAnchor.Hour(),
+		localAnchor.Minute(),
+		localAnchor.Second(),
+		localAnchor.Nanosecond(),
+		loc,
+	).UTC()
 
 	var duration time.Duration
 	hasDuration := false

@@ -32,6 +32,17 @@ var (
 	}()
 )
 
+func loadLocationOrUTC(tz string) *time.Location {
+	if tz == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
 func resolveRecurrenceAnchor(start, due *time.Time) *time.Time {
 	if start != nil {
 		value := start.UTC()
@@ -160,7 +171,7 @@ func isLunarYearlyRule(rule *models.RecurrenceRule) bool {
 	return freq == recurrenceFreqLunarYearly || freq == recurrenceFreqLunarLegacy
 }
 
-func buildTaskOccurrenceStarts(task *models.Task, rangeStart, rangeEnd time.Time) []time.Time {
+func buildTaskOccurrenceStarts(task *models.Task, rangeStart, rangeEnd time.Time, userTimezone string) []time.Time {
 	if task == nil || task.RecurrenceRule == nil {
 		return nil
 	}
@@ -180,7 +191,7 @@ func buildTaskOccurrenceStarts(task *models.Task, rangeStart, rangeEnd time.Time
 	if isLunarYearlyRule(rule) {
 		return buildLunarYearlyOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC)
 	}
-	return buildGregorianOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC)
+	return buildGregorianOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC, userTimezone)
 }
 
 func buildGregorianOccurrenceStarts(
@@ -188,20 +199,47 @@ func buildGregorianOccurrenceStarts(
 	until *time.Time,
 	rule *models.RecurrenceRule,
 	rangeStart, rangeEnd time.Time,
+	userTimezone string,
 ) []time.Time {
-	rruleText := buildRRuleString(rule, &anchor, until)
+	loc := loadLocationOrUTC(userTimezone)
+
+	// fakeUTC strategy: rrule-go requires time.UTC for all DTSTART/UNTIL values.
+	// If we pass real UTC times, weekday-based rules (e.g. "every Monday") would
+	// fire on the wrong local day for users offset from UTC. Instead we strip the
+	// timezone offset by rewriting the user's local wall-clock time as if it were
+	// UTC (toFakeUTC), run the rrule expansion, then restore the real UTC instant
+	// by re-interpreting the result in the user's location (fromFakeUTC).
+	toFakeUTC := func(t time.Time) time.Time {
+		local := t.In(loc)
+		return time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), local.Minute(), local.Second(), local.Nanosecond(), time.UTC)
+	}
+	fromFakeUTC := func(t time.Time) time.Time {
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), loc).UTC()
+	}
+
+	fakeAnchor := toFakeUTC(anchor)
+	var fakeUntil *time.Time
+	if until != nil {
+		fu := toFakeUTC(*until)
+		fakeUntil = &fu
+	}
+
+	rruleText := buildRRuleString(rule, &fakeAnchor, fakeUntil)
 	parsedRule, err := rrule.StrToRRule(rruleText)
 	if err != nil {
 		return nil
 	}
-	occurrences := parsedRule.Between(rangeStart.UTC(), rangeEnd.UTC(), true)
+
+	fakeStart := toFakeUTC(rangeStart)
+	fakeEnd := toFakeUTC(rangeEnd)
+	occurrences := parsedRule.Between(fakeStart, fakeEnd, true)
 	if len(occurrences) == 0 {
 		return nil
 	}
 	seen := make(map[int64]struct{}, len(occurrences))
 	out := make([]time.Time, 0, len(occurrences))
 	for _, occurrence := range occurrences {
-		ts := occurrence.UTC()
+		ts := fromFakeUTC(occurrence)
 		key := ts.UnixNano()
 		if _, ok := seen[key]; ok {
 			continue

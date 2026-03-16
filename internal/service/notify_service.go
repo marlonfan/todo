@@ -443,9 +443,12 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 		occurrenceByDate[row.OccurrenceDate.UTC().Format("2006-01-02")] = row
 	}
 
-	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon)
+	tz := s.resolveUserTimezone(task.UserID, nil)
+	loc := loadLocationOrUTC(tz)
+	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon, tz)
 	for _, occurrenceStart := range occurrences {
-		dateOnly := occurrenceStart.UTC().Truncate(24 * time.Hour)
+		localOcc := occurrenceStart.In(loc)
+		dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
 		override := occurrenceByDate[dateOnly.Format("2006-01-02")]
 
 		status := task.Status
