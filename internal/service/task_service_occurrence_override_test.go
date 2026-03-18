@@ -444,3 +444,305 @@ func TestRecurringOccurrenceCancelledReschedulesReminderToNextPendingInstance(t 
 
 	assertSinglePendingAutoReminder(t, notifyRepo, created.ID, secondStart.Add(-5*time.Minute))
 }
+
+func TestUpdateRecurringSeriesScheduleInOccurrenceContextShowsLatestPendingOccurrence(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	baseStart := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	baseEnd := time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "Recurring schedule override",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &baseStart,
+		EndTime:   &baseEnd,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "weekly",
+			Interval: 1,
+			ByDay:    []string{"MO"},
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	overrideStart := time.Date(2026, 3, 16, 9, 0, 0, 0, time.UTC)
+	overrideEnd := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	revision := int64(1)
+	_, err := svc.Update(
+		userID,
+		task.ID,
+		&models.UpdateTaskRequest{
+			StartTime:      &overrideStart,
+			EndTime:        &overrideEnd,
+			InstanceID:     buildOccurrenceInstanceID(task.ID, time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC)),
+			OccurrenceDate: "2026-03-23",
+		},
+		map[string]bool{
+			"start_time": true,
+			"end_time":   true,
+		},
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("update recurring series schedule: %v", err)
+	}
+
+	reloadedTask, err := taskRepo.GetByID(task.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.StartTime == nil || !reloadedTask.StartTime.UTC().Equal(overrideStart.UTC()) {
+		t.Fatalf("series start_time = %v, want %v", reloadedTask.StartTime, overrideStart.UTC())
+	}
+	if reloadedTask.EndTime == nil || !reloadedTask.EndTime.UTC().Equal(overrideEnd.UTC()) {
+		t.Fatalf("series end_time = %v, want %v", reloadedTask.EndTime, overrideEnd.UTC())
+	}
+
+	occurrenceDate, _, _ := parseOccurrenceDate("", "2026-03-23")
+	_, err = taskRepo.GetTaskOccurrence(userID, task.ID, occurrenceDate)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			t.Fatalf("load occurrence override: %v", err)
+		}
+	}
+
+	from := time.Date(2026, 3, 17, 10, 0, 0, 0, time.UTC)
+	nextPending, err := svc.ListNextPendingOccurrences(userID, from)
+	if err != nil {
+		t.Fatalf("list next pending occurrences: %v", err)
+	}
+	found := false
+	for _, item := range nextPending {
+		if item.TaskID != task.ID {
+			continue
+		}
+		found = true
+		if !item.StartTime.UTC().Equal(overrideStart.UTC()) {
+			t.Fatalf("next pending start_time = %s, want %s", item.StartTime.UTC().Format(time.RFC3339), overrideStart.UTC().Format(time.RFC3339))
+		}
+		expectedInstanceID := buildOccurrenceInstanceID(task.ID, time.Date(2026, 3, 16, 0, 0, 0, 0, time.UTC))
+		if item.InstanceID != expectedInstanceID {
+			t.Fatalf("next pending instance_id = %q, want %q", item.InstanceID, expectedInstanceID)
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("next pending occurrence for task %d not found", task.ID)
+	}
+}
+
+func TestCompleteLatestPendingOccurrenceAdvancesToNextWeek(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	baseStart := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	baseEnd := time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "Recurring status keeps override",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &baseStart,
+		EndTime:   &baseEnd,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "weekly",
+			Interval: 1,
+			ByDay:    []string{"MO"},
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	overrideStart := time.Date(2026, 3, 16, 9, 0, 0, 0, time.UTC)
+	overrideEnd := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	revision := int64(1)
+	_, err := svc.Update(
+		userID,
+		task.ID,
+		&models.UpdateTaskRequest{
+			StartTime:      &overrideStart,
+			EndTime:        &overrideEnd,
+			OccurrenceDate: "2026-03-23",
+		},
+		map[string]bool{
+			"start_time": true,
+			"end_time":   true,
+		},
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("update recurring series schedule: %v", err)
+	}
+
+	reloadedTask, err := taskRepo.GetByID(task.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	revision = reloadedTask.Revision
+
+	from := time.Date(2026, 3, 17, 10, 0, 0, 0, time.UTC)
+	nextPendingBeforeComplete, err := svc.ListNextPendingOccurrences(userID, from)
+	if err != nil {
+		t.Fatalf("list next pending occurrences before complete: %v", err)
+	}
+	beforeInstanceID := buildOccurrenceInstanceID(task.ID, time.Date(2026, 3, 16, 0, 0, 0, 0, time.UTC))
+	foundBefore := false
+	for _, item := range nextPendingBeforeComplete {
+		if item.TaskID != task.ID {
+			continue
+		}
+		foundBefore = true
+		if item.InstanceID != beforeInstanceID {
+			t.Fatalf("instance before complete = %q, want %q", item.InstanceID, beforeInstanceID)
+		}
+		break
+	}
+	if !foundBefore {
+		t.Fatalf("next pending occurrence before complete for task %d not found", task.ID)
+	}
+
+	_, err = svc.UpdateStatus(
+		userID,
+		task.ID,
+		models.TaskStatusCompleted,
+		beforeInstanceID,
+		"2026-03-16",
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("update recurring occurrence status: %v", err)
+	}
+
+	nextPendingAfterComplete, err := svc.ListNextPendingOccurrences(userID, from)
+	if err != nil {
+		t.Fatalf("list next pending occurrences after complete: %v", err)
+	}
+	afterInstanceID := buildOccurrenceInstanceID(task.ID, time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC))
+	foundAfter := false
+	for _, item := range nextPendingAfterComplete {
+		if item.TaskID != task.ID {
+			continue
+		}
+		foundAfter = true
+		if item.InstanceID != afterInstanceID {
+			t.Fatalf("instance after complete = %q, want %q", item.InstanceID, afterInstanceID)
+		}
+		if !item.StartTime.UTC().Equal(baseStart.UTC()) {
+			t.Fatalf("start_time after complete = %s, want %s", item.StartTime.UTC().Format(time.RFC3339), baseStart.UTC().Format(time.RFC3339))
+		}
+		break
+	}
+	if !foundAfter {
+		t.Fatalf("next pending occurrence after complete for task %d not found", task.ID)
+	}
+}
+
+func TestCompleteOccurrenceWithLegacyScheduleOverrideDoesNotSkipNextWeek(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	baseStart := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	baseEnd := time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "Recurring legacy override compatibility",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &baseStart,
+		EndTime:   &baseEnd,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "weekly",
+			Interval: 1,
+			ByDay:    []string{"MO"},
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	overrideStart := time.Date(2026, 3, 16, 9, 0, 0, 0, time.UTC)
+	overrideEnd := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	revision := int64(1)
+	_, err := svc.Update(
+		userID,
+		task.ID,
+		&models.UpdateTaskRequest{
+			StartTime:      &overrideStart,
+			EndTime:        &overrideEnd,
+			OccurrenceDate: "2026-03-23",
+		},
+		map[string]bool{
+			"start_time": true,
+			"end_time":   true,
+		},
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("update recurring series schedule: %v", err)
+	}
+
+	legacyOccurrenceDate := time.Date(2026, 3, 23, 0, 0, 0, 0, time.UTC)
+	if err := taskRepo.UpsertTaskOccurrence(&models.TaskOccurrence{
+		UserID:         userID,
+		TaskID:         task.ID,
+		OccurrenceDate: legacyOccurrenceDate,
+		InstanceID:     buildOccurrenceInstanceID(task.ID, legacyOccurrenceDate),
+		Status:         models.TaskStatusPending,
+		Description:    "",
+		StartTime:      &overrideStart,
+		EndTime:        &overrideEnd,
+		AllDay:         false,
+	}); err != nil {
+		t.Fatalf("seed legacy mismatched override: %v", err)
+	}
+
+	reloadedTask, err := taskRepo.GetByID(task.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	revision = reloadedTask.Revision
+
+	_, err = svc.UpdateStatus(
+		userID,
+		task.ID,
+		models.TaskStatusCompleted,
+		buildOccurrenceInstanceID(task.ID, time.Date(2026, 3, 16, 0, 0, 0, 0, time.UTC)),
+		"2026-03-16",
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("complete 2026-03-16 occurrence: %v", err)
+	}
+
+	nextPending, err := svc.ListNextPendingOccurrences(userID, time.Date(2026, 3, 17, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("list next pending occurrences: %v", err)
+	}
+	expectedInstanceID := buildOccurrenceInstanceID(task.ID, legacyOccurrenceDate)
+	found := false
+	for _, item := range nextPending {
+		if item.TaskID != task.ID {
+			continue
+		}
+		found = true
+		if item.InstanceID != expectedInstanceID {
+			t.Fatalf("next pending instance_id = %q, want %q", item.InstanceID, expectedInstanceID)
+		}
+		if !item.StartTime.UTC().Equal(baseStart.UTC()) {
+			t.Fatalf("next pending start_time = %s, want %s", item.StartTime.UTC().Format(time.RFC3339), baseStart.UTC().Format(time.RFC3339))
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("next pending occurrence for task %d not found", task.ID)
+	}
+}
