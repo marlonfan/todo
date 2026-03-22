@@ -80,7 +80,7 @@ func Load(path string) (*Config, error) {
 		cfg.JWT.Secret = "default-secret-change-in-production"
 	}
 	if cfg.JWT.Expire == 0 {
-		cfg.JWT.Expire = 72 * time.Hour
+		cfg.JWT.Expire = 180 * 24 * time.Hour
 	}
 	if cfg.Notify.CheckInterval == 0 {
 		cfg.Notify.CheckInterval = 60 * time.Second
@@ -104,7 +104,7 @@ func Default() *Config {
 		},
 		JWT: JWTConfig{
 			Secret: "default-secret-change-in-production",
-			Expire: 72 * time.Hour,
+			Expire: 180 * 24 * time.Hour,
 		},
 		Notify: NotifyConfig{
 			CheckInterval: 60 * time.Second,

@@ -27,6 +27,8 @@ type AuthService struct {
 	jwtExpire time.Duration
 }
 
+const RefreshGracePeriod = 7 * 24 * time.Hour
+
 func NewAuthService(userRepo *repository.UserRepository, cfg *config.JWTConfig) *AuthService {
 	return &AuthService{
 		userRepo:  userRepo,
@@ -122,6 +124,35 @@ func (s *AuthService) GetUserByID(userID int64) (*models.UserResponse, error) {
 
 func (s *AuthService) RefreshToken(userID int64, username string) (string, error) {
 	return utils.GenerateToken(userID, username, s.jwtSecret, s.jwtExpire)
+}
+
+func (s *AuthService) RefreshTokenFromRaw(rawToken string) (string, error) {
+	claims, err := utils.ParseTokenWithoutTimeValidation(rawToken, s.jwtSecret)
+	if err != nil {
+		return "", errors.New("invalid token")
+	}
+	if claims == nil || claims.UserID <= 0 || strings.TrimSpace(claims.Username) == "" {
+		return "", errors.New("invalid token")
+	}
+	now := time.Now()
+	if claims.NotBefore != nil && now.Before(claims.NotBefore.Time) {
+		return "", errors.New("invalid token")
+	}
+	if claims.ExpiresAt == nil {
+		return "", errors.New("invalid token")
+	}
+	if now.After(claims.ExpiresAt.Time.Add(RefreshGracePeriod)) {
+		return "", errors.New("refresh window expired")
+	}
+
+	user, err := s.userRepo.GetByID(claims.UserID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", errors.New("invalid token")
+		}
+		return "", err
+	}
+	return utils.GenerateToken(user.ID, user.Username, s.jwtSecret, s.jwtExpire)
 }
 
 func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileRequest) (*models.UserResponse, error) {

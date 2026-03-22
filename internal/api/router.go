@@ -59,6 +59,7 @@ func (r *Router) Setup() *gin.Engine {
 		{
 			auth.POST("/register", r.authHandler.Register)
 			auth.POST("/login", r.authHandler.Login)
+			auth.POST("/refresh", r.authHandler.Refresh)
 		}
 
 		// Protected routes
@@ -67,7 +68,6 @@ func (r *Router) Setup() *gin.Engine {
 		{
 			// Auth
 			protected.GET("/auth/me", r.authHandler.Me)
-			protected.POST("/auth/refresh", r.authHandler.Refresh)
 			protected.PATCH("/auth/profile", r.authHandler.UpdateProfile)
 
 			// Tasks
