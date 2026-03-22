@@ -401,7 +401,13 @@ func (s *NotifyService) scheduleNextRecurringDefaultReminderAfterSend(n *models.
 		return nil
 	}
 
-	notifyAt := nextStart.UTC().Add(-time.Duration(minutes) * time.Minute)
+	resolvedStart := resolveReminderStartForTask(
+		nextStart.UTC(),
+		task.AllDay,
+		user.Timezone,
+		user.DefaultMorningTime,
+	)
+	notifyAt := resolvedStart.Add(-time.Duration(minutes) * time.Minute)
 	now := time.Now().UTC()
 	if !notifyAt.After(now) {
 		return nil
@@ -532,7 +538,13 @@ func (s *NotifyService) ReconcileUserReminders(userID int64) error {
 		if task.StartTime == nil {
 			continue
 		}
-		notifyAt := task.StartTime.UTC().Add(-time.Duration(minutes) * time.Minute)
+		reminderStart := resolveReminderStartForTask(
+			task.StartTime.UTC(),
+			task.AllDay,
+			user.Timezone,
+			user.DefaultMorningTime,
+		)
+		notifyAt := reminderStart.Add(-time.Duration(minutes) * time.Minute)
 		if !notifyAt.After(now) {
 			continue
 		}

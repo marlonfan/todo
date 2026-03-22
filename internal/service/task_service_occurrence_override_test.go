@@ -464,6 +464,53 @@ func TestRecurringOccurrenceCancelledReschedulesReminderToNextPendingInstance(t 
 	}
 }
 
+func TestAllDayRecurringOccurrenceCompletedReschedulesReminderToMorningTime(t *testing.T) {
+	svc, taskRepo, notifyRepo, userID := newTestTaskServiceWithReminder(t)
+
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 2)
+	created, err := svc.Create(userID, &models.CreateTaskRequest{
+		Title:     "All-day recurring reminder task",
+		StartTime: &start,
+		AllDay:    true,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "daily",
+			Interval: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create all-day recurring task: %v", err)
+	}
+
+	firstDate := start.UTC().Truncate(24 * time.Hour)
+	firstExpectedNotifyAt := firstDate.Add(9*time.Hour - 5*time.Minute)
+	secondExpectedNotifyAt := firstDate.AddDate(0, 0, 1).Add(9*time.Hour - 5*time.Minute)
+	assertSinglePendingAutoReminder(t, notifyRepo, created.ID, firstExpectedNotifyAt)
+
+	revision := created.Revision
+	_, err = svc.UpdateStatus(
+		userID,
+		created.ID,
+		models.TaskStatusCompleted,
+		buildOccurrenceInstanceID(created.ID, firstDate),
+		firstDate.Format("2006-01-02"),
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("complete all-day recurring occurrence: %v", err)
+	}
+
+	assertSinglePendingAutoReminder(t, notifyRepo, created.ID, secondExpectedNotifyAt)
+
+	occurrence, err := taskRepo.GetTaskOccurrence(userID, created.ID, firstDate)
+	if err != nil {
+		t.Fatalf("load all-day occurrence override: %v", err)
+	}
+	if occurrence.Status != models.TaskStatusCompleted {
+		t.Fatalf("occurrence status = %q, want completed", occurrence.Status)
+	}
+}
+
 func TestNonRecurringStatusTimestampsLifecycle(t *testing.T) {
 	svc, taskRepo, userID := newTestTaskService(t)
 

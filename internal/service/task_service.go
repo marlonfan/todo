@@ -829,7 +829,13 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 		minutes = 5
 	}
 
-	notifyAt := reminderStart.UTC().Add(-time.Duration(minutes) * time.Minute)
+	resolvedStart := resolveReminderStartForTask(
+		reminderStart.UTC(),
+		task.AllDay,
+		user.Timezone,
+		user.DefaultMorningTime,
+	)
+	notifyAt := resolvedStart.Add(-time.Duration(minutes) * time.Minute)
 	if !notifyAt.After(now) {
 		return nil
 	}

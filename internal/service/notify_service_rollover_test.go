@@ -128,6 +128,52 @@ func seedRecurringTaskAndDueReminder(
 	return task, start
 }
 
+func seedAllDayRecurringTaskAndDueReminder(
+	t *testing.T,
+	taskRepo *repository.TaskRepository,
+	notifyRepo *repository.NotificationRepository,
+	userID int64,
+) (*models.Task, time.Time) {
+	t.Helper()
+
+	start := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "All-day recurring notify task",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &start,
+		AllDay:    true,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "daily",
+			Interval: 1,
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create all-day task: %v", err)
+	}
+
+	currentNotifyAt := start.Add(9*time.Hour - 5*time.Minute).UTC()
+	notification := &models.Notification{
+		TaskID:       task.ID,
+		Source:       models.NotificationSourceDefaultAuto,
+		DeliveryMode: models.NotificationDeliveryCurrentDefault,
+		Channel:      models.NotifyChannelNtfy,
+		Config:       models.NotifyConfigMap{"topic": "unit-test"},
+		NotifyAt:     currentNotifyAt,
+		NextRetryAt:  &currentNotifyAt,
+		DedupeKey:    buildDedupeKey(task.ID, models.NotificationSourceDefaultAuto, currentNotifyAt),
+		RetryCount:   0,
+		Status:       models.NotifyStatusPending,
+	}
+	if err := notifyRepo.ReplaceActiveByTaskSource(notification); err != nil {
+		t.Fatalf("seed all-day pending reminder: %v", err)
+	}
+
+	return task, start
+}
+
 func TestProcessPendingNotificationsSchedulesNextRecurringReminderAfterSend(t *testing.T) {
 	notifySvc, _, taskRepo, notifyRepo, userID, notifier := newNotifyRolloverTestServices(t)
 	task, start := seedRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
@@ -168,5 +214,21 @@ func TestProcessPendingNotificationsSkipsCancelledNextOccurrenceReminder(t *test
 	}
 
 	expectedNextNotifyAt := start.AddDate(0, 0, 2).Add(-5 * time.Minute)
+	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
+}
+
+func TestProcessPendingNotificationsSchedulesNextAllDayRecurringReminderAtMorningTime(t *testing.T) {
+	notifySvc, _, taskRepo, notifyRepo, userID, notifier := newNotifyRolloverTestServices(t)
+	task, _ := seedAllDayRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
+
+	if err := notifySvc.ProcessPendingNotifications(); err != nil {
+		t.Fatalf("process pending notifications: %v", err)
+	}
+
+	if notifier.sent != 1 {
+		t.Fatalf("send count = %d, want 1", notifier.sent)
+	}
+
+	expectedNextNotifyAt := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1).Add(9*time.Hour - 5*time.Minute)
 	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
 }
