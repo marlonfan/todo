@@ -271,6 +271,7 @@ function MainLayout({ user, setUser }) {
     if (prefs.defaultTab === 'settings') return '/settings';
     return null;
   });
+  const initialRedirectConsumedRef = useRef(false);
 
   const handleLogout = () => {
     getTokenStore().remove();
@@ -567,8 +568,9 @@ function MainLayout({ user, setUser }) {
     setResolvingConflict(false);
   }, [resolveConflictID, syncConflicts]);
 
-  // 首次进入 / 时同步重定向，避免先渲染日历再跳转的闪烁
-  if (initialRedirectTo && location.pathname === '/') {
+  // 首次进入 / 时同步重定向，后续手动返回 / 不再强制跳转
+  if (!initialRedirectConsumedRef.current && initialRedirectTo && location.pathname === '/') {
+    initialRedirectConsumedRef.current = true;
     return <Navigate to={initialRedirectTo} replace />;
   }
 

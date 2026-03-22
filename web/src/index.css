@@ -906,6 +906,29 @@ body {
 }
 
 @media (hover: none) and (pointer: coarse) {
+  .mobile-scrollbar-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-scrollbar-hidden::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  .time-panel-card .task-time-selectbox-menu {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .time-panel-card .task-time-selectbox-menu::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
   .todo-calendar.fc .fc-event {
     -webkit-tap-highlight-color: transparent;
   }

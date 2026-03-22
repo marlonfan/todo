@@ -398,6 +398,52 @@ function getTaskPrimaryTime(task) {
   return task.start_time || task.due_date || '';
 }
 
+function getTaskCompletedTime(task) {
+  return task?.completed_at || task?.completedAt || '';
+}
+
+function getTaskDeletedTime(task) {
+  return task?.deleted_at || task?.deletedAt || '';
+}
+
+function getTaskCreatedTime(task) {
+  return task?.created_at || task?.createdAt || '';
+}
+
+function parseTaskTimeValue(value, timezone) {
+  const parsed = dayjs(value || '');
+  if (!parsed.isValid()) return Number.NEGATIVE_INFINITY;
+  return timezone ? parsed.tz(timezone).valueOf() : parsed.valueOf();
+}
+
+function getCompletedSortTime(task, timezone) {
+  return parseTaskTimeValue(
+    getTaskCompletedTime(task) || (String(task?.status || '') === 'completed' ? task?.updated_at || task?.updatedAt || '' : ''),
+    timezone,
+  );
+}
+
+function getDeletedSortTime(task, timezone) {
+  return parseTaskTimeValue(
+    getTaskDeletedTime(task) || (String(task?.status || '') === 'cancelled' ? task?.updated_at || task?.updatedAt || '' : ''),
+    timezone,
+  );
+}
+
+function getCreatedSortTime(task, timezone) {
+  return parseTaskTimeValue(getTaskCreatedTime(task), timezone);
+}
+
+function resolveTaskDisplayTime(task, timeMode) {
+  if (timeMode === 'completed') {
+    return getTaskCompletedTime(task) || (String(task?.status || '') === 'completed' ? task?.updated_at || task?.updatedAt || '' : '');
+  }
+  if (timeMode === 'deleted') {
+    return getTaskDeletedTime(task) || (String(task?.status || '') === 'cancelled' ? task?.updated_at || task?.updatedAt || '' : '');
+  }
+  return getTaskPrimaryTime(task);
+}
+
 function resolveTaskOccurrenceDate(task, timezone) {
   const explicit = String(task?.occurrence_date || task?.occurrenceDate || '').trim();
   if (explicit) {
@@ -536,6 +582,9 @@ function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, o
       occurrence_date: occurrenceDate,
       occurrence_start: startISO,
       occurrence_end: endISO,
+      created_at: item?.created_at || item?.createdAt || baseTask?.created_at || baseTask?.createdAt || '',
+      completed_at: item?.completed_at || item?.completedAt || null,
+      deleted_at: item?.deleted_at || item?.deletedAt || null,
       categories: Array.isArray(baseTask?.categories) ? baseTask.categories : [],
       read_only: !!baseTask?.read_only,
     });
@@ -570,6 +619,24 @@ function compareTasksStable(a, b) {
 function sortTasksByOption(inputTasks, sortBy, timezone) {
   const cloned = [...inputTasks];
   cloned.sort((a, b) => {
+    if (sortBy === 'completed_desc') {
+      const va = getCompletedSortTime(a, timezone);
+      const vb = getCompletedSortTime(b, timezone);
+      if (va !== vb) return vb - va;
+      return compareTasksStable(a, b);
+    }
+    if (sortBy === 'deleted_desc') {
+      const va = getDeletedSortTime(a, timezone);
+      const vb = getDeletedSortTime(b, timezone);
+      if (va !== vb) return vb - va;
+      return compareTasksStable(a, b);
+    }
+    if (sortBy === 'created_desc') {
+      const va = getCreatedSortTime(a, timezone);
+      const vb = getCreatedSortTime(b, timezone);
+      if (va !== vb) return vb - va;
+      return compareTasksStable(a, b);
+    }
     if (sortBy === 'priority_desc' || sortBy === 'priority_asc') {
       const pa = Number.parseInt(a.priority, 10) || 0;
       const pb = Number.parseInt(b.priority, 10) || 0;
@@ -588,7 +655,9 @@ function sortTasksByOption(inputTasks, sortBy, timezone) {
   return cloned;
 }
 
-const SORT_OPTIONS = new Set(['due_asc', 'due_desc', 'priority_desc', 'priority_asc']);
+const SORT_OPTIONS_DEFAULT = new Set(['due_asc', 'due_desc', 'priority_desc', 'priority_asc']);
+const SORT_OPTIONS_COMPLETED = new Set(['completed_desc', 'created_desc']);
+const SORT_OPTIONS_DELETED = new Set(['deleted_desc', 'created_desc']);
 const GROUP_OPTIONS = new Set(['none', 'due', 'priority', 'category', 'status']);
 
 function resolveTaskListViewKey(view, categoryID) {
@@ -596,8 +665,20 @@ function resolveTaskListViewKey(view, categoryID) {
   return view || 'all';
 }
 
-function sanitizeSortValue(value) {
-  return SORT_OPTIONS.has(value) ? value : 'due_asc';
+function getDefaultSortValue(view) {
+  if (view === 'completed') return 'completed_desc';
+  if (view === 'deleted') return 'deleted_desc';
+  return 'due_asc';
+}
+
+function getSortOptionSet(view) {
+  if (view === 'completed') return SORT_OPTIONS_COMPLETED;
+  if (view === 'deleted') return SORT_OPTIONS_DELETED;
+  return SORT_OPTIONS_DEFAULT;
+}
+
+function sanitizeSortValue(value, view) {
+  return getSortOptionSet(view).has(value) ? value : getDefaultSortValue(view);
 }
 
 function sanitizeGroupValue(value) {
@@ -609,6 +690,7 @@ const TaskRow = React.memo(function TaskRow({
   selected,
   timezone,
   labels,
+  timeMode,
   onSelectTask,
   onToggleStatus,
 }) {
@@ -621,11 +703,13 @@ const TaskRow = React.memo(function TaskRow({
     : priorityValue === -1
       ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-emerald-600' }
       : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-sky-600' };
-  const primaryTime = getTaskPrimaryTime(task);
+  const displayTime = resolveTaskDisplayTime(task, timeMode);
 
   return (
     <div
       key={task.id}
+      data-testid="task-row"
+      data-task-id={String(task.id)}
       draggable={!isReadOnly}
       onDragStart={(event) => {
         if (isReadOnly) return;
@@ -642,6 +726,7 @@ const TaskRow = React.memo(function TaskRow({
       <div className="flex items-start gap-2">
         <input
           type="checkbox"
+          data-testid="task-row-status-checkbox"
           checked={isCompleted}
           disabled={isDeleted || isReadOnly}
           onChange={(e) => {
@@ -674,7 +759,7 @@ const TaskRow = React.memo(function TaskRow({
                 </button>
               )}
               <span className="text-[10px] text-slate-400">
-                {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
+                {displayTime ? formatDateTime(displayTime, 'MM/DD HH:mm', timezone) : ''}
               </span>
             </div>
           </div>
@@ -685,7 +770,7 @@ const TaskRow = React.memo(function TaskRow({
 
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
             <span className="text-slate-400 sm:hidden">
-              {primaryTime ? formatDateTime(primaryTime, 'MM/DD HH:mm', timezone) : ''}
+              {displayTime ? formatDateTime(displayTime, 'MM/DD HH:mm', timezone) : ''}
             </span>
             {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
             {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
@@ -712,7 +797,8 @@ const TaskRow = React.memo(function TaskRow({
   prev.task === next.task &&
   prev.selected === next.selected &&
   prev.timezone === next.timezone &&
-  prev.labels === next.labels
+  prev.labels === next.labels &&
+  prev.timeMode === next.timeMode
 ));
 
 function TaskList({ forcedView = '' }) {
@@ -1199,7 +1285,7 @@ function TaskList({ forcedView = '' }) {
   }, [legacySearchQuery, view]);
 
   useEffect(() => {
-    const persistedSort = sanitizeSortValue(getTaskListSortPref(viewPrefKey) || 'due_asc');
+    const persistedSort = sanitizeSortValue(getTaskListSortPref(viewPrefKey) || getDefaultSortValue(view), view);
     const persistedGroupRaw = getTaskListGroupPref(viewPrefKey) || 'none';
     const persistedGroup = view === 'search' ? 'status' : sanitizeGroupValue(persistedGroupRaw);
     setSortBy(persistedSort);
@@ -1208,13 +1294,13 @@ function TaskList({ forcedView = '' }) {
 
   useEffect(() => {
     if (!viewPrefKey) return;
-    const nextSort = sanitizeSortValue(sortBy);
+    const nextSort = sanitizeSortValue(sortBy, view);
     if (nextSort !== sortBy) {
       setSortBy(nextSort);
       return;
     }
     setTaskListSortPref(viewPrefKey, nextSort);
-  }, [sortBy, viewPrefKey]);
+  }, [sortBy, view, viewPrefKey]);
 
   useEffect(() => {
     if (!viewPrefKey || view === 'search') return;
@@ -2937,12 +3023,26 @@ function TaskList({ forcedView = '' }) {
 
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
-  const sortOptions = [
-    { value: 'due_asc', label: t('task.sortDueAsc') },
-    { value: 'due_desc', label: t('task.sortDueDesc') },
-    { value: 'priority_desc', label: t('task.sortPriorityDesc') },
-    { value: 'priority_asc', label: t('task.sortPriorityAsc') },
-  ];
+  const sortOptions = useMemo(() => {
+    if (view === 'completed') {
+      return [
+        { value: 'completed_desc', label: t('task.sortCompletedDesc') },
+        { value: 'created_desc', label: t('task.sortCreatedDesc') },
+      ];
+    }
+    if (view === 'deleted') {
+      return [
+        { value: 'deleted_desc', label: t('task.sortDeletedDesc') },
+        { value: 'created_desc', label: t('task.sortCreatedDesc') },
+      ];
+    }
+    return [
+      { value: 'due_asc', label: t('task.sortDueAsc') },
+      { value: 'due_desc', label: t('task.sortDueDesc') },
+      { value: 'priority_desc', label: t('task.sortPriorityDesc') },
+      { value: 'priority_asc', label: t('task.sortPriorityAsc') },
+    ];
+  }, [t, view]);
   const groupOptions = [
     { value: 'none', label: t('task.groupNone') },
     { value: 'due', label: t('task.groupDueDate') },
@@ -2952,6 +3052,7 @@ function TaskList({ forcedView = '' }) {
   const listGroupOptions = view === 'search' ? [{ value: 'status', label: t('task.groupStatus') }] : groupOptions;
   const showMobileSearchBar = isCompactMobile && view === 'search';
   const showListHeader = !isCompactMobile || showMobileSearchBar;
+  const rowTimeMode = view === 'completed' ? 'completed' : view === 'deleted' ? 'deleted' : 'primary';
 
   return (
     <div className="md-page h-full">
@@ -2997,6 +3098,7 @@ function TaskList({ forcedView = '' }) {
                     <div ref={listToolbarPanelRef} className="relative flex items-center gap-1">
                       <button
                         type="button"
+                        data-testid="task-sort-toggle-button"
                         onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
                         className={`md-icon-btn text-sm ${
                           listToolbarPanel === 'sort'
@@ -3030,6 +3132,7 @@ function TaskList({ forcedView = '' }) {
                               <button
                                 key={option.value}
                                 type="button"
+                                data-testid={`task-sort-option-${option.value}`}
                                 onClick={() => {
                                   setSortBy(option.value);
                                   setListToolbarPanel('');
@@ -3077,6 +3180,7 @@ function TaskList({ forcedView = '' }) {
                   )}
                   <button
                     type="button"
+                    data-testid="task-new-button"
                     onClick={() => {
                       if (canQuickCreate && quickTitle.trim()) {
                         handleQuickCreate();
@@ -3094,7 +3198,7 @@ function TaskList({ forcedView = '' }) {
             </div>
           )}
 
-          <div className="flex-1 overflow-auto p-1.5 md:p-2">
+          <div className="mobile-scrollbar-hidden flex-1 overflow-auto p-1.5 md:p-2">
             {loading ? (
               <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
             ) : filteredTasks.length === 0 ? (
@@ -3119,6 +3223,7 @@ function TaskList({ forcedView = '' }) {
                           selected={selectedTaskID === task.id}
                           timezone={timezone}
                           labels={listLabels}
+                          timeMode={rowTimeMode}
                           onSelectTask={handleSelectTask}
                           onToggleStatus={handleStatusChange}
                         />
@@ -3142,6 +3247,7 @@ function TaskList({ forcedView = '' }) {
                       <button
                         key={option.value}
                         type="button"
+                        data-testid={`task-sort-option-${option.value}`}
                         onClick={() => {
                           setSortBy(option.value);
                           setListToolbarPanel('');
@@ -3202,6 +3308,7 @@ function TaskList({ forcedView = '' }) {
                   </button>
                   <button
                     type="button"
+                    data-testid="task-sort-toggle-button"
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
                     className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-blue-100 bg-white shadow-sm ${
                       listToolbarPanel === 'sort'
@@ -3216,6 +3323,7 @@ function TaskList({ forcedView = '' }) {
               )}
               <button
                 type="button"
+                data-testid="task-new-button"
                 onClick={() => openAdvancedModal(null)}
                 className="btn-primary inline-flex h-11 w-11 items-center justify-center rounded-full px-0 py-0 text-lg shadow-sm"
                 title={t('task.newTask')}
@@ -3237,6 +3345,7 @@ function TaskList({ forcedView = '' }) {
                 <div className="px-1 py-0.5">
                   <input
                     ref={draftTitleInputRef}
+                    data-testid="task-detail-title-input"
                     value={draft.title}
                     onChange={(e) => {
                       setDraftParsePreview('');
@@ -3381,7 +3490,7 @@ function TaskList({ forcedView = '' }) {
                     )}
 
                     {detailPanel === 'time' && (
-                      <div className="time-panel-card md-popover absolute right-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
+                      <div className="time-panel-card mobile-scrollbar-hidden md-popover absolute right-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
                         <div className="time-panel-toolbar mb-2 space-y-1.5 border-b border-slate-100 pb-2">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
@@ -3913,7 +4022,7 @@ function TaskList({ forcedView = '' }) {
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
+              <div className="mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
                 <div
                   className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors focus-within:border-blue-200 focus-within:bg-blue-50/20"
                   onClick={() => draftDescriptionEditorRef.current?.focus()}

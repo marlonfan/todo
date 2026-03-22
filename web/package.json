@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "npm test && vite build",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --test",
+    "test:ui": "node ./scripts/runPlaywrightWithCleanup.mjs",
+    "test:ui:headed": "node ./scripts/runPlaywrightWithCleanup.mjs --headed",
+    "test:ui:report": "playwright show-report"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -34,6 +37,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

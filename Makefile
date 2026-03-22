@@ -1,4 +1,4 @@
-.PHONY: build run dev test clean frontend
+.PHONY: build run dev test test-ui clean frontend
 
 # Build the application
 build:
@@ -27,6 +27,9 @@ dev-backend:
 # Run tests
 test:
 	go test -v ./...
+
+test-ui:
+	cd web && npm run test:ui
 
 # Clean build artifacts
 clean:

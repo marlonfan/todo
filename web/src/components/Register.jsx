@@ -60,6 +60,7 @@ function Register({ setUser }) {
             <input
               type="text"
               required
+              data-testid="register-username-input"
               className="form-input"
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -71,6 +72,7 @@ function Register({ setUser }) {
             <input
               type="email"
               required
+              data-testid="register-email-input"
               className="form-input"
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
@@ -83,6 +85,7 @@ function Register({ setUser }) {
               type="password"
               required
               minLength={6}
+              data-testid="register-password-input"
               className="form-input"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -94,6 +97,7 @@ function Register({ setUser }) {
             <input
               type="password"
               required
+              data-testid="register-confirm-password-input"
               className="form-input"
               value={formData.confirmPassword}
               onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
@@ -103,6 +107,7 @@ function Register({ setUser }) {
           <button
             type="submit"
             disabled={loading}
+            data-testid="register-submit-button"
             className="w-full btn-primary disabled:opacity-50"
           >
             {loading ? t('common.loading') : t('auth.register')}

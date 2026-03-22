@@ -367,6 +367,8 @@ func (r *TaskRepository) UpsertTaskOccurrence(occurrence *models.TaskOccurrence)
 		DoUpdates: clause.AssignmentColumns([]string{
 			"instance_id",
 			"status",
+			"completed_at",
+			"deleted_at",
 			"description",
 			"start_time",
 			"end_time",

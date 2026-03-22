@@ -57,6 +57,16 @@ func backfillTaskOccurrences(db *gorm.DB) error {
 	for _, row := range statusRows {
 		occ := ensure(row.UserID, row.TaskID, row.OccurrenceDate)
 		occ.Status = row.Status
+		switch row.Status {
+		case models.TaskStatusCompleted:
+			next := row.UpdatedAt.UTC()
+			occ.CompletedAt = &next
+			occ.DeletedAt = nil
+		case models.TaskStatusCancelled:
+			next := row.UpdatedAt.UTC()
+			occ.DeletedAt = &next
+			occ.CompletedAt = nil
+		}
 	}
 	for _, row := range overrideRows {
 		occ := ensure(row.UserID, row.TaskID, row.OccurrenceDate)
@@ -126,6 +136,8 @@ func backfillTaskOccurrences(db *gorm.DB) error {
 			DoUpdates: clause.AssignmentColumns([]string{
 				"instance_id",
 				"status",
+				"completed_at",
+				"deleted_at",
 				"description",
 				"start_time",
 				"end_time",
@@ -135,6 +147,30 @@ func backfillTaskOccurrences(db *gorm.DB) error {
 		}).Create(&chunk).Error; err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func backfillTaskStatusTimestamps(db *gorm.DB) error {
+	if err := db.Model(&models.Task{}).
+		Where("status = ? AND completed_at IS NULL", models.TaskStatusCompleted).
+		Update("completed_at", gorm.Expr("updated_at")).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&models.Task{}).
+		Where("status = ? AND deleted_at IS NULL", models.TaskStatusCancelled).
+		Update("deleted_at", gorm.Expr("updated_at")).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&models.TaskOccurrence{}).
+		Where("status = ? AND completed_at IS NULL", models.TaskStatusCompleted).
+		Update("completed_at", gorm.Expr("updated_at")).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&models.TaskOccurrence{}).
+		Where("status = ? AND deleted_at IS NULL", models.TaskStatusCancelled).
+		Update("deleted_at", gorm.Expr("updated_at")).Error; err != nil {
+		return err
 	}
 	return nil
 }

@@ -26,5 +26,8 @@ func Migrate(db *gorm.DB) error {
 		return err
 	}
 
-	return backfillTaskOccurrences(db)
+	if err := backfillTaskOccurrences(db); err != nil {
+		return err
+	}
+	return backfillTaskStatusTimestamps(db)
 }

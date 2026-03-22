@@ -1650,7 +1650,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   return createPortal(
     <div className="modal-overlay" onClick={requestClose}>
       <div
-        className="modal-content task-modal-shell"
+        className="modal-content task-modal-shell mobile-scrollbar-hidden"
         onClick={e => e.stopPropagation()}
       >
         <div className="task-modal-frame relative flex min-h-0 flex-col">
@@ -1658,6 +1658,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <input
+                  data-testid="task-modal-title-input"
                   value={titleValue}
                   onChange={(e) => {
                     setParsePreview('');
@@ -1796,7 +1797,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   )}
 
                   {basicPanel === 'time' && (
-                    <div className="time-panel-card absolute left-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg">
+                    <div className="time-panel-card mobile-scrollbar-hidden absolute left-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg">
                       <div className="time-panel-toolbar mb-2 space-y-1.5 border-b border-slate-100 pb-2">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
@@ -2344,7 +2345,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 </div>
               </div>
 
-              <div className="flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
+              <div className="mobile-scrollbar-hidden flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
                 <div
                   className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors focus-within:border-blue-200 focus-within:bg-blue-50/20"
                   onClick={() => descriptionEditorRef.current?.focus()}
@@ -2399,6 +2400,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 <button
                   type="submit"
                   disabled={loading}
+                  data-testid="task-modal-save-button"
                   className="btn-primary"
                 >
                   {loading ? t('common.loading') : t('common.save')}

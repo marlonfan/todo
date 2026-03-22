@@ -406,10 +406,16 @@ func TestRecurringOccurrenceCompletedReschedulesReminderToNextPendingInstance(t 
 	if occurrence.Status != models.TaskStatusCompleted {
 		t.Fatalf("occurrence status = %q, want completed", occurrence.Status)
 	}
+	if occurrence.CompletedAt == nil {
+		t.Fatalf("completed_at should be recorded when occurrence is completed")
+	}
+	if occurrence.DeletedAt != nil {
+		t.Fatalf("deleted_at should be nil for completed occurrence")
+	}
 }
 
 func TestRecurringOccurrenceCancelledReschedulesReminderToNextPendingInstance(t *testing.T) {
-	svc, _, notifyRepo, userID := newTestTaskServiceWithReminder(t)
+	svc, taskRepo, notifyRepo, userID := newTestTaskServiceWithReminder(t)
 
 	start := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Minute)
 	created, err := svc.Create(userID, &models.CreateTaskRequest{
@@ -443,6 +449,77 @@ func TestRecurringOccurrenceCancelledReschedulesReminderToNextPendingInstance(t 
 	}
 
 	assertSinglePendingAutoReminder(t, notifyRepo, created.ID, secondStart.Add(-5*time.Minute))
+	occurrence, err := taskRepo.GetTaskOccurrence(userID, created.ID, firstDate)
+	if err != nil {
+		t.Fatalf("load occurrence override: %v", err)
+	}
+	if occurrence.Status != models.TaskStatusCancelled {
+		t.Fatalf("occurrence status = %q, want cancelled", occurrence.Status)
+	}
+	if occurrence.DeletedAt == nil {
+		t.Fatalf("deleted_at should be recorded when occurrence is cancelled")
+	}
+	if occurrence.CompletedAt != nil {
+		t.Fatalf("completed_at should be nil for cancelled occurrence")
+	}
+}
+
+func TestNonRecurringStatusTimestampsLifecycle(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	start := time.Date(2026, 3, 23, 9, 0, 0, 0, time.UTC)
+	created, err := svc.Create(userID, &models.CreateTaskRequest{
+		Title:     "status timestamp lifecycle",
+		StartTime: &start,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	revision := created.Revision
+	updated, err := svc.UpdateStatus(userID, created.ID, models.TaskStatusCompleted, "", "", &revision, nil)
+	if err != nil {
+		t.Fatalf("mark completed: %v", err)
+	}
+	reloaded, err := taskRepo.GetByID(updated.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.CompletedAt == nil {
+		t.Fatalf("completed_at should be set after complete")
+	}
+	if reloaded.DeletedAt != nil {
+		t.Fatalf("deleted_at should be nil after complete")
+	}
+
+	revision = reloaded.Revision
+	_, err = svc.UpdateStatus(userID, created.ID, models.TaskStatusPending, "", "", &revision, nil)
+	if err != nil {
+		t.Fatalf("reset to pending: %v", err)
+	}
+	reloaded, err = taskRepo.GetByID(created.ID)
+	if err != nil {
+		t.Fatalf("reload task after pending: %v", err)
+	}
+	if reloaded.CompletedAt != nil || reloaded.DeletedAt != nil {
+		t.Fatalf("timestamps should be cleared after pending")
+	}
+
+	revision = reloaded.Revision
+	_, err = svc.UpdateStatus(userID, created.ID, models.TaskStatusCancelled, "", "", &revision, nil)
+	if err != nil {
+		t.Fatalf("mark cancelled: %v", err)
+	}
+	reloaded, err = taskRepo.GetByID(created.ID)
+	if err != nil {
+		t.Fatalf("reload task after cancelled: %v", err)
+	}
+	if reloaded.DeletedAt == nil {
+		t.Fatalf("deleted_at should be set after cancelled")
+	}
+	if reloaded.CompletedAt != nil {
+		t.Fatalf("completed_at should be nil after cancelled")
+	}
 }
 
 func TestUpdateRecurringSeriesScheduleInOccurrenceContextShowsLatestPendingOccurrence(t *testing.T) {

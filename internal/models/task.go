@@ -27,14 +27,14 @@ const (
 
 // RecurrenceRule represents recurring task rule
 type RecurrenceRule struct {
-	Freq             string   `json:"freq,omitempty"`               // daily, weekly, monthly, yearly, lunar_yearly
-	Interval         int      `json:"interval,omitempty"`           // every N days/weeks/months/years
-	ByDay            []string `json:"byday,omitempty"`              // MO, TU, WE, TH, FR, SA, SU
-	ByMonth          []int    `json:"bymonth,omitempty"`            // 1-12
-	ByDate           []int    `json:"bydate,omitempty"`             // day of month
-	Count            int      `json:"count,omitempty"`              // max occurrences
-	LunarMonth       int      `json:"lunar_month,omitempty"`        // 1-12
-	LunarDay         int      `json:"lunar_day,omitempty"`          // 1-30
+	Freq             string   `json:"freq,omitempty"`                // daily, weekly, monthly, yearly, lunar_yearly
+	Interval         int      `json:"interval,omitempty"`            // every N days/weeks/months/years
+	ByDay            []string `json:"byday,omitempty"`               // MO, TU, WE, TH, FR, SA, SU
+	ByMonth          []int    `json:"bymonth,omitempty"`             // 1-12
+	ByDate           []int    `json:"bydate,omitempty"`              // day of month
+	Count            int      `json:"count,omitempty"`               // max occurrences
+	LunarMonth       int      `json:"lunar_month,omitempty"`         // 1-12
+	LunarDay         int      `json:"lunar_day,omitempty"`           // 1-30
 	LunarIsLeapMonth bool     `json:"lunar_is_leap_month,omitempty"` // true => leap month when available
 }
 
@@ -73,6 +73,8 @@ type Task struct {
 	Revision          int64           `json:"revision" gorm:"not null;default:1;index"`
 	RecurrenceRule    *RecurrenceRule `json:"recurrence_rule,omitempty" gorm:"type:text"`
 	RecurrenceEndDate *time.Time      `json:"recurrence_end_date"`
+	CompletedAt       *time.Time      `json:"completed_at"`
+	DeletedAt         *time.Time      `json:"deleted_at"`
 	CreatedAt         time.Time       `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt         time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
 	ReadOnly          bool            `json:"read_only" gorm:"-"`
@@ -114,6 +116,8 @@ type TaskOccurrence struct {
 	OccurrenceDate time.Time  `json:"occurrence_date" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:4"`
 	InstanceID     string     `json:"instance_id" gorm:"size:64;not null;default:'';index"`
 	Status         TaskStatus `json:"status" gorm:"size:20;not null;default:'pending';index:idx_task_occurrence_status_date,priority:3"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	DeletedAt      *time.Time `json:"deleted_at"`
 	Description    string     `json:"description" gorm:"type:text;not null;default:''"`
 	StartTime      *time.Time `json:"start_time"`
 	EndTime        *time.Time `json:"end_time"`
@@ -142,6 +146,9 @@ type TaskInstance struct {
 	AllDay       bool       `json:"all_day"`
 	IsRecurring  bool       `json:"is_recurring"`
 	OriginalDate time.Time  `json:"original_date"`
+	CreatedAt    time.Time  `json:"created_at"`
+	CompletedAt  *time.Time `json:"completed_at"`
+	DeletedAt    *time.Time `json:"deleted_at"`
 	Categories   []Category `json:"categories,omitempty"`
 }
 

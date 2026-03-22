@@ -51,6 +51,9 @@ yarn-error.log*
 # Build directories
 dist/
 build/
+test-results/
+web/playwright-report/
+web/test-results/
 
 # Config (keep example)
 config.yaml

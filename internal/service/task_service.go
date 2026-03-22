@@ -38,6 +38,8 @@ type TaskActivityMeta struct {
 type recurringOccurrencePatch struct {
 	status      *models.TaskStatus
 	description *string
+	completedAt *time.Time
+	deletedAt   *time.Time
 }
 
 const taskActivityMergeWindow = 15 * time.Minute
@@ -57,6 +59,38 @@ func checkRevision(expected *int64, task *models.Task) error {
 		return nil
 	}
 	return &RevisionConflictError{Latest: task}
+}
+
+func statusTimestampTransition(
+	currentStatus models.TaskStatus,
+	currentCompletedAt *time.Time,
+	currentDeletedAt *time.Time,
+	nextStatus models.TaskStatus,
+	now time.Time,
+) (models.TaskStatus, *time.Time, *time.Time, bool) {
+	if nextStatus == "" {
+		return currentStatus, cloneTimePointer(currentCompletedAt), cloneTimePointer(currentDeletedAt), false
+	}
+	if currentStatus == nextStatus {
+		return currentStatus, cloneTimePointer(currentCompletedAt), cloneTimePointer(currentDeletedAt), false
+	}
+
+	completedAt := cloneTimePointer(currentCompletedAt)
+	deletedAt := cloneTimePointer(currentDeletedAt)
+	switch nextStatus {
+	case models.TaskStatusCompleted:
+		next := now.UTC()
+		completedAt = &next
+		deletedAt = nil
+	case models.TaskStatusCancelled:
+		next := now.UTC()
+		deletedAt = &next
+		completedAt = nil
+	default:
+		completedAt = nil
+		deletedAt = nil
+	}
+	return nextStatus, completedAt, deletedAt, true
 }
 
 func NewTaskService(
@@ -395,6 +429,7 @@ func (s *TaskService) Update(
 	categoriesChanged := false
 	var completedAnchorDate time.Time
 	hasCompletedAnchor := false
+	var completedAnchorTimestamp *time.Time
 	var occurrenceStatusValue *models.TaskStatus
 	var occurrenceDescriptionValue *string
 
@@ -434,8 +469,17 @@ func (s *TaskService) Update(
 			next := req.Status
 			occurrenceStatusValue = &next
 		} else {
-			if task.Status != req.Status {
-				task.Status = req.Status
+			nextStatus, nextCompletedAt, nextDeletedAt, changed := statusTimestampTransition(
+				task.Status,
+				task.CompletedAt,
+				task.DeletedAt,
+				req.Status,
+				time.Now().UTC(),
+			)
+			if changed {
+				task.Status = nextStatus
+				task.CompletedAt = nextCompletedAt
+				task.DeletedAt = nextDeletedAt
 				baseChanged = true
 			}
 		}
@@ -467,7 +511,10 @@ func (s *TaskService) Update(
 		baseChanged = true
 		// Recurring task base should stay pending; keep the original completion on anchor occurrence only.
 		if task.RecurrenceRule != nil && task.Status == models.TaskStatusCompleted {
+			completedAnchorTimestamp = cloneTimePointer(task.CompletedAt)
 			task.Status = models.TaskStatusPending
+			task.CompletedAt = nil
+			task.DeletedAt = nil
 			baseChanged = true
 			if anchor, ok := resolveTaskOccurrenceAnchorDate(task); ok {
 				localAnchor := anchor.In(updateLoc)
@@ -500,7 +547,8 @@ func (s *TaskService) Update(
 	if hasCompletedAnchor {
 		completedStatus := models.TaskStatusCompleted
 		if err := s.upsertRecurringOccurrence(task, completedAnchorDate, recurringOccurrencePatch{
-			status: &completedStatus,
+			status:      &completedStatus,
+			completedAt: completedAnchorTimestamp,
 		}); err != nil {
 			return nil, err
 		}
@@ -608,13 +656,24 @@ func (s *TaskService) UpdateStatus(
 		}
 	}
 
-	task.Status = status
-	if task.Revision <= 0 {
-		task.Revision = 1
-	}
-	task.Revision += 1
-	if err := s.taskRepo.Update(task); err != nil {
-		return nil, err
+	nextStatus, nextCompletedAt, nextDeletedAt, changed := statusTimestampTransition(
+		task.Status,
+		task.CompletedAt,
+		task.DeletedAt,
+		status,
+		time.Now().UTC(),
+	)
+	if changed {
+		task.Status = nextStatus
+		task.CompletedAt = nextCompletedAt
+		task.DeletedAt = nextDeletedAt
+		if task.Revision <= 0 {
+			task.Revision = 1
+		}
+		task.Revision += 1
+		if err := s.taskRepo.Update(task); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.syncTaskReminder(userID, task); err != nil {
 		log.Printf("Warning: failed to sync reminder after task status update for user %d task %d: %v", userID, task.ID, err)
@@ -1145,6 +1204,8 @@ func (s *TaskService) upsertRecurringOccurrence(
 		OccurrenceDate: dateOnly,
 		InstanceID:     buildOccurrenceInstanceID(task.ID, dateOnly),
 		Status:         task.Status,
+		CompletedAt:    cloneTimePointer(task.CompletedAt),
+		DeletedAt:      cloneTimePointer(task.DeletedAt),
 		Description:    "",
 		StartTime:      cloneTimePointer(baseStart),
 		EndTime:        cloneTimePointer(baseEnd),
@@ -1162,6 +1223,12 @@ func (s *TaskService) upsertRecurringOccurrence(
 			occurrence.Status = models.TaskStatusPending
 		}
 	}
+	if occurrence.Status == models.TaskStatusCompleted && occurrence.CompletedAt == nil {
+		occurrence.CompletedAt = cloneTimePointer(task.CompletedAt)
+	}
+	if occurrence.Status == models.TaskStatusCancelled && occurrence.DeletedAt == nil {
+		occurrence.DeletedAt = cloneTimePointer(task.DeletedAt)
+	}
 	occurrence.AllDay = task.AllDay
 	if occurrence.StartTime == nil && baseStart != nil {
 		occurrence.StartTime = cloneTimePointer(baseStart)
@@ -1170,7 +1237,24 @@ func (s *TaskService) upsertRecurringOccurrence(
 		occurrence.EndTime = cloneTimePointer(baseEnd)
 	}
 	if patch.status != nil {
-		occurrence.Status = *patch.status
+		nextStatus, nextCompletedAt, nextDeletedAt, changed := statusTimestampTransition(
+			occurrence.Status,
+			occurrence.CompletedAt,
+			occurrence.DeletedAt,
+			*patch.status,
+			time.Now().UTC(),
+		)
+		if changed {
+			occurrence.Status = nextStatus
+			occurrence.CompletedAt = nextCompletedAt
+			occurrence.DeletedAt = nextDeletedAt
+		}
+	}
+	if patch.completedAt != nil {
+		occurrence.CompletedAt = cloneTimePointer(patch.completedAt)
+	}
+	if patch.deletedAt != nil {
+		occurrence.DeletedAt = cloneTimePointer(patch.deletedAt)
 	}
 	if patch.description != nil {
 		occurrence.Description = *patch.description
@@ -1195,6 +1279,9 @@ func taskOccurrenceMatchesSeriesDefault(
 		return false
 	}
 	if strings.TrimSpace(occurrence.Description) != "" {
+		return false
+	}
+	if occurrence.CompletedAt != nil || occurrence.DeletedAt != nil {
 		return false
 	}
 	effectiveStart := occurrence.StartTime
@@ -1250,6 +1337,9 @@ func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence
 		AllDay:       allDay,
 		IsRecurring:  true,
 		OriginalDate: row.OccurrenceDate.UTC().Truncate(24 * time.Hour),
+		CreatedAt:    row.CreatedAt.UTC(),
+		CompletedAt:  cloneTimePointer(row.CompletedAt),
+		DeletedAt:    cloneTimePointer(row.DeletedAt),
 		Categories:   task.Categories,
 	}
 	if instance.Status == "" {

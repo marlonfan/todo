@@ -698,6 +698,7 @@ function Settings() {
             </button>
             <button
               onClick={() => setActiveTab('sync')}
+              data-testid="settings-sync-tab"
               className={`settings-tab-btn ${
                 activeTab === 'sync'
                   ? 'settings-tab-btn-active'
@@ -1000,6 +1001,7 @@ function Settings() {
                   type="button"
                   onClick={handleManualSync}
                   disabled={syncBusy}
+                  data-testid="settings-sync-now-button"
                   className="btn-primary mt-3 inline-flex items-center disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {syncBusy ? t('settings.syncRunning') : t('settings.syncNow')}

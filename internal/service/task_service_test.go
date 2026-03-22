@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 	"todo-app/internal/models"
 )
 
@@ -94,5 +95,82 @@ func TestRequiresRecurringOccurrenceContext(t *testing.T) {
 	}
 	if requiresRecurringOccurrenceContext(nonRecurring, models.TaskStatusCompleted, false) {
 		t.Fatalf("non-recurring task should not require occurrence context")
+	}
+}
+
+func TestStatusTimestampTransitionCompletedAndReset(t *testing.T) {
+	baseNow := time.Date(2026, 3, 22, 8, 0, 0, 0, time.UTC)
+	status, completedAt, deletedAt, changed := statusTimestampTransition(
+		models.TaskStatusPending,
+		nil,
+		nil,
+		models.TaskStatusCompleted,
+		baseNow,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if status != models.TaskStatusCompleted {
+		t.Fatalf("status = %q, want completed", status)
+	}
+	if completedAt == nil || !completedAt.UTC().Equal(baseNow) {
+		t.Fatalf("completed_at = %v, want %v", completedAt, baseNow)
+	}
+	if deletedAt != nil {
+		t.Fatalf("deleted_at = %v, want nil", deletedAt)
+	}
+
+	status, completedAt, deletedAt, changed = statusTimestampTransition(
+		status,
+		completedAt,
+		deletedAt,
+		models.TaskStatusPending,
+		baseNow.Add(1*time.Hour),
+	)
+	if !changed {
+		t.Fatalf("expected changed=true on reset to pending")
+	}
+	if status != models.TaskStatusPending {
+		t.Fatalf("status = %q, want pending", status)
+	}
+	if completedAt != nil || deletedAt != nil {
+		t.Fatalf("timestamps should be cleared when status goes pending")
+	}
+}
+
+func TestStatusTimestampTransitionCancelledAndReset(t *testing.T) {
+	baseNow := time.Date(2026, 3, 22, 9, 0, 0, 0, time.UTC)
+	status, completedAt, deletedAt, changed := statusTimestampTransition(
+		models.TaskStatusPending,
+		nil,
+		nil,
+		models.TaskStatusCancelled,
+		baseNow,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true")
+	}
+	if status != models.TaskStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", status)
+	}
+	if deletedAt == nil || !deletedAt.UTC().Equal(baseNow) {
+		t.Fatalf("deleted_at = %v, want %v", deletedAt, baseNow)
+	}
+	if completedAt != nil {
+		t.Fatalf("completed_at = %v, want nil", completedAt)
+	}
+
+	status, completedAt, deletedAt, changed = statusTimestampTransition(
+		status,
+		completedAt,
+		deletedAt,
+		models.TaskStatusPending,
+		baseNow.Add(1*time.Hour),
+	)
+	if !changed {
+		t.Fatalf("expected changed=true on reset to pending")
+	}
+	if completedAt != nil || deletedAt != nil {
+		t.Fatalf("timestamps should be cleared when status goes pending")
 	}
 }

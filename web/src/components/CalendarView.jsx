@@ -190,6 +190,8 @@ function CalendarView() {
   const viewDropdownRef = useRef(null);
   const readonlyModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const moreEventsModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
+  const readonlyModalOpenedAtRef = useRef(0);
+  const moreEventsModalOpenedAtRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -418,6 +420,17 @@ function CalendarView() {
       moreEventsModalHistoryRef.current.hasEntry = false;
     };
   }, [moreEventsOpen, requestCloseMoreEventsModal]);
+
+  useEffect(() => {
+    if (!moreEventsOpen) return;
+    moreEventsModalOpenedAtRef.current = Date.now();
+  }, [moreEventsOpen]);
+
+  const handleMoreEventsBackdropClick = useCallback((event) => {
+    if (event.target !== event.currentTarget) return;
+    if (Date.now() - moreEventsModalOpenedAtRef.current < 280) return;
+    requestCloseMoreEventsModal();
+  }, [requestCloseMoreEventsModal]);
 
   useEffect(() => {
     const expectedStart = getMobileStripStart(mobileCurrentDate, activeCalendarView);
@@ -943,6 +956,7 @@ function CalendarView() {
   }, [formatReadonlyEventDateTime]);
 
   const openReadonlyEventModal = useCallback((eventLike) => {
+    readonlyModalOpenedAtRef.current = Date.now();
     setReadonlyEventDetail(buildReadonlyEventDetail(eventLike));
     setReadonlyEventOpen(true);
   }, [buildReadonlyEventDetail]);
@@ -961,6 +975,12 @@ function CalendarView() {
     }
     closeReadonlyEventModal();
   }, [closeReadonlyEventModal]);
+
+  const handleReadonlyBackdropClick = useCallback((event) => {
+    if (event.target !== event.currentTarget) return;
+    if (Date.now() - readonlyModalOpenedAtRef.current < 280) return;
+    requestCloseReadonlyEventModal();
+  }, [requestCloseReadonlyEventModal]);
 
   useEffect(() => {
     if (!readonlyEventOpen || typeof window === 'undefined') return undefined;
@@ -1530,7 +1550,7 @@ function CalendarView() {
       )}
 
       {readonlyEventOpen && readonlyEventDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={requestCloseReadonlyEventModal}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={handleReadonlyBackdropClick}>
           <div
             className="md-card w-full max-w-lg shadow-lg"
             onClick={(event) => event.stopPropagation()}
@@ -1556,7 +1576,7 @@ function CalendarView() {
                 ✕
               </button>
             </div>
-            <div className="space-y-1.5 px-3 py-2.5 text-sm text-slate-700">
+            <div className="mobile-scrollbar-hidden max-h-[65vh] space-y-1.5 overflow-y-auto px-3 py-2.5 text-sm text-slate-700">
               <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
                 <span className="font-medium text-slate-500">Source</span>
                 <span className="font-medium text-slate-800">{readonlyEventDetail.source || 'caldav'}</span>
@@ -1582,7 +1602,7 @@ function CalendarView() {
               {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.attendees.length > 0 && (
                 <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
                   <span className="font-medium text-slate-500">Attendees</span>
-                  <div className="max-h-20 space-y-0.5 overflow-y-auto pr-1">
+                  <div className="mobile-scrollbar-hidden max-h-20 space-y-0.5 overflow-y-auto pr-1">
                     {readonlyEventDetail.attendees.map((item) => (
                       <p key={item} className="break-words text-slate-700">{item}</p>
                     ))}
@@ -1614,7 +1634,7 @@ function CalendarView() {
       )}
 
       {moreEventsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={requestCloseMoreEventsModal}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={handleMoreEventsBackdropClick}>
           <div
             className="md-card w-full max-w-md shadow-lg"
             onClick={(event) => event.stopPropagation()}
@@ -1631,7 +1651,7 @@ function CalendarView() {
                 ✕
               </button>
             </div>
-            <div className="max-h-[65vh] overflow-y-auto p-2">
+            <div className="mobile-scrollbar-hidden max-h-[65vh] overflow-y-auto p-2">
               {moreEvents.map((event) => {
                 if (event.allDay) {
                   return (

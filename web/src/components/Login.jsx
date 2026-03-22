@@ -52,6 +52,7 @@ function Login({ setUser }) {
             <input
               type="text"
               required
+              data-testid="login-username-input"
               className="form-input"
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -63,6 +64,7 @@ function Login({ setUser }) {
             <input
               type="password"
               required
+              data-testid="login-password-input"
               className="form-input"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -72,6 +74,7 @@ function Login({ setUser }) {
           <button
             type="submit"
             disabled={loading}
+            data-testid="login-submit-button"
             className="w-full btn-primary disabled:opacity-50"
           >
             {loading ? t('common.loading') : t('auth.login')}
