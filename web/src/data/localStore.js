@@ -390,6 +390,26 @@ export async function invalidateCalendarRangesByTask(taskID) {
   await removeCalendarRanges(keys);
 }
 
+export async function invalidateCalendarRangesByTaskIDs(taskIDs) {
+  const idSet = new Set(
+    (Array.isArray(taskIDs) ? taskIDs : [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  );
+  if (idSet.size === 0) return;
+
+  const ranges = await getAll(STORE_CALENDAR_RANGES);
+  const keys = ranges
+    .filter((entry) => {
+      const events = Array.isArray(entry?.events) ? entry.events : [];
+      return events.some((event) => idSet.has(Number(event?.extendedProps?.taskId)));
+    })
+    .map((entry) => entry.key)
+    .filter(Boolean);
+
+  await removeCalendarRanges(keys);
+}
+
 export async function clearCalendarRanges() {
   await clear(STORE_CALENDAR_RANGES);
 }

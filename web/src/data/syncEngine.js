@@ -1,11 +1,13 @@
 import { categoriesAPI, tasksAPI, getToken } from '../api/client';
 import { queryKeys } from '../query/keys';
 import {
+  clearTasksAndSet,
   clearAllLocalData,
   enqueueOutbox,
   getDueOutbox,
   getMeta,
   invalidateCalendarRangesByTask,
+  invalidateCalendarRangesByTaskIDs,
   listCalendarRanges,
   readCategories,
   readOutbox,
@@ -18,11 +20,15 @@ import {
   replaceTaskID,
   setMeta,
   upsertTask,
-  upsertTasks,
   updateOutbox,
 } from './localStore';
 import { getCoalescePlan } from './outboxCoalesce';
-import { collectPendingDeleteTaskIDs, getTaskTimestamp, normalizeServerTask } from './taskMerge';
+import {
+  collectPendingDeleteTaskIDs,
+  getTaskTimestamp,
+  mergeServerAndLocalTasks,
+  normalizeServerTask,
+} from './taskMerge';
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
@@ -69,6 +75,9 @@ const MIN_SYNC_INTERVAL_SECONDS = 15;
 const MAX_SYNC_INTERVAL_SECONDS = 1800;
 const SYNC_INTERVAL_STORAGE_KEY = 'sync_interval_seconds';
 const TASK_SYNC_CURSOR_KEY = 'tasks_sync_cursor';
+const TASK_FULL_RECONCILE_AT_KEY = 'tasks_last_full_reconcile_at';
+const TASK_FORCE_RECONCILE_KEY = 'tasks_force_reconcile';
+const FULL_RECONCILE_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 let queryClientRef = null;
@@ -164,6 +173,13 @@ function hasToken() {
 
 function nowISO() {
   return new Date().toISOString();
+}
+
+function shouldRunTaskReconcile(lastReconcileAt, forceFlag) {
+  if (forceFlag) return true;
+  const parsed = Date.parse(String(lastReconcileAt || '').trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) return true;
+  return (Date.now() - parsed) >= FULL_RECONCILE_INTERVAL_MS;
 }
 
 function sanitizeConflictPayload(payload) {
@@ -274,6 +290,48 @@ async function refreshOccurrenceScopedViews(taskID) {
   ]);
 }
 
+async function runTaskReconcileIfNeeded(outboxOps = []) {
+  if (!queryClientRef || !hasToken()) return;
+  const [lastReconcileAt, forceReconcileRaw, localTasks] = await Promise.all([
+    safeLocalCall(() => getMeta(TASK_FULL_RECONCILE_AT_KEY, ''), '', `getMeta:${TASK_FULL_RECONCILE_AT_KEY}`),
+    safeLocalCall(() => getMeta(TASK_FORCE_RECONCILE_KEY, ''), '', `getMeta:${TASK_FORCE_RECONCILE_KEY}`),
+    safeLocalCall(() => readTasks(), [], 'readTasks:reconcile'),
+  ]);
+  const forceReconcile = String(forceReconcileRaw || '').trim() === '1';
+  if (!shouldRunTaskReconcile(lastReconcileAt, forceReconcile)) return;
+
+  emitSyncTrace('reconcile_started', {
+    forced: forceReconcile,
+    local_task_count: Array.isArray(localTasks) ? localTasks.length : 0,
+  });
+
+  const res = await tasksAPI.list();
+  const serverTasks = Array.isArray(res?.data) ? res.data : [];
+  const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
+  const reconciledTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs });
+
+  queryClientRef.setQueryData(queryKeys.tasks.all, reconciledTasks);
+  await safeLocalCall(() => clearTasksAndSet(reconciledTasks), null, 'clearTasksAndSet:reconcile');
+  await safeLocalCall(() => setMeta(TASK_FULL_RECONCILE_AT_KEY, nowISO()), null, `setMeta:${TASK_FULL_RECONCILE_AT_KEY}`);
+  await safeLocalCall(() => setMeta(TASK_FORCE_RECONCILE_KEY, ''), null, `setMeta:${TASK_FORCE_RECONCILE_KEY}`);
+
+  const reconciledIDSet = new Set(reconciledTasks.map((task) => Number(task?.id || 0)));
+  const removedSyncedLocal = (Array.isArray(localTasks) ? localTasks : []).filter((task) => {
+    const taskID = Number(task?.id || 0);
+    if (!taskID || taskID < 0) return false;
+    if (reconciledIDSet.has(taskID)) return false;
+    const syncState = String(task?.sync_state || '').trim();
+    return syncState === '' || syncState === 'synced';
+  }).length;
+
+  emitSyncTrace('reconcile_finished', {
+    forced: forceReconcile,
+    server_task_count: serverTasks.length,
+    reconciled_task_count: reconciledTasks.length,
+    removed_synced_local_count: removedSyncedLocal,
+  });
+}
+
 function isTaskMissingFailure(status, message) {
   if (status === 404) return true;
   const normalized = String(message || '').trim().toLowerCase();
@@ -367,6 +425,7 @@ async function executeOutboxOperation(op) {
       });
       await removeTask(op.entity_id);
       await removeTaskActivitiesByTask(op.entity_id);
+      await refreshOccurrenceScopedViews(op.entity_id);
       return;
     }
     default:
@@ -422,6 +481,8 @@ async function handleOutboxFailure(op, error) {
     });
     await removeTask(op.entity_id);
     await removeTaskActivitiesByTask(op.entity_id);
+    await safeLocalCall(() => setMeta(TASK_FORCE_RECONCILE_KEY, '1'), null, `setMeta:${TASK_FORCE_RECONCILE_KEY}`);
+    await refreshOccurrenceScopedViews(op.entity_id);
     emitSyncTrace('outbox_task_missing_removed', {
       op_id: op.op_id,
       op_type: op.op_type,
@@ -508,6 +569,8 @@ async function pullServerData() {
   let nextCursor = String(lastCursor || '');
   const categories = Array.isArray(categoriesRes?.data) ? categoriesRes.data : [];
   const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
+  const changedTaskIDs = new Set();
+  const deletedTaskIDs = new Set();
 
   const syncLimit = 1000;
   let rounds = 0;
@@ -541,6 +604,7 @@ async function pullServerData() {
     changed.forEach((task) => {
       const taskID = Number(task?.id || 0);
       if (!taskID || pendingDeleteIDs.has(taskID)) return;
+      changedTaskIDs.add(taskID);
       const normalized = normalizeServerTask(task);
       const local = byID.get(taskID);
       if (!local) {
@@ -562,6 +626,7 @@ async function pullServerData() {
 
     // Keep list order stable to avoid UI flicker while background sync updates sync_state.
     mergedTasks = Array.from(byID.values());
+    deletedIDs.forEach((id) => deletedTaskIDs.add(id));
     nextCursor = String(payload.next_since || nextCursor || '');
     hasMore = Boolean(payload.has_more);
   }
@@ -576,17 +641,36 @@ async function pullServerData() {
   });
   queryClientRef.setQueryData(queryKeys.categories.all, categories);
 
+  const taskIDsForCalendarInvalidate = new Set([...changedTaskIDs, ...deletedTaskIDs]);
+
   await Promise.all([
-    safeLocalCall(() => upsertTasks(mergedTasks), null, 'upsertTasks'),
+    safeLocalCall(() => clearTasksAndSet(mergedTasks), null, 'clearTasksAndSet'),
     safeLocalCall(() => replaceCategories(categories), null, 'replaceCategories'),
     safeLocalCall(() => setMeta('last_pull_at', nowISO()), null, 'setMeta:last_pull_at'),
     safeLocalCall(() => setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO()), null, `setMeta:${TASK_SYNC_CURSOR_KEY}`),
+    safeLocalCall(
+      () => invalidateCalendarRangesByTaskIDs(Array.from(taskIDsForCalendarInvalidate)),
+      null,
+      'invalidateCalendarRangesByTaskIDs',
+    ),
   ]);
+  await Promise.all(Array.from(deletedTaskIDs).map((taskID) => (
+    safeLocalCall(() => removeTaskActivitiesByTask(taskID), null, `removeTaskActivitiesByTask:${taskID}`)
+  )));
+  if (taskIDsForCalendarInvalidate.size > 0) {
+    await Promise.all([
+      queryClientRef.invalidateQueries({ queryKey: ['calendar'] }),
+      queryClientRef.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+      queryClientRef.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+    ]);
+  }
   emitSyncTrace('pull_merged', {
     rounds,
     merged_tasks: mergedTasks.length,
     categories: categories.length,
     has_more: hasMore,
+    changed_task_count: changedTaskIDs.size,
+    deleted_task_count: deletedTaskIDs.size,
   });
 }
 
@@ -659,6 +743,8 @@ async function runSyncCycle(options = {}) {
   let syncError = null;
   try {
     await processOutbox();
+    const outboxOps = await safeLocalCall(() => readOutbox(), [], 'readOutbox:reconcile');
+    await runTaskReconcileIfNeeded(outboxOps);
     await pullServerData();
     if (queryClientRef) {
       queryClientRef.setQueryData(queryKeys.sync.lastPull, nowISO());

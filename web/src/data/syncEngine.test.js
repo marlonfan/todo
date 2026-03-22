@@ -21,3 +21,16 @@ test('mergeServerAndLocalTasks filters server task that is pending delete in out
 
   assert.equal(merged.length, 0);
 });
+
+test('mergeServerAndLocalTasks drops stale synced local task that no longer exists on server', () => {
+  const merged = mergeServerAndLocalTasks(
+    [{ id: 21, title: 'server task', updated_at: '2026-03-12T01:00:00.000Z' }],
+    [
+      { id: 21, title: 'server task local', sync_state: 'synced', updated_at: '2026-03-12T01:00:00.000Z' },
+      { id: 22, title: 'ghost local', sync_state: 'synced', updated_at: '2026-03-10T01:00:00.000Z' },
+    ],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 21);
+});

@@ -15,6 +15,7 @@ dayjs.extend(timezonePlugin);
 
 const FETCH_STALE_TIME = 10 * 60 * 1000; // 10 minutes
 const FETCH_SEGMENT_MAX_DAYS = 120;
+const MIN_CALENDAR_REFRESH_SECONDS = 10 * 60;
 export const CALENDAR_CACHE_SCHEMA_VERSION = 2;
 
 function normalizeTimezoneName(value) {
@@ -59,8 +60,10 @@ function buildRangeSegments(startDate, endDate, timezoneName) {
 
 function resolveCalendarAutoRefreshMs() {
   const seconds = Number(getConfiguredSyncIntervalSeconds?.() || 0);
-  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
-  return Math.max(15, Math.floor(seconds)) * 1000;
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return MIN_CALENDAR_REFRESH_SECONDS * 1000;
+  }
+  return Math.max(MIN_CALENDAR_REFRESH_SECONDS, Math.max(15, Math.floor(seconds))) * 1000;
 }
 
 function isCurrentCalendarCache(entry, timezoneName, start, end) {
