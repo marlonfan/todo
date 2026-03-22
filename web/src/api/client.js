@@ -145,6 +145,12 @@ function withTaskMutationHeaders(options = {}) {
   if (submitSource) {
     headers['X-Client-Submit-Source'] = submitSource;
   }
+  const clientOpID = typeof options?.clientOpID === 'string'
+    ? options.clientOpID.trim()
+    : '';
+  if (clientOpID) {
+    headers['X-Client-Op-Id'] = clientOpID;
+  }
   if (Object.keys(headers).length === 0) return {};
   return { headers };
 }

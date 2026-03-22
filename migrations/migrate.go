@@ -16,6 +16,7 @@ func Migrate(db *gorm.DB) error {
 		&models.TaskOccurrenceOverride{},
 		&models.TaskOccurrence{},
 		&models.TaskActivity{},
+		&models.TaskMutationReceipt{},
 		&models.TaskCategory{},
 		&models.Notification{},
 		&models.UserNotifySetting{},

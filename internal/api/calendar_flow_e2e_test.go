@@ -54,7 +54,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 
 	return NewRouter(
 		handler.NewAuthHandler(authSvc, notifySvc),
-		handler.NewTaskHandler(taskSvc, notifySvc),
+		handler.NewTaskHandler(taskSvc, notifySvc, repository.NewTaskMutationReceiptRepository(db)),
 		handler.NewCategoryHandler(catSvc),
 		handler.NewCalendarHandler(taskSvc, caldavSvc),
 		handler.NewNotifyHandler(notifySvc),
@@ -265,5 +265,80 @@ func TestTaskActivitiesMergedWithin15Minutes(t *testing.T) {
 	}
 	if activities[0].OccurredAt.UTC().Format(time.RFC3339) != secondSubmitAtTime.Format(time.RFC3339) {
 		t.Fatalf("unexpected occurred_at: %s", activities[0].OccurredAt.UTC().Format(time.RFC3339))
+	}
+}
+
+func TestTaskMutationReplayWithClientOpIDAvoidsFalseConflict(t *testing.T) {
+	router := setupE2ERouter(t)
+
+	username := fmt.Sprintf("idemp_%d", time.Now().UnixNano())
+	email := fmt.Sprintf("%s@example.com", username)
+	registerResp := doJSON(t, router, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"username": username,
+		"email":    email,
+		"password": "secret123",
+	}, nil)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+
+	loginResp := doJSON(t, router, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"username": username,
+		"password": "secret123",
+	}, nil)
+	if loginResp.Code != http.StatusOK {
+		t.Fatalf("login status = %d body=%s", loginResp.Code, loginResp.Body.String())
+	}
+	loginData := decodeJSON[map[string]any](t, loginResp)
+	token, _ := loginData["token"].(string)
+	if token == "" {
+		t.Fatalf("missing token in login response")
+	}
+
+	createResp := doJSON(t, router, http.MethodPost, "/api/tasks", token, map[string]any{
+		"title":    "idempotency",
+		"priority": 0,
+	}, nil)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create task status = %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	task := decodeJSON[models.Task](t, createResp)
+
+	clientOpID := fmt.Sprintf("op_%d", time.Now().UnixNano())
+	firstUpdateResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
+		"title": "idempotency-updated",
+	}, map[string]string{
+		"If-Match":       fmt.Sprintf("%d", task.Revision),
+		"X-Client-Op-Id": clientOpID,
+	})
+	if firstUpdateResp.Code != http.StatusOK {
+		t.Fatalf("first update status = %d body=%s", firstUpdateResp.Code, firstUpdateResp.Body.String())
+	}
+	updated := decodeJSON[models.Task](t, firstUpdateResp)
+	if updated.Title != "idempotency-updated" {
+		t.Fatalf("first update title = %q", updated.Title)
+	}
+
+	replayResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
+		"title": "idempotency-updated",
+	}, map[string]string{
+		"If-Match":       fmt.Sprintf("%d", task.Revision),
+		"X-Client-Op-Id": clientOpID,
+	})
+	if replayResp.Code != http.StatusOK {
+		t.Fatalf("replay update status = %d body=%s", replayResp.Code, replayResp.Body.String())
+	}
+	replayed := decodeJSON[models.Task](t, replayResp)
+	if replayed.Revision != updated.Revision {
+		t.Fatalf("replay revision = %d, want %d", replayed.Revision, updated.Revision)
+	}
+
+	conflictResp := doJSON(t, router, http.MethodPut, fmt.Sprintf("/api/tasks/%d", task.ID), token, map[string]any{
+		"title": "should-conflict",
+	}, map[string]string{
+		"If-Match": fmt.Sprintf("%d", task.Revision),
+	})
+	if conflictResp.Code != http.StatusConflict {
+		t.Fatalf("stale update without op-id status = %d, want %d body=%s", conflictResp.Code, http.StatusConflict, conflictResp.Body.String())
 	}
 }

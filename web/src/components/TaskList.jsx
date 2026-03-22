@@ -565,13 +565,17 @@ function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, o
     const priority = Number.isFinite(eventPriority)
       ? eventPriority
       : (Number.parseInt(baseTask?.priority, 10) || 0);
+    const occurrenceDescription = typeof item?.description === 'string' ? item.description : '';
+    const effectiveDescription = occurrenceDescription.trim() !== ''
+      ? occurrenceDescription
+      : String(baseTask?.description || '');
     list.push({
       ...baseTask,
       id: `occ_${dedupeKey}`,
       source_task_id: taskID,
       virtual_occurrence: true,
       title: String(item?.title || baseTask?.title || ''),
-      description: typeof item?.description === 'string' ? item.description : '',
+      description: effectiveDescription,
       priority,
       status,
       start_time: startISO,
@@ -952,7 +956,9 @@ function TaskList({ forcedView = '' }) {
         occurrence_date: nextPending.occurrenceDate,
         occurrence_start: nextPending.startISO,
         occurrence_end: nextPending.endISO,
-        description: nextPending.description,
+        description: String(nextPending.description || '').trim() !== ''
+          ? nextPending.description
+          : String(task?.description || ''),
         status: nextPending.status,
       }];
     });

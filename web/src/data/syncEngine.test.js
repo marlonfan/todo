@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mergeServerAndLocalTasks } from './taskMerge.js';
+import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
 
 test('mergeServerAndLocalTasks keeps unsynced local task when server does not have it', () => {
   const merged = mergeServerAndLocalTasks(
@@ -33,4 +34,43 @@ test('mergeServerAndLocalTasks drops stale synced local task that no longer exis
 
   assert.equal(merged.length, 1);
   assert.equal(merged[0].id, 21);
+});
+
+test('isPayloadAlreadyAppliedOnLatest returns true when latest already contains payload', () => {
+  const ok = isPayloadAlreadyAppliedOnLatest(
+    {
+      op_type: 'update',
+      payload: {
+        title: 'B',
+        description: 'hello',
+        priority: 1,
+        category_ids: [2, 1],
+      },
+    },
+    {
+      id: 1,
+      title: 'B',
+      description: 'hello',
+      priority: 1,
+      categories: [{ id: 1 }, { id: 2 }],
+    },
+  );
+  assert.equal(ok, true);
+});
+
+test('isPayloadAlreadyAppliedOnLatest returns false for occurrence-scoped payload', () => {
+  const ok = isPayloadAlreadyAppliedOnLatest(
+    {
+      op_type: 'update',
+      payload: {
+        title: 'B',
+        instance_id: '12_20260322',
+      },
+    },
+    {
+      id: 12,
+      title: 'B',
+    },
+  );
+  assert.equal(ok, false);
 });

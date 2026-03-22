@@ -70,6 +70,7 @@ func main() {
 	catRepo := repository.NewCategoryRepository(db)
 	notifyRepo := repository.NewNotificationRepository(db)
 	caldavRepo := repository.NewCaldavRepository(db)
+	taskMutationReceiptRepo := repository.NewTaskMutationReceiptRepository(db)
 
 	// Initialize notification registry
 	registry := notify.NewRegistry()
@@ -96,7 +97,7 @@ func main() {
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService, notifyService)
-	taskHandler := handler.NewTaskHandler(taskService, notifyService)
+	taskHandler := handler.NewTaskHandler(taskService, notifyService, taskMutationReceiptRepo)
 	catHandler := handler.NewCategoryHandler(catService)
 	calendarHandler := handler.NewCalendarHandler(taskService, caldavService)
 	notifyHandler := handler.NewNotifyHandler(notifyService)

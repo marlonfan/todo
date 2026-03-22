@@ -29,6 +29,7 @@ import {
   mergeServerAndLocalTasks,
   normalizeServerTask,
 } from './taskMerge';
+import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
@@ -349,6 +350,7 @@ async function executeOutboxOperation(op) {
       const res = await tasksAPI.create(op.payload, {
         clientSubmittedAt: op.client_submitted_at,
         submitSource: op.submit_source,
+        clientOpID: op.op_id,
       });
       if (res?.data?.id) {
         await applyServerTask(res.data, op.entity_id);
@@ -365,6 +367,7 @@ async function executeOutboxOperation(op) {
         ifMatchRevision: op.if_match_revision,
         clientSubmittedAt: op.client_submitted_at,
         submitSource: op.submit_source,
+        clientOpID: op.op_id,
       });
       // When recurrence_rule changes, the server generates occurrence data synchronously.
       // Refetch nextOccurrences BEFORE applying the server task (which sets sync_state:'synced'),
@@ -388,6 +391,7 @@ async function executeOutboxOperation(op) {
         ifMatchRevision: op.if_match_revision,
         clientSubmittedAt: op.client_submitted_at,
         submitSource: op.submit_source,
+        clientOpID: op.op_id,
       });
       if (res?.data?.id) {
         await applyServerTask(res.data);
@@ -404,6 +408,7 @@ async function executeOutboxOperation(op) {
         ifMatchRevision: op.if_match_revision,
         clientSubmittedAt: op.client_submitted_at,
         submitSource: op.submit_source,
+        clientOpID: op.op_id,
       });
       if (res?.data?.id) {
         await applyServerTask(res.data);
@@ -418,6 +423,7 @@ async function executeOutboxOperation(op) {
     case 'delete': {
       await tasksAPI.delete(op.entity_id, {
         ifMatchRevision: op.if_match_revision,
+        clientOpID: op.op_id,
       });
       queryClientRef?.setQueryData(queryKeys.tasks.all, (prev) => {
         if (!Array.isArray(prev)) return prev;
@@ -446,8 +452,18 @@ async function handleOutboxFailure(op, error) {
   });
 
   if (status === 409) {
-    await removeOutbox(op.op_id);
     const latest = error?.response?.data?.latest;
+    if (isPayloadAlreadyAppliedOnLatest(op, latest)) {
+      await removeOutbox(op.op_id);
+      await applyServerTask(latest);
+      emitSyncTrace('outbox_conflict_autoresolved', {
+        op_id: op.op_id,
+        op_type: op.op_type,
+        entity_id: op.entity_id,
+      });
+      return;
+    }
+    await removeOutbox(op.op_id);
     pushSyncConflict({
       task_id: latest?.id || op.entity_id,
       task_title: latest?.title || '',

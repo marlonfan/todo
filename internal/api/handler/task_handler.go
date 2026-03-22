@@ -9,6 +9,7 @@ import (
 	"time"
 	"todo-app/internal/api/middleware"
 	"todo-app/internal/models"
+	"todo-app/internal/repository"
 	"todo-app/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -16,8 +17,9 @@ import (
 )
 
 type TaskHandler struct {
-	taskService   *service.TaskService
-	notifyService *service.NotifyService
+	taskService         *service.TaskService
+	notifyService       *service.NotifyService
+	mutationReceiptRepo *repository.TaskMutationReceiptRepository
 }
 
 func parseIfMatchRevision(c *gin.Context) (*int64, error) {
@@ -58,6 +60,17 @@ func parseTaskActivityMeta(c *gin.Context) *service.TaskActivityMeta {
 		return nil
 	}
 	return meta
+}
+
+func parseClientOpID(c *gin.Context) string {
+	value := strings.TrimSpace(c.GetHeader("X-Client-Op-Id"))
+	if value == "" {
+		return ""
+	}
+	if len(value) > 128 {
+		return value[:128]
+	}
+	return value
 }
 
 func parseOccurrenceStatuses(raw string) ([]models.TaskStatus, error) {
@@ -106,19 +119,57 @@ func respondTaskError(c *gin.Context, err error) {
 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 }
 
-func NewTaskHandler(taskService *service.TaskService, notifyService *service.NotifyService) *TaskHandler {
+func NewTaskHandler(
+	taskService *service.TaskService,
+	notifyService *service.NotifyService,
+	mutationReceiptRepo *repository.TaskMutationReceiptRepository,
+) *TaskHandler {
 	return &TaskHandler{
-		taskService:   taskService,
-		notifyService: notifyService,
+		taskService:         taskService,
+		notifyService:       notifyService,
+		mutationReceiptRepo: mutationReceiptRepo,
 	}
+}
+
+func (h *TaskHandler) findMutationReplayTask(userID int64, clientOpID string) (*models.Task, bool) {
+	if h.mutationReceiptRepo == nil || strings.TrimSpace(clientOpID) == "" {
+		return nil, false
+	}
+	receipt, err := h.mutationReceiptRepo.GetByUserAndOpID(userID, clientOpID)
+	if err != nil || receipt == nil || receipt.TaskID <= 0 {
+		return nil, false
+	}
+	task, getErr := h.taskService.GetByID(userID, receipt.TaskID)
+	if getErr != nil || task == nil {
+		return nil, false
+	}
+	return task, true
+}
+
+func (h *TaskHandler) rememberMutation(userID int64, clientOpID string, taskID int64, opType string) {
+	if h.mutationReceiptRepo == nil || strings.TrimSpace(clientOpID) == "" || taskID <= 0 {
+		return
+	}
+	_ = h.mutationReceiptRepo.CreateOrIgnore(&models.TaskMutationReceipt{
+		UserID: userID,
+		OpID:   strings.TrimSpace(clientOpID),
+		TaskID: taskID,
+		OpType: strings.TrimSpace(opType),
+	})
 }
 
 func (h *TaskHandler) Create(c *gin.Context) {
 	userID := middleware.GetUserID(c)
+	clientOpID := parseClientOpID(c)
 
 	var req models.CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
+		c.JSON(http.StatusOK, replayTask)
 		return
 	}
 
@@ -127,6 +178,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.rememberMutation(userID, clientOpID, task.ID, "create")
 
 	c.JSON(http.StatusCreated, task)
 }
@@ -346,6 +398,7 @@ func (h *TaskHandler) Sync(c *gin.Context) {
 
 func (h *TaskHandler) Update(c *gin.Context) {
 	userID := middleware.GetUserID(c)
+	clientOpID := parseClientOpID(c)
 
 	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -382,17 +435,24 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
+		c.JSON(http.StatusOK, replayTask)
+		return
+	}
+
 	task, err := h.taskService.Update(userID, taskID, &req, fieldMask, expectedRevision, parseTaskActivityMeta(c))
 	if err != nil {
 		respondTaskError(c, err)
 		return
 	}
+	h.rememberMutation(userID, clientOpID, task.ID, "update")
 
 	c.JSON(http.StatusOK, task)
 }
 
 func (h *TaskHandler) UpdateStatus(c *gin.Context) {
 	userID := middleware.GetUserID(c)
+	clientOpID := parseClientOpID(c)
 
 	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -412,6 +472,11 @@ func (h *TaskHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
+	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
+		c.JSON(http.StatusOK, replayTask)
+		return
+	}
+
 	task, err := h.taskService.UpdateStatus(
 		userID,
 		taskID,
@@ -425,12 +490,14 @@ func (h *TaskHandler) UpdateStatus(c *gin.Context) {
 		respondTaskError(c, err)
 		return
 	}
+	h.rememberMutation(userID, clientOpID, task.ID, "status")
 
 	c.JSON(http.StatusOK, task)
 }
 
 func (h *TaskHandler) UpdateSchedule(c *gin.Context) {
 	userID := middleware.GetUserID(c)
+	clientOpID := parseClientOpID(c)
 
 	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -450,17 +517,24 @@ func (h *TaskHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
+	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
+		c.JSON(http.StatusOK, replayTask)
+		return
+	}
+
 	task, err := h.taskService.UpdateSchedule(userID, taskID, &req, expectedRevision, parseTaskActivityMeta(c))
 	if err != nil {
 		respondTaskError(c, err)
 		return
 	}
+	h.rememberMutation(userID, clientOpID, task.ID, "schedule")
 
 	c.JSON(http.StatusOK, task)
 }
 
 func (h *TaskHandler) Delete(c *gin.Context) {
 	userID := middleware.GetUserID(c)
+	clientOpID := parseClientOpID(c)
 
 	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -474,10 +548,18 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	if h.mutationReceiptRepo != nil && strings.TrimSpace(clientOpID) != "" {
+		if receipt, receiptErr := h.mutationReceiptRepo.GetByUserAndOpID(userID, clientOpID); receiptErr == nil && receipt != nil {
+			c.JSON(http.StatusNoContent, nil)
+			return
+		}
+	}
+
 	if err := h.taskService.Delete(userID, taskID, expectedRevision); err != nil {
 		respondTaskError(c, err)
 		return
 	}
+	h.rememberMutation(userID, clientOpID, taskID, "delete")
 
 	c.JSON(http.StatusNoContent, nil)
 }
