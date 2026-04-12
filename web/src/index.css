@@ -628,7 +628,7 @@ body {
 .live-md-toast .vditor-reset h4 > code,
 .live-md-toast .vditor-reset h5 > code,
 .live-md-toast .vditor-reset h6 > code {
-  font-size: 0.88em;
+  font-size: 0.92em;
   border-radius: 0.28rem;
   background: #f1f5f9;
   padding: 0.04em 0.3em;
@@ -642,6 +642,7 @@ body {
 .live-md-toast .vditor-ir pre.vditor-reset pre > code,
 .live-md-toast .vditor-ir .vditor-ir__preview pre > code {
   display: block;
+  font-size: 14px;
   border: 1px solid #e2e8f0;
   border-radius: 0.45rem;
   background: #f8fafc;
