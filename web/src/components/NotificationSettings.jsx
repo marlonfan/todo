@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { notifyAPI } from '../api/client';
+import { notifyAPI, authAPI } from '../api/client';
 import Select from './ui/Select';
 
 function NotificationSettings() {
@@ -101,6 +101,23 @@ function NotificationSettings() {
       setSuccess(t('settings.saveSuccess'));
     } catch (err) {
       setError(err.response?.data?.error || t('settings.saveFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReconcileReminders = async () => {
+    if (!confirm(t('notification.reconcileConfirm'))) return;
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      await authAPI.reconcileReminders();
+      setSuccess(t('notification.reconcileSuccess'));
+    } catch (err) {
+      setError(err.response?.data?.error || t('notification.reconcileFailed'));
     } finally {
       setLoading(false);
     }
@@ -361,6 +378,19 @@ function NotificationSettings() {
             ))}
           </ul>
         )}
+      </div>
+
+      {/* Rebuild Reminders */}
+      <div className="bg-white border border-gray-200 p-4">
+        <h3 className="text-lg font-medium mb-2">{t('notification.rebuildReminders')}</h3>
+        <p className="text-sm text-gray-600 mb-4">{t('notification.rebuildRemindersHint')}</p>
+        <button
+          onClick={handleReconcileReminders}
+          disabled={loading}
+          className="btn-secondary"
+        >
+          {t('notification.rebuildRemindersBtn')}
+        </button>
       </div>
     </div>
   );

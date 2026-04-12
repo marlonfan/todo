@@ -136,6 +136,7 @@ export function getLunarInfo(date) {
     displayLabel,
     isLeapMonth,
     isFirstDay: lunarDay === 1,
+    yearLabel: lunar.getYear(),
   };
 
   const existing = cache.get(key) || {};

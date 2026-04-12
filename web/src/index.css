@@ -556,6 +556,7 @@ body {
   max-width: 100%;
   word-break: break-word;
   overflow-wrap: anywhere;
+  font-size: 15px;
 }
 
 .live-md-toast .vditor-ir .vditor-reset > h1,
@@ -570,12 +571,12 @@ body {
   font-weight: 650;
 }
 
-.live-md-toast .vditor-ir .vditor-reset > h1 { font-size: 1.14rem; }
-.live-md-toast .vditor-ir .vditor-reset > h2 { font-size: 1.08rem; }
-.live-md-toast .vditor-ir .vditor-reset > h3 { font-size: 1.02rem; }
-.live-md-toast .vditor-ir .vditor-reset > h4 { font-size: 0.97rem; }
-.live-md-toast .vditor-ir .vditor-reset > h5 { font-size: 0.94rem; }
-.live-md-toast .vditor-ir .vditor-reset > h6 { font-size: 0.92rem; color: #475569; }
+.live-md-toast .vditor-ir .vditor-reset > h1 { font-size: 1.5rem; }
+.live-md-toast .vditor-ir .vditor-reset > h2 { font-size: 1.35rem; }
+.live-md-toast .vditor-ir .vditor-reset > h3 { font-size: 1.2rem; }
+.live-md-toast .vditor-ir .vditor-reset > h4 { font-size: 1.1rem; }
+.live-md-toast .vditor-ir .vditor-reset > h5 { font-size: 1.05rem; }
+.live-md-toast .vditor-ir .vditor-reset > h6 { font-size: 1rem; color: #475569; }
 
 .live-md-toast .vditor-ir .vditor-reset p {
   margin: 0.32rem 0;

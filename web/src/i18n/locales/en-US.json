@@ -212,7 +212,13 @@
       "url": "URL",
       "method": "Method",
       "urlPlaceholder": "https://example.com/webhook"
-    }
+    },
+    "rebuildReminders": "Rebuild Task Reminders",
+    "rebuildRemindersHint": "Clear all existing reminders and recalculate. Use this when reminder times are incorrect.",
+    "rebuildRemindersBtn": "Rebuild Reminders",
+    "reconcileConfirm": "Are you sure you want to clear all existing reminders and recalculate?",
+    "reconcileSuccess": "Reminders rebuilt successfully",
+    "reconcileFailed": "Failed to rebuild reminders"
   },
   "settings": {
     "title": "Settings",

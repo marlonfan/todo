@@ -86,9 +86,24 @@ function runMutationSideEffects(label, work, rollback) {
   })();
 }
 
+const CALENDAR_AFFECTING_FIELDS = new Set([
+  'start_time',
+  'end_time',
+  'all_day',
+  'due_date',
+  'recurrence_rule',
+  'recurrence_end_date',
+  'status',
+]);
+
+function shouldInvalidateCalendar(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  return Object.keys(payload).some((key) => CALENDAR_AFFECTING_FIELDS.has(key));
+}
+
 async function invalidateCalendarCaches(queryClient, taskID = null, options = {}) {
-  const { revalidateQuery = false } = options;
-  if (taskID) {
+  const { revalidateQuery = false, skipRangeInvalidate = false } = options;
+  if (taskID && !skipRangeInvalidate) {
     await invalidateCalendarRangesByTask(taskID);
   }
   if (revalidateQuery) {
@@ -450,7 +465,11 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
           ...submitMeta,
         }, { schedule: shouldScheduleSync });
       }
-      await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
+      const needsCalendarInvalidate = shouldInvalidateCalendar(payload);
+      await invalidateCalendarCaches(queryClient, taskID, {
+        revalidateQuery: !localOnly,
+        skipRangeInvalidate: !needsCalendarInvalidate,
+      });
       if (typeof payload.recurrence_rule !== 'undefined') {
         await invalidateTaskOccurrenceQueries(queryClient);
       }
@@ -476,7 +495,11 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
         ...submitMeta,
       }, { schedule: shouldScheduleSync });
     }
-    await invalidateCalendarCaches(queryClient, taskID, { revalidateQuery: !localOnly });
+    const needsCalendarInvalidate = shouldInvalidateCalendar(payload);
+    await invalidateCalendarCaches(queryClient, taskID, {
+      revalidateQuery: !localOnly,
+      skipRangeInvalidate: !needsCalendarInvalidate,
+    });
     if (typeof payload.recurrence_rule !== 'undefined') {
       await invalidateTaskOccurrenceQueries(queryClient);
     }

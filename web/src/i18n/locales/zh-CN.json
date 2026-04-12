@@ -212,7 +212,13 @@
       "url": "URL 地址",
       "method": "请求方法",
       "urlPlaceholder": "https://example.com/webhook"
-    }
+    },
+    "rebuildReminders": "重建任务提醒",
+    "rebuildRemindersHint": "清除所有已存在的提醒并重新计算。适用于提醒时间不正确时进行修复。",
+    "rebuildRemindersBtn": "重建提醒",
+    "reconcileConfirm": "确定要清除所有现有提醒并重新计算吗？",
+    "reconcileSuccess": "提醒重建成功",
+    "reconcileFailed": "提醒重建失败"
   },
   "settings": {
     "title": "设置",

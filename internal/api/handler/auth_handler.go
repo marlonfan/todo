@@ -113,3 +113,25 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 
 	c.JSON(http.StatusOK, user)
 }
+
+// ReconcileReminders 重建所有提醒
+func (h *AuthHandler) ReconcileReminders(c *gin.Context) {
+	rawUserID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userID := rawUserID.(int64)
+
+	if h.notifyService == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "notification service not available"})
+		return
+	}
+
+	if err := h.notifyService.ReconcileUserReminders(userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "reminders rebuilt successfully"})
+}

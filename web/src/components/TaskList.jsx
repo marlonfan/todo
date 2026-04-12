@@ -243,12 +243,23 @@ function alignStartToWeekdayLocal(startInput, weekdayKeys) {
   return start.add(bestDiff, 'day').format('YYYY-MM-DDTHH:mm');
 }
 
-function lunarDateLabel(d) {
+function formatDisplayTimeWithYear(date, timezoneName) {
+  if (!date) return '';
+  const tz = timezoneName || getUserTimezone();
+  const d = dayjs(date).tz(tz);
+  const currentYear = dayjs().tz(tz).year();
+  // 如果日期年份与当前年份不同，显示年份
+  if (d.year() !== currentYear) return d.format('YYYY/MM/DD HH:mm');
+  return d.format('MM/DD HH:mm');
+}
+
+function lunarDateLabel(d, showYear = false) {
   try {
     const info = getLunarInfo(d.toDate());
-    return info.monthLabel + info.dayLabel;
+    const yearLabel = showYear ? `${info.yearLabel} ` : '';
+    return yearLabel + info.monthLabel + info.dayLabel;
   } catch {
-    return d.format('MM/DD');
+    return showYear ? d.format('YYYY/MM/DD') : d.format('MM/DD');
   }
 }
 
@@ -256,7 +267,16 @@ function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, luna
   const start = parseLocalInput(startInput);
   const end = parseLocalInput(endInput);
   if (!start && !end) return noDateLabel;
-  const dateFmt = (d) => lunarMode ? lunarDateLabel(d) : d.format('MM/DD');
+  const currentYear = dayjs().year();
+  const dateFmt = (d) => {
+    if (lunarMode) {
+      const showYear = d.year() !== currentYear;
+      return lunarDateLabel(d, showYear);
+    }
+    // 如果日期年份与当前年份不同，显示年份
+    if (d.year() !== currentYear) return d.format('YYYY/MM/DD');
+    return d.format('MM/DD');
+  };
   if (!isAllDay) {
     if (start && end) {
       if (start.isSame(end, 'day')) {
@@ -547,7 +567,10 @@ function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, o
       item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || start.toISOString(),
       timezone,
     ) || start.tz(timezone).format('YYYY-MM-DD');
-    const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
+    const rawInstanceID = String(item?.instance_id || item?.instanceId || '').trim();
+    const fallbackKey = `${taskID}_${occurrenceDate.replace(/-/g, '')}`;
+    // 确保 instance_id 总是有值，用于实例级别的更新
+    const instanceID = rawInstanceID || fallbackKey;
     const status = resolveOccurrenceStatusFromOptimisticMap(
       occurrenceStatusOptimisticMap,
       taskID,
@@ -556,8 +579,7 @@ function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, o
       timezone,
       String(item?.status || 'pending'),
     );
-    const fallbackKey = `${taskID}_${occurrenceDate.replace(/-/g, '')}`;
-    const dedupeKey = instanceID || fallbackKey;
+    const dedupeKey = instanceID;
     if (!dedupeKey || seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
     const baseTask = baseByID.get(taskID) || {};
@@ -721,13 +743,13 @@ const TaskRow = React.memo(function TaskRow({
         event.dataTransfer.effectAllowed = 'move';
       }}
       onClick={() => onSelectTask(task)}
-      className={`group cursor-pointer rounded-xl border-l-2 px-2.5 py-1.5 transition ${
+      className={`group cursor-pointer rounded-lg px-3 py-3 transition ${
         selected
-          ? 'border-l-blue-500 bg-blue-50/70'
-          : 'border-l-transparent bg-slate-50/70 hover:border-l-blue-300 hover:bg-blue-50/50'
+          ? 'bg-blue-50/70'
+          : 'bg-slate-50/70 hover:bg-blue-50/50'
       }`}
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-center gap-3">
         <input
           type="checkbox"
           data-testid="task-row-status-checkbox"
@@ -737,63 +759,69 @@ const TaskRow = React.memo(function TaskRow({
             e.stopPropagation();
             onToggleStatus(task, isCompleted ? 'pending' : 'completed');
           }}
-          className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-600 cursor-pointer"
+          className="h-4 w-4 shrink-0 rounded border-slate-300 accent-blue-600 cursor-pointer"
         />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className={`truncate text-[13px] font-medium ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-              {task.title}
-            </h3>
-            <div className="hidden shrink-0 items-center gap-2 sm:flex">
-              {isReadOnly && (
-                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">CalDAV</span>
-              )}
-              {isDeleted && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleStatus(task, 'pending');
-                  }}
-                  disabled={isReadOnly}
-                  className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
-                  title={labels.markPending}
-                >
-                  ↺
-                </button>
-              )}
-              <span className="text-[10px] text-slate-400">
-                {displayTime ? formatDateTime(displayTime, 'MM/DD HH:mm', timezone) : ''}
-              </span>
-            </div>
-          </div>
-
-          {task.description && (
-            <p className="mt-0.5 truncate text-[11px] text-slate-500">{task.description}</p>
+        <h3 className={`min-w-0 flex-1 truncate text-base ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+          {task.title}
+        </h3>
+        <div className="hidden shrink-0 items-center gap-2 text-sm sm:flex">
+          {isReadOnly && (
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>
           )}
-
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-            <span className="text-slate-400 sm:hidden">
-              {displayTime ? formatDateTime(displayTime, 'MM/DD HH:mm', timezone) : ''}
+          {isDeleted && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleStatus(task, 'pending');
+              }}
+              disabled={isReadOnly}
+              className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
+              title={labels.markPending}
+            >
+              ↺
+            </button>
+          )}
+          {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
+          <span title={priority.title} className={priority.className}>{priority.text}</span>
+          {task.categories?.slice(0, 2).map((cat) => (
+            <span
+              key={cat.id}
+              className="inline-flex max-w-[6rem] items-center gap-1 rounded px-1.5 py-0.5"
+              style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
+              <span className="truncate">{cat.name}</span>
             </span>
-            {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
-            {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
-            <span title={priority.title} className={priority.className}>{priority.text}</span>
-            {task.categories?.slice(0, 2).map((cat) => (
-              <span
-                key={cat.id}
-                className="inline-flex max-w-[10rem] items-center gap-1 rounded px-1.5 py-0.5"
-                style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
-              >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
-                <span className="truncate">{cat.name}</span>
-              </span>
-            ))}
-            {task.categories?.length > 2 && (
-              <span className="text-slate-400">+{task.categories.length - 2}</span>
-            )}
-          </div>
+          ))}
+          {task.categories?.length > 2 && (
+            <span className="text-slate-400">+{task.categories.length - 2}</span>
+          )}
+          <span className="text-slate-400">
+            {formatDisplayTimeWithYear(displayTime, timezone)}
+          </span>
         </div>
+      </div>
+
+      {/* Mobile: time and tags on second line */}
+      <div className="mt-1 flex flex-wrap items-center gap-2 pl-7 text-sm sm:hidden">
+        {formatDisplayTimeWithYear(displayTime, timezone)}
+        {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
+        {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
+        <span title={priority.title} className={priority.className}>{priority.text}</span>
+        {task.categories?.slice(0, 2).map((cat) => (
+          <span
+            key={cat.id}
+            className="inline-flex max-w-[6rem] items-center gap-1 rounded px-1.5 py-0.5"
+            style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
+            <span className="truncate">{cat.name}</span>
+          </span>
+        ))}
+        {task.categories?.length > 2 && (
+          <span className="text-slate-400">+{task.categories.length - 2}</span>
+        )}
       </div>
     </div>
   );
@@ -1113,6 +1141,15 @@ function TaskList({ forcedView = '' }) {
       return true;
     }
     return false;
+  }, []);
+
+  // 获取任务的有效数字 ID（对于虚拟实例，返回源任务的数字 ID）
+  const getEffectiveTaskID = useCallback((task) => {
+    if (!task) return 0;
+    if (task.virtual_occurrence) {
+      return Number(task.source_task_id || task.task_id || 0);
+    }
+    return Number(task.id || 0);
   }, []);
 
   const markDraftTouched = useCallback(() => {
@@ -1518,7 +1555,11 @@ function TaskList({ forcedView = '' }) {
           return;
         }
         const current = dayjs(taskTime).tz(timezone);
-        pushTaskToGroup(`due-${current.format('YYYY-MM-DD')}`, current.format('MM/DD ddd'), task);
+        const currentYear = dayjs().tz(timezone).year();
+        const dateLabel = current.year() !== currentYear
+          ? current.format('YYYY/MM/DD ddd')
+          : current.format('MM/DD ddd');
+        pushTaskToGroup(`due-${current.format('YYYY-MM-DD')}`, dateLabel, task);
         return;
       }
 
@@ -1660,12 +1701,14 @@ function TaskList({ forcedView = '' }) {
   }, [filteredTasks, focusTaskID, location.pathname, location.search, navigate, selectedTaskID]);
 
   const selectedTask = useMemo(() => {
-    const fromFiltered = filteredTasks.find((task) => Number(task?.id) === Number(selectedTaskID || 0));
+    // 支持虚拟实例的字符串 ID（如 "occ_123_20260413"）
+    const fromFiltered = filteredTasks.find((task) => String(task?.id) === String(selectedTaskID || ''));
     if (fromFiltered) return fromFiltered;
-    const fromAllTasks = tasks.find((task) => Number(task?.id) === Number(selectedTaskID || 0));
+    const fromAllTasks = tasks.find((task) => String(task?.id) === String(selectedTaskID || ''));
     return fromAllTasks || null;
   }, [filteredTasks, selectedTaskID, tasks]);
-  activeRenderTaskIDRef.current = Number(selectedTask?.id || 0);
+  // 对于虚拟实例，使用源任务的数字 ID
+  activeRenderTaskIDRef.current = getEffectiveTaskID(selectedTask);
   const parsedDraftPriority = parsePriorityFromTitle(String(draft?.title || ''));
   const draftPriorityValue = Number.isInteger(parsedDraftPriority?.priority)
     ? parsedDraftPriority.priority
@@ -1831,7 +1874,7 @@ function TaskList({ forcedView = '' }) {
     const nextDraft = buildDraftFromTask(selectedTask);
     if (lastSyncedSelectedIDRef.current !== selectedTask.id) {
       lastSyncedSelectedIDRef.current = selectedTask.id;
-      draftSourceTaskIDRef.current = selectedTask.id;
+      draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
       draftTouchedRef.current = false;
       draftEditVersionRef.current = 0;
       setDraftWithSnapshot(nextDraft);
@@ -1842,7 +1885,7 @@ function TaskList({ forcedView = '' }) {
 
     if (!draft) {
       draftTouchedRef.current = false;
-      draftSourceTaskIDRef.current = selectedTask.id;
+      draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
       draftEditVersionRef.current = 0;
       setDraftWithSnapshot(nextDraft);
       setDraftTimeRangeEnabled(!!nextDraft?.end_time);
@@ -1872,7 +1915,7 @@ function TaskList({ forcedView = '' }) {
             }
           }
         }
-        draftSourceTaskIDRef.current = selectedTask.id;
+        draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
         setDraftWithSnapshot(nextDraft);
         setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
@@ -2091,7 +2134,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftFieldChange = (field, value, options = {}) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     const submitNow = !!options?.submitNow;
     const submitSource = options?.submitSource || 'realtime';
@@ -2123,7 +2166,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftStartDateTimeChange = (nextValue) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     const nextStart = String(nextValue || '');
     markDraftTouched();
@@ -2141,14 +2184,14 @@ function TaskList({ forcedView = '' }) {
   };
 
   const handleDraftEndDateTimeChange = (nextValue) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
     setDraftWithSnapshot((prev) => (prev ? { ...prev, end_time: String(nextValue || '') } : prev));
   };
 
   const applyQuickDatePreset = (preset) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
     setDraftWithSnapshot((prev) => {
@@ -2191,7 +2234,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const toggleDraftCategory = (catID) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
     setDraftWithSnapshot((prev) => {
@@ -2209,7 +2252,7 @@ function TaskList({ forcedView = '' }) {
   };
 
   const toggleDraftRecurrenceDay = (dayKey) => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
     setDraftWithSnapshot((prev) => {
@@ -2526,7 +2569,8 @@ function TaskList({ forcedView = '' }) {
   const handleSaveDraft = async ({ submitAfter = false, submitSource = 'idle' } = {}) => {
     const taskValue = selectedTaskSnapshotRef.current || selectedTask;
     const draftValue = draftSnapshotRef.current || draft;
-    const closureTaskID = Number(taskValue?.id || 0);
+    // 对于虚拟实例，使用源任务的数字 ID
+    const closureTaskID = getEffectiveTaskID(taskValue);
     if (hasStaleDraftEventContext(closureTaskID)) {
       return;
     }
@@ -2539,7 +2583,9 @@ function TaskList({ forcedView = '' }) {
     if (savingDraft) {
       return;
     }
-    if (draftSourceTaskIDRef.current !== taskValue.id) {
+    // 对于虚拟实例，比较源任务 ID
+    const effectiveTaskID = getEffectiveTaskID(taskValue);
+    if (draftSourceTaskIDRef.current !== effectiveTaskID) {
       return;
     }
     const title = (draftValue.title || '').trim();
@@ -2547,7 +2593,12 @@ function TaskList({ forcedView = '' }) {
       return;
     }
 
-    const targetTaskID = taskValue.id;
+    // 对于虚拟实例，使用源任务的数字 ID
+    const targetTaskID = getEffectiveTaskID(taskValue);
+    if (!targetTaskID) {
+      return;
+    }
+
     const editVersionAtStart = draftEditVersionRef.current;
     const built = buildDraftPayload(taskValue, draftValue);
     if (!built?.payload) {
@@ -2616,8 +2667,9 @@ function TaskList({ forcedView = '' }) {
 
       const taskValue = options?.taskValue || selectedTaskSnapshotRef.current;
       const draftValue = options?.draftValue || draftSnapshotRef.current;
+      // 对于虚拟实例，使用源任务的数字 ID
       const draftSourceTaskID = Number(options?.draftSourceTaskID || draftSourceTaskIDRef.current || 0);
-      const taskID = Number(taskValue?.id || 0);
+      const taskID = getEffectiveTaskID(taskValue);
       const draftBoundToTask = taskID > 0 && draftSourceTaskID === taskID;
       const draftTitle = String(draftValue?.title || '').trim();
       const snapshotDirty = !!(
@@ -2643,12 +2695,13 @@ function TaskList({ forcedView = '' }) {
         if (hasDirtyDraft) {
           const built = buildDraftPayload(taskValue, draftValue);
           if (built?.payload) {
-            await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+            const targetTaskID = getEffectiveTaskID(taskValue);
+            await updateTaskLocal(queryClient, targetTaskID, built.payload, {
               scheduleSync: false,
               localOnly: true,
               awaitPersist: true,
             });
-            await updateTaskLocal(queryClient, taskValue.id, built.payload, {
+            await updateTaskLocal(queryClient, targetTaskID, built.payload, {
               scheduleSync: true,
               localOnly: false,
               skipOptimistic: true,
@@ -2658,7 +2711,7 @@ function TaskList({ forcedView = '' }) {
               },
               awaitPersist: true,
             });
-            if (Number(pendingDraftSubmitRef.current?.taskID || 0) === Number(taskValue.id)) {
+            if (Number(pendingDraftSubmitRef.current?.taskID || 0) === targetTaskID) {
               pendingDraftSubmitRef.current = { taskID: 0, payload: null };
               setPendingSubmitTaskID(0);
             }
@@ -2773,7 +2826,7 @@ function TaskList({ forcedView = '' }) {
   }, []);
 
   const handleSubmitDraft = async () => {
-    const closureTaskID = Number(selectedTask?.id || 0);
+    const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     if (!selectedTask || selectedTask.read_only) return;
     if (isDraftDirtyRef.current) {
@@ -2960,27 +3013,30 @@ function TaskList({ forcedView = '' }) {
   }), [i18n.language, t]);
 
   const handleSelectTask = useCallback(async (task) => {
-    if (task?.virtual_occurrence) {
-      const sourceTaskID = Number(task?.source_task_id || task?.task_id || 0);
-      if (!sourceTaskID) return;
-      openAdvancedModal({
-        ...task,
-        id: sourceTaskID,
-        source_task_id: sourceTaskID,
-      });
-      return;
-    }
+    // 统一使用右侧面板编辑，包括重复任务实例
     const nextTaskID = Number(task?.id || 0);
-    if (!nextTaskID) return;
+    if (!nextTaskID && !task?.virtual_occurrence) return;
+
+    // 对于虚拟实例：
+    // - sourceTaskID 是源任务的数字 ID，用于保存操作
+    // - selectedTaskID 是虚拟实例的字符串 ID，用于 UI 选中状态
+    const sourceTaskID = task?.virtual_occurrence
+      ? Number(task?.source_task_id || task?.task_id || 0)
+      : nextTaskID;
+    const selectedID = task?.virtual_occurrence ? task.id : nextTaskID;
+
+    if (!sourceTaskID) return;
+
     const requestID = switchTaskRequestRef.current + 1;
     switchTaskRequestRef.current = requestID;
-    const currentTaskID = Number(selectedTaskSnapshotRef.current?.id || 0);
+    // 对于虚拟实例，使用源任务的数字 ID
+    const currentTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current);
     const currentTaskSnapshot = selectedTaskSnapshotRef.current;
     let currentDraftSnapshot = draftSnapshotRef.current;
     const currentDraftSourceTaskID = Number(draftSourceTaskIDRef.current || 0);
     if (
       currentTaskID > 0
-      && nextTaskID !== currentTaskID
+      && sourceTaskID !== currentTaskID
       && currentDraftSnapshot
       && currentDraftSourceTaskID === currentTaskID
     ) {
@@ -2993,13 +3049,15 @@ function TaskList({ forcedView = '' }) {
         };
       }
     }
-    if (currentTaskID > 0 && nextTaskID === currentTaskID) {
+    // 比较选中状态（字符串 ID）
+    const currentSelectedID = String(selectedTaskSnapshotRef.current?.id || '');
+    if (currentSelectedID && selectedID === currentSelectedID) {
       if (isMobileViewport) {
         openAdvancedModal(task);
       }
       return;
     }
-    if (currentTaskID > 0 && nextTaskID !== currentTaskID) {
+    if (currentTaskID > 0 && sourceTaskID !== currentTaskID) {
       await flushDraftOnLeave('switch_task', {
         taskValue: currentTaskSnapshot,
         draftValue: currentDraftSnapshot,
@@ -3010,10 +3068,10 @@ function TaskList({ forcedView = '' }) {
       return;
     }
     const nextDraftSnapshot = buildDraftFromTask(task);
-    draftSourceTaskIDRef.current = nextTaskID;
+    draftSourceTaskIDRef.current = sourceTaskID;
     draftTouchedRef.current = false;
     draftEditVersionRef.current = 0;
-    activeRenderTaskIDRef.current = nextTaskID;
+    activeRenderTaskIDRef.current = sourceTaskID;
     setDraftWithSnapshot(nextDraftSnapshot);
     setDraftTimeRangeEnabled(!!nextDraftSnapshot?.end_time);
     setDraftTimeRangeEditing('start');
@@ -3021,11 +3079,11 @@ function TaskList({ forcedView = '' }) {
     setShowActivityPanel(false);
     detailPanelSnapshotRef.current = null;
     setDetailPanel('');
-    setSelectedTaskID(nextTaskID);
+    setSelectedTaskID(selectedID);
     if (isMobileViewport) {
       openAdvancedModal(task);
     }
-  }, [buildDraftFromTask, flushDraftOnLeave, isMobileViewport, openAdvancedModal, setDraftWithSnapshot]);
+  }, [buildDraftFromTask, flushDraftOnLeave, getEffectiveTaskID, isMobileViewport, openAdvancedModal, setDraftWithSnapshot]);
 
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
@@ -4030,7 +4088,7 @@ function TaskList({ forcedView = '' }) {
 
               <div className="mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
                 <div
-                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors focus-within:border-blue-200 focus-within:bg-blue-50/20"
+                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg bg-white px-3 py-2.5"
                   onClick={() => draftDescriptionEditorRef.current?.focus()}
                 >
                   <label className="mb-1 block cursor-text text-xs font-medium text-slate-500">{t('task.description')}</label>
