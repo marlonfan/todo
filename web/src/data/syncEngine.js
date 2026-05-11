@@ -3,6 +3,7 @@ import { queryKeys } from '../query/keys';
 import {
   clearTasksAndSet,
   clearAllLocalData,
+  clearCalendarRanges,
   enqueueOutbox,
   getDueOutbox,
   getMeta,
@@ -664,16 +665,21 @@ async function pullServerData() {
     safeLocalCall(() => replaceCategories(categories), null, 'replaceCategories'),
     safeLocalCall(() => setMeta('last_pull_at', nowISO()), null, 'setMeta:last_pull_at'),
     safeLocalCall(() => setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO()), null, `setMeta:${TASK_SYNC_CURSOR_KEY}`),
-    safeLocalCall(
-      () => invalidateCalendarRangesByTaskIDs(Array.from(taskIDsForCalendarInvalidate)),
-      null,
-      'invalidateCalendarRangesByTaskIDs',
-    ),
+    changedTaskIDs.size > 0
+      ? safeLocalCall(() => clearCalendarRanges(), null, 'clearCalendarRanges:changedTasks')
+      : safeLocalCall(
+        () => invalidateCalendarRangesByTaskIDs(Array.from(deletedTaskIDs)),
+        null,
+        'invalidateCalendarRangesByTaskIDs:deletedTasks',
+      ),
   ]);
   await Promise.all(Array.from(deletedTaskIDs).map((taskID) => (
     safeLocalCall(() => removeTaskActivitiesByTask(taskID), null, `removeTaskActivitiesByTask:${taskID}`)
   )));
   if (taskIDsForCalendarInvalidate.size > 0) {
+    if (changedTaskIDs.size > 0) {
+      useCalendarCacheStore.getState().clear();
+    }
     await Promise.all([
       queryClientRef.invalidateQueries({ queryKey: ['calendar'] }),
       queryClientRef.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),

@@ -338,6 +338,60 @@ func (h *TaskHandler) ListActivities(c *gin.Context) {
 	c.JSON(http.StatusOK, activities)
 }
 
+func resolveTaskSyncCursor(
+	since time.Time,
+	changed []models.Task,
+	deleted []models.TaskDeleteLog,
+	limit int,
+	now time.Time,
+) (time.Time, bool) {
+	nextSince := since.UTC()
+	if limit <= 0 {
+		limit = 500
+	}
+
+	maxChanged := time.Time{}
+	for _, task := range changed {
+		if task.UpdatedAt.After(maxChanged) {
+			maxChanged = task.UpdatedAt.UTC()
+		}
+	}
+	maxDeleted := time.Time{}
+	for _, item := range deleted {
+		if item.DeletedAt.After(maxDeleted) {
+			maxDeleted = item.DeletedAt.UTC()
+		}
+	}
+
+	changedHasMore := len(changed) >= limit
+	deletedHasMore := len(deleted) >= limit
+	hasMore := changedHasMore || deletedHasMore
+	if hasMore {
+		var boundary time.Time
+		if changedHasMore && !maxChanged.IsZero() {
+			boundary = maxChanged
+		}
+		if deletedHasMore && !maxDeleted.IsZero() && (boundary.IsZero() || maxDeleted.Before(boundary)) {
+			boundary = maxDeleted
+		}
+		if !boundary.IsZero() && boundary.After(nextSince) {
+			nextSince = boundary
+		}
+		return nextSince, true
+	}
+
+	if maxChanged.After(nextSince) {
+		nextSince = maxChanged
+	}
+	if maxDeleted.After(nextSince) {
+		nextSince = maxDeleted
+	}
+	if now.After(nextSince) {
+		nextSince = now.UTC()
+	}
+	return nextSince, false
+}
+
 func (h *TaskHandler) Sync(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 
@@ -370,29 +424,15 @@ func (h *TaskHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	nextSince := since
-	for _, task := range changed {
-		if task.UpdatedAt.After(nextSince) {
-			nextSince = task.UpdatedAt
-		}
-	}
-	for _, item := range deleted {
-		if item.DeletedAt.After(nextSince) {
-			nextSince = item.DeletedAt
-		}
-	}
-	hasMore := len(changed) >= limit || len(deleted) >= limit
 	now := time.Now().UTC()
-	if !hasMore && now.After(nextSince) {
-		nextSince = now
-	}
+	nextSince, hasMore := resolveTaskSyncCursor(since, changed, deleted, limit, now)
 
 	c.JSON(http.StatusOK, gin.H{
 		"tasks":      changed,
 		"deleted":    deleted,
-		"next_since": nextSince.Format(time.RFC3339),
+		"next_since": nextSince.Format(time.RFC3339Nano),
 		"has_more":   hasMore,
-		"server_at":  now.Format(time.RFC3339),
+		"server_at":  now.Format(time.RFC3339Nano),
 	})
 }
 

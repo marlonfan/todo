@@ -376,14 +376,28 @@ export async function removeCalendarRanges(keys) {
   await txDone(tx);
 }
 
+export function calendarRangeEntryContainsTask(entry, taskID) {
+  const numericTaskID = Number(taskID);
+  if (!numericTaskID) return false;
+
+  const contains = (events) => (
+    Array.isArray(events)
+    && events.some((event) => Number(event?.extendedProps?.taskId) === numericTaskID)
+  );
+
+  if (contains(entry?.events)) return true;
+
+  const eventsByDate = entry?.events_by_date && typeof entry.events_by_date === 'object'
+    ? entry.events_by_date
+    : {};
+  return Object.values(eventsByDate).some((events) => contains(events));
+}
+
 export async function invalidateCalendarRangesByTask(taskID) {
   if (!taskID) return;
   const ranges = await getAll(STORE_CALENDAR_RANGES);
   const keys = ranges
-    .filter((entry) => {
-      const events = Array.isArray(entry?.events) ? entry.events : [];
-      return events.some((event) => Number(event?.extendedProps?.taskId) === Number(taskID));
-    })
+    .filter((entry) => calendarRangeEntryContainsTask(entry, taskID))
     .map((entry) => entry.key)
     .filter(Boolean);
 
@@ -398,12 +412,10 @@ export async function invalidateCalendarRangesByTaskIDs(taskIDs) {
   );
   if (idSet.size === 0) return;
 
+  const idList = Array.from(idSet);
   const ranges = await getAll(STORE_CALENDAR_RANGES);
   const keys = ranges
-    .filter((entry) => {
-      const events = Array.isArray(entry?.events) ? entry.events : [];
-      return events.some((event) => idSet.has(Number(event?.extendedProps?.taskId)));
-    })
+    .filter((entry) => idList.some((taskID) => calendarRangeEntryContainsTask(entry, taskID)))
     .map((entry) => entry.key)
     .filter(Boolean);
 

@@ -232,3 +232,31 @@ func TestProcessPendingNotificationsSchedulesNextAllDayRecurringReminderAtMornin
 	expectedNextNotifyAt := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1).Add(9*time.Hour - 5*time.Minute)
 	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
 }
+
+func TestReconcileUserRemindersSchedulesNextRecurringOccurrenceAfterPastAnchor(t *testing.T) {
+	notifySvc, _, taskRepo, notifyRepo, userID, _ := newNotifyRolloverTestServices(t)
+
+	start := time.Now().UTC().Truncate(time.Minute).Add(-23 * time.Hour)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "Recurring reconcile task",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &start,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "daily",
+			Interval: 1,
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create recurring task: %v", err)
+	}
+
+	if err := notifySvc.ReconcileUserReminders(userID); err != nil {
+		t.Fatalf("reconcile reminders: %v", err)
+	}
+
+	expectedNextNotifyAt := start.AddDate(0, 0, 1).Add(-5 * time.Minute)
+	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
+}

@@ -157,9 +157,29 @@ func (r *TaskRepository) ListChangedSince(userID int64, since time.Time, limit i
 	err := r.db.Preload("Categories").
 		Where("user_id = ? AND updated_at > ?", userID, since.UTC()).
 		Order("updated_at asc, id asc").
-		Limit(limit).
+		Limit(limit + 1).
 		Find(&tasks).Error
-	return tasks, err
+	if err != nil || len(tasks) <= limit {
+		return tasks, err
+	}
+
+	boundary := tasks[limit-1].UpdatedAt.UTC()
+	prefix := make([]models.Task, 0, limit)
+	for _, task := range tasks[:limit] {
+		if task.UpdatedAt.UTC().Before(boundary) {
+			prefix = append(prefix, task)
+		}
+	}
+
+	var boundaryRows []models.Task
+	err = r.db.Preload("Categories").
+		Where("user_id = ? AND updated_at = ?", userID, boundary).
+		Order("id asc").
+		Find(&boundaryRows).Error
+	if err != nil {
+		return nil, err
+	}
+	return append(prefix, boundaryRows...), nil
 }
 
 func (r *TaskRepository) ListDeletedSince(userID int64, since time.Time, limit int) ([]models.TaskDeleteLog, error) {
@@ -173,9 +193,29 @@ func (r *TaskRepository) ListDeletedSince(userID int64, since time.Time, limit i
 	err := r.db.
 		Where("user_id = ? AND deleted_at > ?", userID, since.UTC()).
 		Order("deleted_at asc, id asc").
-		Limit(limit).
+		Limit(limit + 1).
 		Find(&logs).Error
-	return logs, err
+	if err != nil || len(logs) <= limit {
+		return logs, err
+	}
+
+	boundary := logs[limit-1].DeletedAt.UTC()
+	prefix := make([]models.TaskDeleteLog, 0, limit)
+	for _, log := range logs[:limit] {
+		if log.DeletedAt.UTC().Before(boundary) {
+			prefix = append(prefix, log)
+		}
+	}
+
+	var boundaryRows []models.TaskDeleteLog
+	err = r.db.
+		Where("user_id = ? AND deleted_at = ?", userID, boundary).
+		Order("id asc").
+		Find(&boundaryRows).Error
+	if err != nil {
+		return nil, err
+	}
+	return append(prefix, boundaryRows...), nil
 }
 
 func (r *TaskRepository) UpdateCategories(taskID int64, categoryIDs []int64) error {
@@ -231,7 +271,7 @@ func (r *TaskRepository) GetTasksByIDsAndUser(userID int64, taskIDs []int64) ([]
 func (r *TaskRepository) GetReminderTasks(userID int64) ([]models.Task, error) {
 	var tasks []models.Task
 	err := r.db.
-		Where("user_id = ? AND status = ? AND start_time IS NOT NULL", userID, models.TaskStatusPending).
+		Where("user_id = ? AND status = ? AND (start_time IS NOT NULL OR due_date IS NOT NULL)", userID, models.TaskStatusPending).
 		Find(&tasks).Error
 	return tasks, err
 }

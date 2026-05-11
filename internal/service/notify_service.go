@@ -535,16 +535,27 @@ func (s *NotifyService) ReconcileUserReminders(userID int64) error {
 
 	now := time.Now().UTC()
 	for _, task := range tasks {
-		if task.StartTime == nil {
+		var reminderStart *time.Time
+		if task.RecurrenceRule != nil {
+			nextStart, err := s.resolveNextPendingRecurringReminderStart(&task, now)
+			if err != nil {
+				return err
+			}
+			reminderStart = nextStart
+		} else if task.StartTime != nil {
+			start := task.StartTime.UTC()
+			reminderStart = &start
+		}
+		if reminderStart == nil {
 			continue
 		}
-		reminderStart := resolveReminderStartForTask(
-			task.StartTime.UTC(),
+		resolvedStart := resolveReminderStartForTask(
+			reminderStart.UTC(),
 			task.AllDay,
 			user.Timezone,
 			user.DefaultMorningTime,
 		)
-		notifyAt := reminderStart.Add(-time.Duration(minutes) * time.Minute)
+		notifyAt := resolvedStart.Add(-time.Duration(minutes) * time.Minute)
 		if !notifyAt.After(now) {
 			continue
 		}

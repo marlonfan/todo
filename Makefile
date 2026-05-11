@@ -3,15 +3,15 @@
 # Build the application
 build:
 	cd web && npm run build
-	go build -o bin/todo-app cmd/server/main.go
+	CGO_ENABLED=1 go build -o bin/todo-app cmd/server/main.go
 
 # Run the server
 run:
-	go run cmd/server/main.go
+	CGO_ENABLED=1 go run cmd/server/main.go
 
 # Run with custom config
 run-config:
-	go run cmd/server/main.go -config=config.yaml
+	CGO_ENABLED=1 go run cmd/server/main.go -config=config.yaml
 
 # Development mode (frontend + backend)
 dev:
@@ -26,7 +26,7 @@ dev-backend:
 
 # Run tests
 test:
-	go test -v ./...
+	CGO_ENABLED=1 go test -v ./...
 
 test-ui:
 	cd web && npm run test:ui
@@ -45,16 +45,7 @@ deps:
 # Create release build for multiple platforms
 release:
 	mkdir -p bin
-	# Linux AMD64
-	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/todo-app-linux-amd64 cmd/server/main.go
-	# Linux ARM64
-	GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/todo-app-linux-arm64 cmd/server/main.go
-	# Darwin AMD64
-	GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o bin/todo-app-darwin-amd64 cmd/server/main.go
-	# Darwin ARM64 (M1/M2)
-	GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o bin/todo-app-darwin-arm64 cmd/server/main.go
-	# Windows AMD64
-	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o bin/todo-app-windows-amd64.exe cmd/server/main.go
+	CGO_ENABLED=1 go build -ldflags="-s -w" -o bin/todo-app-$$(go env GOOS)-$$(go env GOARCH) cmd/server/main.go
 
 # Frontend commands
 frontend-install:
@@ -69,7 +60,7 @@ frontend-dev:
 # Database
 db-reset:
 	rm -f todo.db
-	go run cmd/server/main.go
+	CGO_ENABLED=1 go run cmd/server/main.go
 
 # Docker
 docker-build:

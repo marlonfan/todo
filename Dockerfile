@@ -38,6 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=go-builder /out/todo-app /app/todo-app
 COPY config.yaml.example /app/config.yaml
+RUN mkdir -p /app/data \
+  && sed -i 's#dsn: "todo.db"#dsn: "/app/data/todo.db"#' /app/config.yaml
 
 EXPOSE 8080
 VOLUME ["/app/data"]
