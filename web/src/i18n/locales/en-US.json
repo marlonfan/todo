@@ -271,7 +271,7 @@
     "syncLastPull": "Last pull time",
     "syncNever": "Never",
     "syncNowTitle": "Resync",
-    "syncNowHint": "Run a sync now (push local changes and pull remote updates).",
+    "syncNowHint": "Run a sync now: push local changes, then fully reconcile tasks with the server to repair stale local cache.",
     "syncNow": "Sync now",
     "syncNowSuccess": "Sync triggered",
     "syncNowFailed": "Failed to trigger sync",

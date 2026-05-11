@@ -468,11 +468,9 @@ function CalendarView() {
     if (key && Object.prototype.hasOwnProperty.call(instanceDescriptionOverrides, key)) {
       return String(instanceDescriptionOverrides[key] ?? '');
     }
-    if (typeof ext?.description === 'string') {
-      return ext.description;
-    }
-    if (isRecurring) {
-      return '';
+    const eventDescription = typeof ext?.description === 'string' ? ext.description : null;
+    if (eventDescription !== null && eventDescription.trim() !== '') {
+      return eventDescription;
     }
     return String(cachedTask?.description || '');
   }, [instanceDescriptionOverrides, timezone]);

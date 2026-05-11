@@ -467,7 +467,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
       }
       const needsCalendarInvalidate = shouldInvalidateCalendar(payload);
       await invalidateCalendarCaches(queryClient, taskID, {
-        revalidateQuery: !localOnly,
+        revalidateQuery: !localOnly && needsCalendarInvalidate,
         skipRangeInvalidate: !needsCalendarInvalidate,
       });
       if (typeof payload.recurrence_rule !== 'undefined') {
@@ -497,7 +497,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
     }
     const needsCalendarInvalidate = shouldInvalidateCalendar(payload);
     await invalidateCalendarCaches(queryClient, taskID, {
-      revalidateQuery: !localOnly,
+      revalidateQuery: !localOnly && needsCalendarInvalidate,
       skipRangeInvalidate: !needsCalendarInvalidate,
     });
     if (typeof payload.recurrence_rule !== 'undefined') {

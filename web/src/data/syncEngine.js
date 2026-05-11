@@ -292,14 +292,14 @@ async function refreshOccurrenceScopedViews(taskID) {
   ]);
 }
 
-async function runTaskReconcileIfNeeded(outboxOps = []) {
+async function runTaskReconcileIfNeeded(outboxOps = [], options = {}) {
   if (!queryClientRef || !hasToken()) return;
   const [lastReconcileAt, forceReconcileRaw, localTasks] = await Promise.all([
     safeLocalCall(() => getMeta(TASK_FULL_RECONCILE_AT_KEY, ''), '', `getMeta:${TASK_FULL_RECONCILE_AT_KEY}`),
     safeLocalCall(() => getMeta(TASK_FORCE_RECONCILE_KEY, ''), '', `getMeta:${TASK_FORCE_RECONCILE_KEY}`),
     safeLocalCall(() => readTasks(), [], 'readTasks:reconcile'),
   ]);
-  const forceReconcile = String(forceReconcileRaw || '').trim() === '1';
+  const forceReconcile = !!options?.force || String(forceReconcileRaw || '').trim() === '1';
   if (!shouldRunTaskReconcile(lastReconcileAt, forceReconcile)) return;
 
   emitSyncTrace('reconcile_started', {
@@ -313,9 +313,9 @@ async function runTaskReconcileIfNeeded(outboxOps = []) {
   const reconciledTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs });
 
   queryClientRef.setQueryData(queryKeys.tasks.all, reconciledTasks);
-  await safeLocalCall(() => clearTasksAndSet(reconciledTasks), null, 'clearTasksAndSet:reconcile');
-  await safeLocalCall(() => setMeta(TASK_FULL_RECONCILE_AT_KEY, nowISO()), null, `setMeta:${TASK_FULL_RECONCILE_AT_KEY}`);
-  await safeLocalCall(() => setMeta(TASK_FORCE_RECONCILE_KEY, ''), null, `setMeta:${TASK_FORCE_RECONCILE_KEY}`);
+  await clearTasksAndSet(reconciledTasks);
+  await setMeta(TASK_FULL_RECONCILE_AT_KEY, nowISO());
+  await setMeta(TASK_FORCE_RECONCILE_KEY, '');
 
   const reconciledIDSet = new Set(reconciledTasks.map((task) => Number(task?.id || 0)));
   const removedSyncedLocal = (Array.isArray(localTasks) ? localTasks : []).filter((task) => {
@@ -660,11 +660,12 @@ async function pullServerData() {
 
   const taskIDsForCalendarInvalidate = new Set([...changedTaskIDs, ...deletedTaskIDs]);
 
+  await clearTasksAndSet(mergedTasks);
+  await replaceCategories(categories);
+  await setMeta('last_pull_at', nowISO());
+  await setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO());
+
   await Promise.all([
-    safeLocalCall(() => clearTasksAndSet(mergedTasks), null, 'clearTasksAndSet'),
-    safeLocalCall(() => replaceCategories(categories), null, 'replaceCategories'),
-    safeLocalCall(() => setMeta('last_pull_at', nowISO()), null, 'setMeta:last_pull_at'),
-    safeLocalCall(() => setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO()), null, `setMeta:${TASK_SYNC_CURSOR_KEY}`),
     changedTaskIDs.size > 0
       ? safeLocalCall(() => clearCalendarRanges(), null, 'clearCalendarRanges:changedTasks')
       : safeLocalCall(
@@ -742,7 +743,7 @@ async function waitForIdle(timeoutMs = 15000) {
 }
 
 async function runSyncCycle(options = {}) {
-  const { silent = true } = options;
+  const { silent = true, forceReconcile = false } = options;
 
   if (!queryClientRef) {
     if (!silent) {
@@ -766,7 +767,7 @@ async function runSyncCycle(options = {}) {
   try {
     await processOutbox();
     const outboxOps = await safeLocalCall(() => readOutbox(), [], 'readOutbox:reconcile');
-    await runTaskReconcileIfNeeded(outboxOps);
+    await runTaskReconcileIfNeeded(outboxOps, { force: forceReconcile });
     await pullServerData();
     if (queryClientRef) {
       queryClientRef.setQueryData(queryKeys.sync.lastPull, nowISO());
@@ -861,7 +862,7 @@ export async function forceManualSync() {
     rerunRequested = true;
     await waitForIdle();
   }
-  await runSyncCycle({ silent: false });
+  await runSyncCycle({ silent: false, forceReconcile: true });
 }
 
 export async function rebuildLocalDataAndSync() {
@@ -888,7 +889,7 @@ export function initializeSyncEngine(queryClient) {
   queryClientRef = queryClient;
 
   hydrateFromLocal().finally(() => {
-    runSyncCycle({ silent: true });
+    runSyncCycle({ silent: true, forceReconcile: true });
   });
 
   const onOnline = () => {

@@ -1417,7 +1417,6 @@ function TaskList({ forcedView = '' }) {
     const now = dayjs().tz(timezone);
     const todayStart = now.startOf('day');
     const todayEnd = now.endOf('day');
-    const sevenDayEnd = todayStart.add(6, 'day').endOf('day');
 
     if (activeCategoryID > 0) {
       return tasks.filter((task) => (task.categories || []).some((cat) => cat.id === activeCategoryID) && task.status === 'pending');
@@ -1461,7 +1460,7 @@ function TaskList({ forcedView = '' }) {
         const time = getTaskPrimaryTime(task);
         if (!time) return false;
         const current = dayjs(time).tz(timezone);
-        return (current.isAfter(todayStart) || current.isSame(todayStart)) && (current.isBefore(sevenDayEnd) || current.isSame(sevenDayEnd));
+        return current.isAfter(todayStart) || current.isSame(todayStart);
       });
     }
 
@@ -3080,7 +3079,7 @@ function TaskList({ forcedView = '' }) {
       return;
     }
     if (currentTaskID > 0 && sourceTaskID !== currentTaskID) {
-      await flushDraftOnLeave('switch_task', {
+      void flushDraftOnLeave('switch_task', {
         taskValue: currentTaskSnapshot,
         draftValue: currentDraftSnapshot,
         draftSourceTaskID: currentDraftSourceTaskID,
