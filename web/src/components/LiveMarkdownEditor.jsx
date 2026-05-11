@@ -16,6 +16,9 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   const readyRef = useRef(false);
   const syncingRef = useRef(false);
   const lastInternalValueRef = useRef(String(value || ''));
+  const fastInputValueRef = useRef(String(value || ''));
+  const fastInputVersionRef = useRef(0);
+  const markdownInputVersionRef = useRef(0);
   const pendingExternalValueRef = useRef(String(value || ''));
   const externalVersionRef = useRef(0);
   const appliedExternalVersionRef = useRef(0);
@@ -33,6 +36,18 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   const resolveHeight = () => (fill ? '100%' : `${minHeight}px`);
   const normalize = (text) => String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
+  const readFastInputValue = () => {
+    const root = mountRef.current;
+    const editable = root?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset, [contenteditable="true"]');
+    if (!editable) return '';
+    return String(editable.textContent || '').replace(/\u200b/g, '').replace(/\u00a0/g, ' ');
+  };
+  const captureFastInputValue = () => {
+    const nextValue = readFastInputValue();
+    if (nextValue === fastInputValueRef.current) return;
+    fastInputValueRef.current = nextValue;
+    fastInputVersionRef.current += 1;
+  };
   const getCurrentValue = () => {
     const editor = editorRef.current;
     if (editor && typeof editor.getValue === 'function') {
@@ -57,10 +72,32 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   useEffect(() => {
     let disposed = false;
+    let unbindFastInput = null;
     const mountID = mountIDRef.current;
     if (mountRef.current) {
       mountRef.current.style.height = resolveHeight();
     }
+    const editableElement = () => (
+      mountRef.current?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset, [contenteditable="true"]')
+    );
+    const handleFastInput = () => {
+      captureFastInputValue();
+    };
+    const bindFastInput = () => {
+      if (unbindFastInput) return;
+      const editable = editableElement();
+      if (!editable) return;
+      editable.addEventListener('beforeinput', handleFastInput, true);
+      editable.addEventListener('input', handleFastInput, true);
+      editable.addEventListener('keyup', handleFastInput, true);
+      editable.addEventListener('compositionend', handleFastInput, true);
+      unbindFastInput = () => {
+        editable.removeEventListener('beforeinput', handleFastInput, true);
+        editable.removeEventListener('input', handleFastInput, true);
+        editable.removeEventListener('keyup', handleFastInput, true);
+        editable.removeEventListener('compositionend', handleFastInput, true);
+      };
+    };
     const instance = new Vditor(mountID, {
       mode: 'ir',
       value: value || '',
@@ -87,6 +124,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       },
       input: (currentValue) => {
         lastInternalValueRef.current = String(currentValue || '');
+        markdownInputVersionRef.current = fastInputVersionRef.current;
         if (syncingRef.current) return;
         if (typeof onChangeRef.current === 'function') {
           onChangeRef.current(currentValue);
@@ -99,6 +137,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         }
         readyRef.current = true;
         editorRef.current = instance;
+        bindFastInput();
         const pendingValue = String(pendingExternalValueRef.current || '');
         if (typeof instance.getValue === 'function' && typeof instance.setValue === 'function') {
           if (normalize(instance.getValue()) !== normalize(pendingValue)) {
@@ -106,6 +145,9 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
             try {
               instance.setValue(pendingValue, false);
               lastInternalValueRef.current = pendingValue;
+              fastInputValueRef.current = pendingValue;
+              fastInputVersionRef.current += 1;
+              markdownInputVersionRef.current = fastInputVersionRef.current;
             } finally {
               syncingRef.current = false;
             }
@@ -113,6 +155,10 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         }
       },
     });
+    window.setTimeout(() => {
+      if (disposed) return;
+      bindFastInput();
+    }, 0);
 
     const handleEditorShortcuts = (event) => {
       const target = event.target && typeof event.target.closest === 'function'
@@ -166,6 +212,10 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     return () => {
       disposed = true;
       window.removeEventListener('keydown', handleEditorShortcuts, true);
+      if (unbindFastInput) {
+        unbindFastInput();
+        unbindFastInput = null;
+      }
       readyRef.current = false;
       safeDestroy(instance);
       editorRef.current = null;
@@ -195,6 +245,9 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     try {
       editor.setValue(nextValue, false);
       lastInternalValueRef.current = nextValue;
+      fastInputValueRef.current = nextValue;
+      fastInputVersionRef.current += 1;
+      markdownInputVersionRef.current = fastInputVersionRef.current;
       appliedExternalVersionRef.current = currentExternalVersion;
     } finally {
       syncingRef.current = false;
@@ -203,7 +256,13 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   useImperativeHandle(ref, () => ({
     getValue: getCurrentValue,
-    getCachedValue: () => String(lastInternalValueRef.current || pendingExternalValueRef.current || ''),
+    getCachedValue: () => {
+      captureFastInputValue();
+      if (fastInputVersionRef.current > markdownInputVersionRef.current) {
+        return String(fastInputValueRef.current ?? '');
+      }
+      return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
+    },
     focus: () => {
       try {
         const el = mountRef.current?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset');
