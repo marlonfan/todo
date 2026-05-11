@@ -2,6 +2,33 @@ import React, { useEffect, useImperativeHandle, useRef } from 'react';
 import Vditor from 'vditor';
 import 'vditor/dist/index.css';
 
+function isDraftSwitchDebugEnabled() {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage?.getItem('todo:draftDebug') === '1';
+}
+
+function summarizeDebugText(value) {
+  const text = String(value ?? '');
+  return {
+    length: text.length,
+    preview: text.length > 120 ? `${text.slice(0, 120)}...` : text,
+    tail: text.slice(-40),
+  };
+}
+
+let editorDebugSeq = 0;
+function logEditorDebug(scope, payload = {}) {
+  if (!isDraftSwitchDebugEnabled()) return;
+  const entry = {
+    seq: ++editorDebugSeq,
+    scope,
+    at: new Date().toISOString(),
+    ms: typeof performance !== 'undefined' ? Math.round(performance.now()) : 0,
+    ...payload,
+  };
+  console.info('[todo-draft-debug]', JSON.stringify(entry));
+}
+
 const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   value,
   onChange,
@@ -42,11 +69,18 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     if (!editable) return '';
     return String(editable.textContent || '').replace(/\u200b/g, '').replace(/\u00a0/g, ' ');
   };
-  const captureFastInputValue = () => {
+  const captureFastInputValue = (eventType = '') => {
     const nextValue = readFastInputValue();
     if (nextValue === fastInputValueRef.current) return;
     fastInputValueRef.current = nextValue;
     fastInputVersionRef.current += 1;
+    logEditorDebug('editor.fastInput.changed', {
+      event_type: eventType,
+      fast_input_version: fastInputVersionRef.current,
+      markdown_input_version: markdownInputVersionRef.current,
+      fast_input: summarizeDebugText(nextValue),
+      last_internal: summarizeDebugText(lastInternalValueRef.current),
+    });
   };
   const getCurrentValue = () => {
     const editor = editorRef.current;
@@ -80,8 +114,8 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     const editableElement = () => (
       mountRef.current?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset, [contenteditable="true"]')
     );
-    const handleFastInput = () => {
-      captureFastInputValue();
+    const handleFastInput = (event) => {
+      captureFastInputValue(event?.type || '');
     };
     const bindFastInput = () => {
       if (unbindFastInput) return;
@@ -125,6 +159,12 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       input: (currentValue) => {
         lastInternalValueRef.current = String(currentValue || '');
         markdownInputVersionRef.current = fastInputVersionRef.current;
+        logEditorDebug('editor.markdownInput', {
+          syncing: !!syncingRef.current,
+          fast_input_version: fastInputVersionRef.current,
+          markdown_input_version: markdownInputVersionRef.current,
+          current_value: summarizeDebugText(currentValue),
+        });
         if (syncingRef.current) return;
         if (typeof onChangeRef.current === 'function') {
           onChangeRef.current(currentValue);
@@ -148,6 +188,11 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
               fastInputValueRef.current = pendingValue;
               fastInputVersionRef.current += 1;
               markdownInputVersionRef.current = fastInputVersionRef.current;
+              logEditorDebug('editor.after.applyPending', {
+                fast_input_version: fastInputVersionRef.current,
+                markdown_input_version: markdownInputVersionRef.current,
+                pending_value: summarizeDebugText(pendingValue),
+              });
             } finally {
               syncingRef.current = false;
             }
@@ -249,6 +294,13 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       fastInputVersionRef.current += 1;
       markdownInputVersionRef.current = fastInputVersionRef.current;
       appliedExternalVersionRef.current = currentExternalVersion;
+      logEditorDebug('editor.externalValue.applied', {
+        external_version: currentExternalVersion,
+        applied_external_version: appliedExternalVersionRef.current,
+        fast_input_version: fastInputVersionRef.current,
+        markdown_input_version: markdownInputVersionRef.current,
+        next_value: summarizeDebugText(nextValue),
+      });
     } finally {
       syncingRef.current = false;
     }
@@ -257,11 +309,49 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   useImperativeHandle(ref, () => ({
     getValue: getCurrentValue,
     getCachedValue: () => {
-      captureFastInputValue();
+      captureFastInputValue('imperative.getCachedValue');
+      logEditorDebug('editor.getCachedValue.markdown', {
+        fast_input_version: fastInputVersionRef.current,
+        markdown_input_version: markdownInputVersionRef.current,
+        fast_input: summarizeDebugText(fastInputValueRef.current),
+        last_internal: summarizeDebugText(lastInternalValueRef.current),
+        pending_external: summarizeDebugText(pendingExternalValueRef.current),
+      });
+      return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
+    },
+    getPendingDOMValue: () => {
+      captureFastInputValue('imperative.getPendingDOMValue');
       if (fastInputVersionRef.current > markdownInputVersionRef.current) {
+        logEditorDebug('editor.getPendingDOMValue.fast', {
+          fast_input_version: fastInputVersionRef.current,
+          markdown_input_version: markdownInputVersionRef.current,
+          fast_input: summarizeDebugText(fastInputValueRef.current),
+          last_internal: summarizeDebugText(lastInternalValueRef.current),
+        });
         return String(fastInputValueRef.current ?? '');
       }
-      return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
+      logEditorDebug('editor.getPendingDOMValue.none', {
+        fast_input_version: fastInputVersionRef.current,
+        markdown_input_version: markdownInputVersionRef.current,
+        fast_input: summarizeDebugText(fastInputValueRef.current),
+        last_internal: summarizeDebugText(lastInternalValueRef.current),
+      });
+      return '';
+    },
+    getDebugSnapshot: () => {
+      const fastDOMValue = readFastInputValue();
+      return {
+        ready: !!readyRef.current,
+        syncing: !!syncingRef.current,
+        fast_input_version: fastInputVersionRef.current,
+        markdown_input_version: markdownInputVersionRef.current,
+        external_version: externalVersionRef.current,
+        applied_external_version: appliedExternalVersionRef.current,
+        fast_input: summarizeDebugText(fastInputValueRef.current),
+        fast_dom: summarizeDebugText(fastDOMValue),
+        last_internal: summarizeDebugText(lastInternalValueRef.current),
+        pending_external: summarizeDebugText(pendingExternalValueRef.current),
+      };
     },
     focus: () => {
       try {

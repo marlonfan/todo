@@ -86,6 +86,34 @@ const RECURRENCE_PANEL_DRAFT_FIELDS = [
   'recurrence_lunar_is_leap_month',
 ];
 
+function isDraftSwitchDebugEnabled() {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage?.getItem('todo:draftDebug') === '1';
+}
+
+function summarizeDebugText(value) {
+  const text = String(value ?? '');
+  const preview = text.length > 120 ? `${text.slice(0, 120)}...` : text;
+  return {
+    length: text.length,
+    preview,
+    tail: text.slice(-40),
+  };
+}
+
+let draftSwitchDebugSeq = 0;
+function logDraftSwitchDebug(scope, payload = {}) {
+  if (!isDraftSwitchDebugEnabled()) return;
+  const entry = {
+    seq: ++draftSwitchDebugSeq,
+    scope,
+    at: new Date().toISOString(),
+    ms: typeof performance !== 'undefined' ? Math.round(performance.now()) : 0,
+    ...payload,
+  };
+  console.info('[todo-draft-debug]', JSON.stringify(entry));
+}
+
 function parseRecurrenceRule(rawRule) {
   if (!rawRule) return null;
   if (typeof rawRule === 'object') return rawRule;
@@ -717,6 +745,7 @@ const TaskRow = React.memo(function TaskRow({
   timezone,
   labels,
   timeMode,
+  onBeforeSelectTask,
   onSelectTask,
   onToggleStatus,
 }) {
@@ -742,7 +771,24 @@ const TaskRow = React.memo(function TaskRow({
         event.dataTransfer.setData('text/task-id', String(task.id));
         event.dataTransfer.effectAllowed = 'move';
       }}
-      onClick={() => onSelectTask(task)}
+      onPointerDownCapture={(event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        logDraftSwitchDebug('taskRow.pointerDownCapture', {
+          pointer_type: event.pointerType || '',
+          row_task_id: task.id,
+          row_task_title: task.title || '',
+          row_selected: !!selected,
+        });
+        onBeforeSelectTask?.(task);
+      }}
+      onClick={() => {
+        logDraftSwitchDebug('taskRow.click', {
+          row_task_id: task.id,
+          row_task_title: task.title || '',
+          row_selected: !!selected,
+        });
+        onSelectTask(task);
+      }}
       className={`group cursor-pointer rounded-lg px-3 py-3 transition ${
         selected
           ? 'bg-blue-50/70'
@@ -1126,6 +1172,11 @@ function TaskList({ forcedView = '' }) {
   const activeRenderTaskIDRef = useRef(0);
   const draftDescriptionEditorRef = useRef(null);
   const draftTitleInputRef = useRef(null);
+  const activeDescriptionSessionRef = useRef(0);
+  const descriptionSessionSeqRef = useRef(0);
+  const descriptionSessionTaskIDRef = useRef(0);
+  const latestDescriptionSessionByTaskRef = useRef(new Map());
+  const latestEditedDescriptionSessionByTaskRef = useRef(new Map());
 
   useEffect(() => {
     if (!selectedTaskID) return;
@@ -1165,6 +1216,47 @@ function TaskList({ forcedView = '' }) {
     draftSnapshotRef.current = normalizedNext;
     setDraft(normalizedNext);
     return normalizedNext;
+  }, []);
+
+  const beginDescriptionSession = useCallback((taskIDInput, reason = '') => {
+    const taskID = Number(taskIDInput || 0);
+    if (!taskID) {
+      activeDescriptionSessionRef.current = 0;
+      descriptionSessionTaskIDRef.current = 0;
+      return 0;
+    }
+    if (descriptionSessionTaskIDRef.current === taskID && activeDescriptionSessionRef.current > 0) {
+      return activeDescriptionSessionRef.current;
+    }
+    const nextSessionID = descriptionSessionSeqRef.current + 1;
+    descriptionSessionSeqRef.current = nextSessionID;
+    activeDescriptionSessionRef.current = nextSessionID;
+    descriptionSessionTaskIDRef.current = taskID;
+    latestDescriptionSessionByTaskRef.current.set(taskID, nextSessionID);
+    logDraftSwitchDebug('draft.description.sessionBegin', {
+      reason,
+      task_id: taskID,
+      session_id: nextSessionID,
+    });
+    return nextSessionID;
+  }, []);
+
+  const markDescriptionSessionEdited = useCallback((taskIDInput, sessionIDInput) => {
+    const taskID = Number(taskIDInput || 0);
+    const sessionID = Number(sessionIDInput || 0);
+    if (!taskID || !sessionID) return;
+    const current = Number(latestEditedDescriptionSessionByTaskRef.current.get(taskID) || 0);
+    if (sessionID > current) {
+      latestEditedDescriptionSessionByTaskRef.current.set(taskID, sessionID);
+    }
+  }, []);
+
+  const shouldAcceptDescriptionSessionInput = useCallback((taskIDInput, sessionIDInput) => {
+    const taskID = Number(taskIDInput || 0);
+    const sessionID = Number(sessionIDInput || 0);
+    if (!taskID || !sessionID) return true;
+    const latestEdited = Number(latestEditedDescriptionSessionByTaskRef.current.get(taskID) || 0);
+    return !latestEdited || sessionID >= latestEdited;
   }, []);
 
   const isDetailPanelRequiringConfirm = useCallback(
@@ -1875,6 +1967,7 @@ function TaskList({ forcedView = '' }) {
     if (lastSyncedSelectedIDRef.current !== selectedTask.id) {
       lastSyncedSelectedIDRef.current = selectedTask.id;
       draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
+      beginDescriptionSession(draftSourceTaskIDRef.current, 'selected_task_effect');
       draftTouchedRef.current = false;
       draftEditVersionRef.current = 0;
       setDraftWithSnapshot(nextDraft);
@@ -1886,6 +1979,7 @@ function TaskList({ forcedView = '' }) {
     if (!draft) {
       draftTouchedRef.current = false;
       draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
+      beginDescriptionSession(draftSourceTaskIDRef.current, 'missing_draft_effect');
       draftEditVersionRef.current = 0;
       setDraftWithSnapshot(nextDraft);
       setDraftTimeRangeEnabled(!!nextDraft?.end_time);
@@ -1920,7 +2014,7 @@ function TaskList({ forcedView = '' }) {
         setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
     }
-  }, [selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot, tasksRaw, timezone]);
+  }, [beginDescriptionSession, selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot, tasksRaw, timezone]);
 
   useEffect(() => {
     if (!draft) return;
@@ -2512,21 +2606,276 @@ function TaskList({ forcedView = '' }) {
     };
   }, [draftRecurrenceLunarYear, timezone, workDayKeys]);
 
+  const handleDraftDescriptionChange = useCallback((nextValue, context = {}) => {
+    const value = String(nextValue || '');
+    const contextTaskID = Number(context?.taskID || 0);
+    const contextSessionID = Number(context?.sessionID || 0);
+    const activeTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current);
+    const draftSourceTaskID = Number(draftSourceTaskIDRef.current || 0);
+
+    if (contextTaskID && contextSessionID && !shouldAcceptDescriptionSessionInput(contextTaskID, contextSessionID)) {
+      logDraftSwitchDebug('draft.description.inputSkipOlderSession', {
+        context_task_id: contextTaskID,
+        context_session_id: contextSessionID,
+        latest_opened_session_id: Number(latestDescriptionSessionByTaskRef.current.get(contextTaskID) || 0),
+        latest_edited_session_id: Number(latestEditedDescriptionSessionByTaskRef.current.get(contextTaskID) || 0),
+        active_task_id: activeTaskID,
+        description: summarizeDebugText(value),
+      });
+      return;
+    }
+
+    if (!contextTaskID || contextTaskID === activeTaskID) {
+      markDescriptionSessionEdited(contextTaskID || activeTaskID, contextSessionID || activeDescriptionSessionRef.current);
+      markDraftTouched();
+      setDraftWithSnapshot((prev) => (prev ? { ...prev, description: value } : prev));
+      logDraftSwitchDebug('draft.description.activeInput', {
+        context_task_id: contextTaskID,
+        context_session_id: contextSessionID,
+        active_task_id: activeTaskID,
+        draft_source_task_id: draftSourceTaskID,
+        description: summarizeDebugText(value),
+      });
+      return;
+    }
+
+    const taskValue = context?.taskValue || null;
+    if (!taskValue || taskValue.read_only || getEffectiveTaskID(taskValue) !== contextTaskID) {
+      logDraftSwitchDebug('draft.description.staleSkip', {
+        reason: !taskValue ? 'missing_task' : taskValue.read_only ? 'read_only' : 'task_id_mismatch',
+        context_task_id: contextTaskID,
+        context_session_id: contextSessionID,
+        active_task_id: activeTaskID,
+        task_title: taskValue?.title || '',
+        description: summarizeDebugText(value),
+      });
+      return;
+    }
+
+    const baseDraft = context?.draftValue || buildDraftFromTask(taskValue);
+    if (!baseDraft) {
+      logDraftSwitchDebug('draft.description.staleSkip', {
+        reason: 'missing_draft',
+        context_task_id: contextTaskID,
+        context_session_id: contextSessionID,
+        active_task_id: activeTaskID,
+        task_title: taskValue?.title || '',
+        description: summarizeDebugText(value),
+      });
+      return;
+    }
+
+    const nextDraft = { ...baseDraft, description: value };
+    const originalDraft = buildDraftFromTask(taskValue);
+    const snapshotDirty = JSON.stringify(normalizeDraftForCompare(nextDraft))
+      !== JSON.stringify(normalizeDraftForCompare(originalDraft));
+    logDraftSwitchDebug('draft.description.staleInput', {
+      context_task_id: contextTaskID,
+      context_session_id: contextSessionID,
+      latest_opened_session_id: Number(latestDescriptionSessionByTaskRef.current.get(contextTaskID) || 0),
+      latest_edited_session_id: Number(latestEditedDescriptionSessionByTaskRef.current.get(contextTaskID) || 0),
+      active_task_id: activeTaskID,
+      task_title: taskValue?.title || '',
+      snapshot_dirty: snapshotDirty,
+      task_description: summarizeDebugText(taskValue?.description),
+      base_draft_description: summarizeDebugText(baseDraft?.description),
+      next_description: summarizeDebugText(value),
+    });
+    if (!snapshotDirty) return;
+
+    const built = buildDraftPayload(taskValue, nextDraft);
+    if (!built?.payload) {
+      logDraftSwitchDebug('draft.description.staleNoPayload', {
+        context_task_id: contextTaskID,
+        context_session_id: contextSessionID,
+        active_task_id: activeTaskID,
+      });
+      return;
+    }
+
+    markDescriptionSessionEdited(contextTaskID, contextSessionID);
+    void updateTaskLocal(queryClient, contextTaskID, built.payload, {
+      scheduleSync: true,
+      localOnly: false,
+      submitMeta: {
+        submittedAt: new Date().toISOString(),
+        submitSource: 'late_editor_input',
+      },
+    });
+    logDraftSwitchDebug('draft.description.staleQueued', {
+      context_task_id: contextTaskID,
+      context_session_id: contextSessionID,
+      active_task_id: activeTaskID,
+      task_title: taskValue?.title || '',
+      payload_description: summarizeDebugText(built.payload?.description),
+      payload_keys: Object.keys(built.payload || {}),
+    });
+  }, [
+    buildDraftFromTask,
+    buildDraftPayload,
+    getEffectiveTaskID,
+    markDescriptionSessionEdited,
+    markDraftTouched,
+    queryClient,
+    setDraftWithSnapshot,
+    shouldAcceptDescriptionSessionInput,
+  ]);
+
+  const captureCurrentDescriptionDraft = useCallback(() => {
+    const taskValue = selectedTaskSnapshotRef.current;
+    const taskID = getEffectiveTaskID(taskValue);
+    const draftValue = draftSnapshotRef.current;
+    const editorDebug = draftDescriptionEditorRef.current?.getDebugSnapshot?.() || null;
+    if (
+      !taskValue
+      || taskValue.read_only
+      || !draftValue
+      || !taskID
+      || Number(draftSourceTaskIDRef.current || 0) !== taskID
+    ) {
+      logDraftSwitchDebug('draft.capture.skip', {
+        task_id: taskID,
+        task_title: taskValue?.title || '',
+        draft_source_task_id: Number(draftSourceTaskIDRef.current || 0),
+        has_draft: !!draftValue,
+        read_only: !!taskValue?.read_only,
+        editor: editorDebug,
+      });
+      return draftValue;
+    }
+
+    const liveDescription = String(
+      draftDescriptionEditorRef.current?.getCachedValue?.()
+      ?? draftValue.description
+      ?? ''
+    );
+    if (liveDescription === String(draftValue.description || '')) {
+      logDraftSwitchDebug('draft.capture.same', {
+        task_id: taskID,
+        task_title: taskValue?.title || '',
+        draft_source_task_id: Number(draftSourceTaskIDRef.current || 0),
+        draft_description: summarizeDebugText(draftValue.description),
+        live_description: summarizeDebugText(liveDescription),
+        editor: draftDescriptionEditorRef.current?.getDebugSnapshot?.() || editorDebug,
+      });
+      return draftValue;
+    }
+
+    draftTouchedRef.current = true;
+    draftEditVersionRef.current += 1;
+    logDraftSwitchDebug('draft.capture.changed', {
+      task_id: taskID,
+      task_title: taskValue?.title || '',
+      draft_source_task_id: Number(draftSourceTaskIDRef.current || 0),
+      draft_edit_version: draftEditVersionRef.current,
+      draft_description: summarizeDebugText(draftValue.description),
+      live_description: summarizeDebugText(liveDescription),
+      editor: draftDescriptionEditorRef.current?.getDebugSnapshot?.() || editorDebug,
+    });
+    return setDraftWithSnapshot({
+      ...draftValue,
+      description: liveDescription,
+    });
+  }, [getEffectiveTaskID, setDraftWithSnapshot]);
+
+  const stageDraftForLeave = useCallback((submitSource = 'leave', options = {}) => {
+    const taskValue = options?.taskValue || selectedTaskSnapshotRef.current;
+    const draftValue = options?.draftValue || draftSnapshotRef.current;
+    const draftSourceTaskID = Number(options?.draftSourceTaskID || draftSourceTaskIDRef.current || 0);
+    const taskID = getEffectiveTaskID(taskValue);
+    const draftTitle = String(draftValue?.title || '').trim();
+    const draftBoundToTask = taskID > 0 && draftSourceTaskID === taskID;
+    const snapshotDirty = !!(
+      taskValue
+      && draftValue
+      && draftBoundToTask
+      && JSON.stringify(normalizeDraftForCompare(draftValue))
+        !== JSON.stringify(normalizeDraftForCompare(buildDraftFromTask(taskValue)))
+    );
+    const hasDirtyDraft = !!(
+      taskValue
+      && draftValue
+      && draftBoundToTask
+      && !taskValue.read_only
+      && draftTitle
+      && snapshotDirty
+    );
+    logDraftSwitchDebug('draft.stage.check', {
+      submit_source: submitSource,
+      task_id: taskID,
+      task_title: taskValue?.title || '',
+      draft_source_task_id: draftSourceTaskID,
+      draft_bound_to_task: draftBoundToTask,
+      snapshot_dirty: snapshotDirty,
+      has_dirty_draft: hasDirtyDraft,
+      task_description: summarizeDebugText(taskValue?.description),
+      draft_description: summarizeDebugText(draftValue?.description),
+    });
+    if (!hasDirtyDraft) return false;
+
+    const built = buildDraftPayload(taskValue, draftValue);
+    if (!built?.payload) {
+      logDraftSwitchDebug('draft.stage.noPayload', {
+        submit_source: submitSource,
+        task_id: taskID,
+      });
+      return false;
+    }
+
+    void updateTaskLocal(queryClient, taskID, built.payload, {
+      scheduleSync: false,
+      localOnly: true,
+      submitMeta: {
+        submittedAt: new Date().toISOString(),
+        submitSource,
+      },
+    });
+    pendingDraftSubmitRef.current = { taskID, payload: built.payload };
+    setPendingSubmitTaskID(taskID);
+    logDraftSwitchDebug('draft.stage.localOnlyQueued', {
+      submit_source: submitSource,
+      task_id: taskID,
+      task_title: taskValue?.title || '',
+      payload_description: summarizeDebugText(built.payload?.description),
+      payload_keys: Object.keys(built.payload || {}),
+    });
+    return true;
+  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, queryClient]);
+
   const submitPendingDraft = useCallback(async (taskIDOverride = 0, submitSource = 'idle') => {
     const pending = pendingDraftSubmitRef.current;
     if (!pending?.taskID || !pending?.payload) {
+      logDraftSwitchDebug('draft.submit.skipNoPending', {
+        task_id_override: Number(taskIDOverride || 0),
+        submit_source: submitSource,
+      });
       return;
     }
     const taskID = Number(taskIDOverride || pending.taskID || 0);
     if (!taskID || taskID !== Number(pending.taskID)) {
+      logDraftSwitchDebug('draft.submit.skipTaskMismatch', {
+        task_id_override: Number(taskIDOverride || 0),
+        pending_task_id: Number(pending.taskID || 0),
+        submit_source: submitSource,
+      });
       return;
     }
     if (submittingDraft) {
+      logDraftSwitchDebug('draft.submit.skipSubmitting', {
+        task_id: taskID,
+        submit_source: submitSource,
+      });
       return;
     }
 
     setSubmittingDraft(true);
     try {
+      logDraftSwitchDebug('draft.submit.start', {
+        task_id: taskID,
+        submit_source: submitSource,
+        payload_description: summarizeDebugText(pending.payload?.description),
+        selected_task_id: getEffectiveTaskID(selectedTaskSnapshotRef.current),
+      });
       logTimeDebug('taskList.submitPendingDraft.start', {
         task_id: taskID,
         submit_source: submitSource,
@@ -2543,8 +2892,17 @@ function TaskList({ forcedView = '' }) {
       });
       pendingDraftSubmitRef.current = { taskID: 0, payload: null };
       setPendingSubmitTaskID(0);
+      logDraftSwitchDebug('draft.submit.done', {
+        task_id: taskID,
+        submit_source: submitSource,
+      });
     } catch (err) {
       console.error('Failed to submit task details:', err);
+      logDraftSwitchDebug('draft.submit.error', {
+        task_id: taskID,
+        submit_source: submitSource,
+        error: err?.message || String(err),
+      });
     } finally {
       setSubmittingDraft(false);
     }
@@ -2609,6 +2967,13 @@ function TaskList({ forcedView = '' }) {
 
     setSavingDraft(true);
     try {
+      logDraftSwitchDebug('draft.save.start', {
+        task_id: targetTaskID,
+        submit_after: !!submitAfter,
+        submit_source: submitSource,
+        edit_version_at_start: editVersionAtStart,
+        draft_description: summarizeDebugText(draftValue.description),
+      });
       if (built.normalizedTitle !== title || String(built.normalizedPriority) !== String(draftValue.priority)) {
         setDraftWithSnapshot((prev) => (prev ? {
           ...prev,
@@ -2626,6 +2991,13 @@ function TaskList({ forcedView = '' }) {
       }
       const hasNewEdits = draftEditVersionRef.current !== editVersionAtStart;
       if (hasNewEdits) {
+        logDraftSwitchDebug('draft.save.hasNewEdits', {
+          task_id: targetTaskID,
+          edit_version_at_start: editVersionAtStart,
+          edit_version_now: draftEditVersionRef.current,
+          submit_after: !!submitAfter,
+          submit_source: submitSource,
+        });
         if (submitAfter) {
           pendingImmediateSubmitSourceRef.current = submitSource;
         }
@@ -2647,9 +3019,21 @@ function TaskList({ forcedView = '' }) {
       if (submitAfter) {
         void submitPendingDraft(targetTaskID, submitSource);
       }
+      logDraftSwitchDebug('draft.save.done', {
+        task_id: targetTaskID,
+        submit_after: !!submitAfter,
+        submit_source: submitSource,
+        payload_description: summarizeDebugText(built.payload?.description),
+      });
       return true;
     } catch (err) {
       console.error('Failed to save task details:', err);
+      logDraftSwitchDebug('draft.save.error', {
+        task_id: targetTaskID,
+        submit_after: !!submitAfter,
+        submit_source: submitSource,
+        error: err?.message || String(err),
+      });
       return false;
     } finally {
       setSavingDraft(false);
@@ -2707,6 +3091,20 @@ function TaskList({ forcedView = '' }) {
         && draftTitle
         && snapshotDirty
       );
+      logDraftSwitchDebug('draft.flush.check', {
+        submit_source: submitSource,
+        task_id: taskID,
+        task_title: taskValue?.title || '',
+        draft_source_task_id: draftSourceTaskID,
+        has_pending_submit: hasPendingSubmit,
+        pending_task_id: pendingTaskID,
+        draft_bound_to_task: draftBoundToTask,
+        snapshot_dirty: snapshotDirty,
+        has_dirty_draft: hasDirtyDraft,
+        task_description: summarizeDebugText(taskValue?.description),
+        draft_description: summarizeDebugText(draftValue?.description),
+        pending_description: summarizeDebugText(pendingPayload?.description),
+      });
       if (!hasPendingSubmit && !hasDirtyDraft) {
         return;
       }
@@ -2734,6 +3132,11 @@ function TaskList({ forcedView = '' }) {
               pendingDraftSubmitRef.current = { taskID: 0, payload: null };
               setPendingSubmitTaskID(0);
             }
+            logDraftSwitchDebug('draft.flush.dirtySubmitted', {
+              submit_source: submitSource,
+              task_id: targetTaskID,
+              payload_description: summarizeDebugText(built.payload?.description),
+            });
           }
         } else if (hasPendingSubmit) {
           await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
@@ -2754,9 +3157,20 @@ function TaskList({ forcedView = '' }) {
             pendingDraftSubmitRef.current = { taskID: 0, payload: null };
             setPendingSubmitTaskID(0);
           }
+          logDraftSwitchDebug('draft.flush.pendingSubmitted', {
+            submit_source: submitSource,
+            task_id: pendingTaskID,
+            payload_description: summarizeDebugText(pendingPayload?.description),
+          });
         }
       } catch (error) {
         console.error('Failed to flush draft on leave:', error);
+        logDraftSwitchDebug('draft.flush.error', {
+          submit_source: submitSource,
+          task_id: taskID,
+          pending_task_id: pendingTaskID,
+          error: error?.message || String(error),
+        });
       }
     };
     const queued = flushDraftQueueRef.current.then(runFlush, runFlush);
@@ -3034,6 +3448,14 @@ function TaskList({ forcedView = '' }) {
     // 统一使用右侧面板编辑，包括重复任务实例
     const nextTaskID = Number(task?.id || 0);
     if (!nextTaskID && !task?.virtual_occurrence) return;
+    logDraftSwitchDebug('select.start', {
+      next_task_id: task?.id || 0,
+      next_task_title: task?.title || '',
+      current_selected_task_id: selectedTaskSnapshotRef.current?.id || 0,
+      current_effective_task_id: getEffectiveTaskID(selectedTaskSnapshotRef.current),
+      current_draft_source_task_id: Number(draftSourceTaskIDRef.current || 0),
+      current_draft_description: summarizeDebugText(draftSnapshotRef.current?.description),
+    });
 
     // 对于虚拟实例：
     // - sourceTaskID 是源任务的数字 ID，用于保存操作
@@ -3050,36 +3472,26 @@ function TaskList({ forcedView = '' }) {
     // 对于虚拟实例，使用源任务的数字 ID
     const currentTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current);
     const currentTaskSnapshot = selectedTaskSnapshotRef.current;
-    let currentDraftSnapshot = draftSnapshotRef.current;
+    let currentDraftSnapshot = captureCurrentDescriptionDraft() || draftSnapshotRef.current;
     const currentDraftSourceTaskID = Number(draftSourceTaskIDRef.current || 0);
-    if (
-      currentTaskID > 0
-      && sourceTaskID !== currentTaskID
-      && currentDraftSnapshot
-      && currentDraftSourceTaskID === currentTaskID
-    ) {
-      const liveDescription = String(
-        draftDescriptionEditorRef.current?.getCachedValue?.()
-        ?? currentDraftSnapshot.description
-        ?? ''
-      );
-      const draftDescription = String(currentDraftSnapshot.description || '');
-      if (liveDescription !== draftDescription) {
-        currentDraftSnapshot = {
-          ...currentDraftSnapshot,
-          description: liveDescription,
-        };
-      }
-    }
     // 比较选中状态（字符串 ID）
     const currentSelectedID = String(selectedTaskSnapshotRef.current?.id || '');
     if (currentSelectedID && selectedID === currentSelectedID) {
+      logDraftSwitchDebug('select.sameTask', {
+        selected_id: selectedID,
+        source_task_id: sourceTaskID,
+      });
       if (isMobileViewport) {
         openAdvancedModal(task);
       }
       return;
     }
     if (currentTaskID > 0 && sourceTaskID !== currentTaskID) {
+      stageDraftForLeave('switch_task_stage', {
+        taskValue: currentTaskSnapshot,
+        draftValue: currentDraftSnapshot,
+        draftSourceTaskID: currentDraftSourceTaskID,
+      });
       void flushDraftOnLeave('switch_task', {
         taskValue: currentTaskSnapshot,
         draftValue: currentDraftSnapshot,
@@ -3090,7 +3502,15 @@ function TaskList({ forcedView = '' }) {
       return;
     }
     const nextDraftSnapshot = buildDraftFromTask(task);
+    logDraftSwitchDebug('select.applyNextDraft', {
+      selected_id: selectedID,
+      source_task_id: sourceTaskID,
+      next_task_title: task?.title || '',
+      next_task_description: summarizeDebugText(task?.description),
+      next_draft_description: summarizeDebugText(nextDraftSnapshot?.description),
+    });
     draftSourceTaskIDRef.current = sourceTaskID;
+    beginDescriptionSession(sourceTaskID, 'select_task');
     draftTouchedRef.current = false;
     draftEditVersionRef.current = 0;
     activeRenderTaskIDRef.current = sourceTaskID;
@@ -3105,7 +3525,17 @@ function TaskList({ forcedView = '' }) {
     if (isMobileViewport) {
       openAdvancedModal(task);
     }
-  }, [buildDraftFromTask, flushDraftOnLeave, getEffectiveTaskID, isMobileViewport, openAdvancedModal, setDraftWithSnapshot]);
+  }, [
+    buildDraftFromTask,
+    beginDescriptionSession,
+    captureCurrentDescriptionDraft,
+    flushDraftOnLeave,
+    getEffectiveTaskID,
+    isMobileViewport,
+    openAdvancedModal,
+    setDraftWithSnapshot,
+    stageDraftForLeave,
+  ]);
 
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
@@ -3310,6 +3740,7 @@ function TaskList({ forcedView = '' }) {
                           timezone={timezone}
                           labels={listLabels}
                           timeMode={rowTimeMode}
+                          onBeforeSelectTask={captureCurrentDescriptionDraft}
                           onSelectTask={handleSelectTask}
                           onToggleStatus={handleStatusChange}
                         />
@@ -4118,7 +4549,12 @@ function TaskList({ forcedView = '' }) {
                     ref={draftDescriptionEditorRef}
                     key={`task-editor-${selectedTask.id}`}
                     value={draft.description}
-                    onChange={(nextValue) => handleDraftFieldChange('description', nextValue)}
+                    onChange={(nextValue) => handleDraftDescriptionChange(nextValue, {
+                      taskID: getEffectiveTaskID(selectedTask),
+                      sessionID: activeDescriptionSessionRef.current,
+                      taskValue: selectedTask,
+                      draftValue: draft,
+                    })}
                     onSaveShortcut={handleDraftEditorSaveShortcut}
                     placeholder={t('task.description')}
                     className="min-h-0 min-w-0 flex-1 overflow-hidden"
