@@ -90,6 +90,7 @@ let intervalCancelFn = null;
 let platformUnlisteners = [];
 const syncFinishedListeners = new Set();
 const taskIDRemappedListeners = new Set();
+const inFlightOutboxOpIDs = new Set();
 
 function clampSyncIntervalSeconds(value) {
   const parsed = Number.parseInt(value, 10);
@@ -554,9 +555,11 @@ async function processOutbox() {
         continue;
       }
 
-      await patchTaskSyncState(op.entity_id, { sync_state: 'syncing', last_error: '' });
-
+      if (op?.op_id) {
+        inFlightOutboxOpIDs.add(op.op_id);
+      }
       try {
+        await patchTaskSyncState(op.entity_id, { sync_state: 'syncing', last_error: '' });
         await executeOutboxOperation(op);
         await removeOutbox(op.op_id);
         emitSyncTrace('outbox_applied', {
@@ -569,6 +572,10 @@ async function processOutbox() {
         await handleOutboxFailure(op, error);
         if (!status || status >= 500) {
           return;
+        }
+      } finally {
+        if (op?.op_id) {
+          inFlightOutboxOpIDs.delete(op.op_id);
         }
       }
     }
@@ -812,7 +819,8 @@ export async function enqueueTaskOperation(op, options = {}) {
     client_submitted_at: normalizeClientSubmittedAt(op.client_submitted_at || ''),
     submit_source: typeof op.submit_source === 'string' ? op.submit_source.trim() : '',
   };
-  const all = await readOutbox();
+  const all = (await readOutbox())
+    .filter((item) => !inFlightOutboxOpIDs.has(item?.op_id));
   const plan = getCoalescePlan(all, normalized);
 
   if (plan.mode === 'merge_into_create' && plan.updateCreate) {

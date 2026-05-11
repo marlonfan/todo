@@ -2536,7 +2536,6 @@ function TaskList({ forcedView = '' }) {
       await updateTaskLocal(queryClient, taskID, pending.payload, {
         scheduleSync: true,
         localOnly: false,
-        skipOptimistic: true,
         submitMeta: {
           submittedAt: new Date().toISOString(),
           submitSource,
@@ -2725,7 +2724,6 @@ function TaskList({ forcedView = '' }) {
             await updateTaskLocal(queryClient, targetTaskID, built.payload, {
               scheduleSync: true,
               localOnly: false,
-              skipOptimistic: true,
               submitMeta: {
                 submittedAt: new Date().toISOString(),
                 submitSource,
@@ -2746,7 +2744,6 @@ function TaskList({ forcedView = '' }) {
           await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
             scheduleSync: true,
             localOnly: false,
-            skipOptimistic: true,
             submitMeta: {
               submittedAt: new Date().toISOString(),
               submitSource,

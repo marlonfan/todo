@@ -1406,7 +1406,6 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         savePromise = updateTaskLocal(queryClient, task.id, payload, {
           localOnly: false,
           scheduleSync: true,
-          skipOptimistic: true,
           submitMeta,
         });
         if (!silent) {
