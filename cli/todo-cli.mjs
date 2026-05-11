@@ -834,7 +834,12 @@ async function handleDoctor(ctx) {
 function help(topic = []) {
   const [resource, action] = topic;
   if (resource === 'task') return taskHelp(action);
+  if (resource === 'auth') return authHelp();
+  if (resource === 'category') return categoryHelp();
+  if (resource === 'calendar') return calendarHelp();
   if (resource === 'notify') return notifyHelp();
+  if (resource === 'config') return configHelp();
+  if (resource === 'api') return apiHelp();
   if (resource === 'recurrence') return recurrenceHelp();
 
   return `todo-cli - HTTP CLI for the Todo app
@@ -852,6 +857,7 @@ Global options:
 Tips:
   Flags with values are safest after resource/action, especially through npx.
   Example: npx -y @marlonfan/todo-app-cli@latest task create --base-url URL --title "Task"
+  Use --help after a resource for focused help, e.g. todo-cli task --help or todo-cli notify --help.
 
 First run:
   todo-cli init --base-url https://your-todo-server.example.com
@@ -903,6 +909,24 @@ Raw API:
 }
 
 function taskHelp(action) {
+  if (action === 'list') {
+    return `todo-cli task list - list tasks
+
+Examples:
+  todo-cli task list --status pending --format table
+  todo-cli task list --category-id 3
+  todo-cli task list --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00
+  todo-cli task list --summary=false
+
+Filters:
+  --status pending|completed|cancelled
+  --category-id ID
+  --start RFC3339
+  --end RFC3339
+  --summary=false     Return full task records instead of compact rows
+`;
+  }
+
   if (['create', '+add', 'update', 'schedule'].includes(action)) {
     return `todo-cli task ${action || 'create'} - create or update a task
 
@@ -910,6 +934,8 @@ Examples:
   todo-cli task create --title "当日复盘" --start-time-local "2026-05-11T20:30:00" --timezone Asia/Shanghai
   todo-cli task create --title "当日复盘" --start-time-local "2026-05-11T20:30:00" --timezone Asia/Shanghai --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
   todo-cli task create --title "全天任务" --due-date 2026-05-11 --all-day=true
+  todo-cli task update 42 --title "New title" --if-match 3
+  todo-cli task schedule 42 --start-time-local "2026-05-11T14:00:00" --timezone Asia/Shanghai
 
 Task fields:
   --title TEXT                         Required for create
@@ -940,6 +966,47 @@ Reminder behavior:
 `;
   }
 
+  if (['remind', 'notify', 'notification', 'notifications'].includes(action)) {
+    return `todo-cli task reminders - inspect or create task reminders
+
+Examples:
+  todo-cli task notifications 42
+  todo-cli task remind 42 --notify-at 2026-05-11T20:25:00+08:00
+  todo-cli task remind 42 --notify-at 2026-05-11T20:25:00+08:00 --channel ntfy --config '{"topic":"todo"}'
+
+Notes:
+  task notifications <id> lists reminders for a task.
+  task remind <id> creates a manual reminder.
+  Without --channel/--config, the server uses the user's default notification setting.
+`;
+  }
+
+  if (['complete', 'pending', 'reopen', 'cancel'].includes(action)) {
+    return `todo-cli task status - update task status
+
+Examples:
+  todo-cli task complete 42
+  todo-cli task pending 42
+  todo-cli task cancel 42
+
+Safety:
+  Status updates send mutation metadata automatically.
+  Use --if-match REVISION only with task update/schedule payload changes.
+`;
+  }
+
+  if (action === 'delete') {
+    return `todo-cli task delete - delete a task
+
+Examples:
+  todo-cli task delete 42 --dry-run
+  todo-cli task delete 42 --yes
+
+Safety:
+  Deleting requires --yes unless --dry-run is present.
+`;
+  }
+
   return `todo-cli task - task commands
 
 Examples:
@@ -952,6 +1019,54 @@ Examples:
   todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
   todo-cli task notifications <id>
   todo-cli task delete <id> --yes
+`;
+}
+
+function authHelp() {
+  return `todo-cli auth - authentication and user profile
+
+Examples:
+  todo-cli auth register --username alice --email alice@example.com --password secret123
+  todo-cli auth login --username alice --password secret123
+  todo-cli auth login --username alice --password secret123 --no-save
+  todo-cli auth status
+  todo-cli auth me
+  todo-cli auth logout
+
+Notes:
+  Login stores token and user in ~/.todo-cli/config.json unless --no-save is passed.
+  auth me includes timezone and default reminder fields such as default_reminder_enabled and default_reminder_minutes.
+`;
+}
+
+function categoryHelp() {
+  return `todo-cli category - manage task categories
+
+Examples:
+  todo-cli category list --format table
+  todo-cli category get 1
+  todo-cli category create --name Work --color '#2563eb'
+  todo-cli category update 1 --name Personal --color '#16a34a'
+  todo-cli category delete 1 --dry-run
+  todo-cli category delete 1 --yes
+
+Notes:
+  Use category IDs with task commands via --category-ids 1,2 or --category-id 1.
+  Deleting requires --yes unless --dry-run is present.
+`;
+}
+
+function calendarHelp() {
+  return `todo-cli calendar - inspect calendar events
+
+Examples:
+  todo-cli calendar +agenda --days 7 --format table
+  todo-cli calendar events --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00
+  todo-cli calendar events --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00 --summary=false
+
+Notes:
+  calendar events requires --start and --end.
+  Use RFC3339 timestamps with timezone offsets for predictable boundaries.
 `;
 }
 
@@ -973,6 +1088,39 @@ Notes:
     todo-cli auth me
   Check delivery settings with:
     todo-cli notify settings
+`;
+}
+
+function configHelp() {
+  return `todo-cli config - inspect or edit CLI configuration
+
+Examples:
+  todo-cli config show
+  todo-cli config set --base-url https://your-todo-server.example.com
+  todo-cli config set --token TOKEN
+  todo-cli config reset
+
+Precedence:
+  --base-url URL > TODO_BASE_URL > config file > ${DEFAULT_BASE_URL}
+  --token TOKEN > TODO_TOKEN > config file
+`;
+}
+
+function apiHelp() {
+  return `todo-cli api - raw HTTP API escape hatch
+
+Examples:
+  todo-cli api GET /tasks
+  todo-cli api PATCH /tasks/42/status --data '{"status":"completed"}'
+  todo-cli api GET /calendar --query '{"start":"2026-05-11T00:00:00+08:00","end":"2026-05-12T00:00:00+08:00"}'
+  todo-cli api GET /auth/me
+
+Options:
+  --data JSON
+  --query JSON
+  --auth=false       Skip bearer token for public endpoints
+
+Prefer wrapped commands first. Use api only when no resource command exists.
 `;
 }
 

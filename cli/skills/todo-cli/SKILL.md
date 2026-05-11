@@ -88,6 +88,7 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - Prefer wrapped resource commands before raw API.
 - Use raw API only when no wrapped command exists.
 - For reminders, check `todo_cli auth me` and `todo_cli notify settings` before promising delivery. Creating a scheduled task only auto-generates reminders when the user's `default_reminder_enabled` is true and a default notify setting exists.
+- When uncertain about flags, run focused help first: `todo_cli task --help`, `todo_cli task create --help`, `todo_cli notify --help`, `todo_cli calendar --help`, `todo_cli category --help`, `todo_cli auth --help`, or `todo_cli api --help`.
 
 ## Common Commands
 
@@ -108,6 +109,7 @@ todo_cli auth logout
 ```
 
 Login stores the token in `~/.todo-cli/config.json` unless `--no-save` is passed.
+Use `todo_cli auth --help` for auth/profile examples.
 
 ### List Tasks
 
@@ -208,6 +210,7 @@ todo_cli task schedule 42 --start-time-local "2026-05-11T14:00:00" --timezone As
 ```
 
 Use `--if-match REVISION` when the task record includes a `revision`; this helps avoid overwriting newer edits.
+Use `todo_cli task update --help` or `todo_cli task schedule --help` when changing task fields.
 
 ### Delete Tasks
 
@@ -232,6 +235,8 @@ todo_cli category update 3 --name Personal
 todo_cli category delete 3 --dry-run
 ```
 
+Use `todo_cli category --help` before creating, updating, or deleting categories.
+
 ### Calendar
 
 ```bash
@@ -240,6 +245,8 @@ todo_cli calendar events \
   --start 2026-05-11T00:00:00+08:00 \
   --end 2026-05-12T00:00:00+08:00
 ```
+
+Use `todo_cli calendar --help` for range query examples. Calendar event ranges require both `--start` and `--end`.
 
 ### Raw API
 
@@ -250,6 +257,8 @@ todo_cli api GET /tasks
 todo_cli api PATCH /tasks/42/status --data '{"status":"completed"}'
 todo_cli api GET /calendar --query '{"start":"2026-05-11T00:00:00+08:00","end":"2026-05-12T00:00:00+08:00"}'
 ```
+
+Use `todo_cli api --help` before raw calls.
 
 ## Output Contract
 
