@@ -80,10 +80,18 @@ Global flags:
 
 ## Skill Installation
 
-Install the AI-facing skill directly with `skills`:
+Install the AI-facing skill directly with `skills`.
+
+If the GitHub repository is public:
 
 ```bash
 npx skills add marlonfan/todo@todo-cli -g -a codex -y
+```
+
+If the repository is private and your machine has GitHub SSH access:
+
+```bash
+npx skills add 'git@github.com:marlonfan/todo.git#main@todo-cli' -g -a codex -y
 ```
 
 For all supported agents:
@@ -217,4 +225,10 @@ The recommended installer path is:
 
 ```bash
 npx skills add marlonfan/todo@todo-cli -g -a codex -y
+```
+
+For private repository access, use:
+
+```bash
+npx skills add 'git@github.com:marlonfan/todo.git#main@todo-cli' -g -a codex -y
 ```
