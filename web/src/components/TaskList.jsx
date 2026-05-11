@@ -3058,7 +3058,11 @@ function TaskList({ forcedView = '' }) {
       && currentDraftSnapshot
       && currentDraftSourceTaskID === currentTaskID
     ) {
-      const liveDescription = String(draftDescriptionEditorRef.current?.getValue?.() || '');
+      const liveDescription = String(
+        draftDescriptionEditorRef.current?.getCachedValue?.()
+        ?? currentDraftSnapshot.description
+        ?? ''
+      );
       const draftDescription = String(currentDraftSnapshot.description || '');
       if (liveDescription !== draftDescription) {
         currentDraftSnapshot = {
