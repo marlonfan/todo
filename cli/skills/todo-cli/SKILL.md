@@ -74,6 +74,7 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 ## Operating Rules
 
 - Define `todo_cli() { ... }` from Command Setup before running Todo commands in a new shell session.
+- Put resource/action before flags when possible, especially with `npx`: use `todo_cli task create --base-url URL --title "Task"`, not `todo_cli --base-url URL task create --title "Task"`.
 - If `todo-cli` is not found, do not switch to unrelated task systems such as Feishu/Lark tasks. Use the `npx -y @marlonfan/todo-app-cli@latest` fallback or ask the user to install the Todo CLI.
 - Start with `todo_cli doctor` when server availability, configured URL, or auth state is unknown.
 - Use `todo_cli health` only when you need a narrow server liveness check.
@@ -86,6 +87,7 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - Deleting requires `--yes`; do not add `--yes` unless the user explicitly asked to delete.
 - Prefer wrapped resource commands before raw API.
 - Use raw API only when no wrapped command exists.
+- For reminders, check `todo_cli auth me` and `todo_cli notify settings` before promising delivery. Creating a scheduled task only auto-generates reminders when the user's `default_reminder_enabled` is true and a default notify setting exists.
 
 ## Common Commands
 
@@ -135,6 +137,20 @@ todo_cli task create \
   --timezone Asia/Shanghai
 ```
 
+For a workday recurring task at 20:30:
+
+```bash
+todo_cli task create \
+  --title "当日复盘" \
+  --description "工作日晚上进行当日复盘。" \
+  --priority medium \
+  --start-time-local "2026-05-11T20:30:00" \
+  --timezone Asia/Shanghai \
+  --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
+```
+
+Use the next valid local date for the first occurrence. If today's requested time has already passed, start on the next matching weekday.
+
 Useful flags:
 
 - `--title`
@@ -146,6 +162,39 @@ Useful flags:
 - `--all-day true|false`
 - `--category-ids 1,2`
 - `--recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO"]}'`
+- Weekdays use `["MO","TU","WE","TH","FR"]`.
+- Use `todo_cli recurrence --help` for more examples.
+
+### Reminder Workflow
+
+```bash
+todo_cli auth me
+todo_cli notify settings
+todo_cli task notifications TASK_ID
+todo_cli task remind TASK_ID --notify-at "2026-05-11T20:30:00+08:00"
+```
+
+Automatic reminders:
+
+- `auth me` returns `default_reminder_enabled` and `default_reminder_minutes`.
+- `notify settings` returns delivery channels; one setting must be `is_default: true`.
+- When both are configured, creating or updating a scheduled task generates one `default_auto` reminder, usually `default_reminder_minutes` before the task start.
+- Always verify with `task notifications TASK_ID` after creating a reminder-bearing task.
+
+Manual reminders:
+
+- Use `task remind TASK_ID --notify-at RFC3339` when the user asks for an exact notification time, when default reminders are disabled, or when no default notify setting exists.
+- If the user says "晚上 8:30 提醒我复盘", interpret 20:30 as the task time. If they explicitly want the notification exactly at 20:30, add a manual reminder at `20:30`.
+
+Notification settings:
+
+```bash
+todo_cli notify settings
+todo_cli notify channels
+todo_cli notify create-setting --channel ntfy --config '{"topic":"todo"}' --default=true
+todo_cli notify default SETTING_ID
+todo_cli notify reconcile
+```
 
 ### Update Tasks
 

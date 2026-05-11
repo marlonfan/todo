@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
+const NO_VALUE_FLAGS = new Set(['dry-run', 'help', 'h', 'yes']);
 
 class CliError extends Error {
   constructor(message, code = 1) {
@@ -41,6 +42,8 @@ function parseArgs(argv) {
       if (key.startsWith('no-')) {
         key = key.slice(3);
         value = false;
+      } else if (NO_VALUE_FLAGS.has(key)) {
+        value = true;
       } else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
         value = argv[i + 1];
         i += 1;
@@ -262,6 +265,26 @@ function buildMutationHeaders(flags, source) {
   headers['X-Client-Submit-Source'] = source;
   headers['X-Client-Op-Id'] = optionalString(flags, ['client-op-id', 'op-id']) || randomUUID();
   return headers;
+}
+
+function buildNotificationPayload(flags) {
+  const notifyAt = requireValue(flags, ['notify-at'], 'notify-at');
+  const payload = { notify_at: notifyAt };
+  const channel = optionalString(flags, ['channel']);
+  if (channel !== undefined) payload.channel = channel;
+  const config = parseJSONFlag(optionalString(flags, ['config']), 'config');
+  if (config !== undefined) payload.config = config;
+  return payload;
+}
+
+function buildNotifySettingPayload(flags) {
+  const payload = {
+    channel: requireValue(flags, ['channel']),
+    config: parseJSONFlag(requireValue(flags, ['config']), 'config'),
+  };
+  const isDefault = optionalBool(flags, ['default']);
+  if (isDefault !== undefined) payload.is_default = isDefault;
+  return payload;
 }
 
 function buildQuery(flags, names) {
@@ -627,6 +650,13 @@ async function handleTask(ctx, args) {
     if (!id) throw new CliError('missing task id');
     return apiRequest(ctx, 'GET', `/tasks/${id}/notifications`);
   }
+  if (['remind', 'notify', 'notification'].includes(action)) {
+    if (!id) throw new CliError('missing task id');
+    return apiRequest(ctx, 'POST', `/tasks/${id}/notifications`, {
+      data: buildNotificationPayload(ctx.flags),
+      headers: buildMutationHeaders(ctx.flags, 'cli.task.remind'),
+    });
+  }
   if (action === '+today') {
     const tasks = await apiRequest(ctx, 'GET', '/tasks', { query: localRange(1, 0) }) || [];
     return tasks.map(summarizeTask);
@@ -678,6 +708,47 @@ async function handleCategory(ctx, args) {
     return apiRequest(ctx, 'DELETE', `/categories/${id}`);
   }
   throw new CliError(`unknown category action: ${action}`);
+}
+
+async function handleNotify(ctx, args) {
+  const action = args[0] || 'settings';
+  const id = args[1];
+
+  if (['settings', 'list'].includes(action)) {
+    return apiRequest(ctx, 'GET', '/notify/settings');
+  }
+  if (action === 'channels') {
+    return apiRequest(ctx, 'GET', '/notify/channels');
+  }
+  if (['create-setting', 'create'].includes(action)) {
+    return apiRequest(ctx, 'POST', '/notify/settings', {
+      data: buildNotifySettingPayload(ctx.flags),
+      headers: buildMutationHeaders(ctx.flags, 'cli.notify.create-setting'),
+    });
+  }
+  if (['default', 'set-default'].includes(action)) {
+    if (!id) throw new CliError('missing notify setting id');
+    return apiRequest(ctx, 'PATCH', `/notify/settings/${id}/default`, {
+      headers: buildMutationHeaders(ctx.flags, 'cli.notify.default'),
+    });
+  }
+  if (action === 'delete') {
+    if (!id) throw new CliError('missing notify setting id');
+    if (!flagEnabled(ctx.flags, ['yes']) && !flagEnabled(ctx.flags, ['dry-run'])) throw new CliError('delete requires --yes');
+    return apiRequest(ctx, 'DELETE', `/notify/settings/${id}`);
+  }
+  if (action === 'test') {
+    return apiRequest(ctx, 'POST', '/notify/test', {
+      data: buildNotifySettingPayload(ctx.flags),
+      headers: buildMutationHeaders(ctx.flags, 'cli.notify.test'),
+    });
+  }
+  if (['reconcile', 'rebuild-reminders'].includes(action)) {
+    return apiRequest(ctx, 'POST', '/auth/reconcile-reminders', {
+      headers: buildMutationHeaders(ctx.flags, 'cli.notify.reconcile'),
+    });
+  }
+  throw new CliError(`unknown notify action: ${action}`);
 }
 
 async function handleCalendar(ctx, args) {
@@ -760,7 +831,12 @@ async function handleDoctor(ctx) {
   return report;
 }
 
-function help() {
+function help(topic = []) {
+  const [resource, action] = topic;
+  if (resource === 'task') return taskHelp(action);
+  if (resource === 'notify') return notifyHelp();
+  if (resource === 'recurrence') return recurrenceHelp();
+
   return `todo-cli - HTTP CLI for the Todo app
 
 Usage:
@@ -772,6 +848,10 @@ Global options:
   --config PATH        Config path, default ~/.todo-cli/config.json
   --format json|table|ndjson
   --dry-run            Print request without sending it
+
+Tips:
+  Flags with values are safest after resource/action, especially through npx.
+  Example: npx -y @marlonfan/todo-app-cli@latest task create --base-url URL --title "Task"
 
 First run:
   todo-cli init --base-url https://your-todo-server.example.com
@@ -793,6 +873,8 @@ Tasks:
   todo-cli task complete <id>
   todo-cli task pending <id>
   todo-cli task cancel <id>
+  todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
+  todo-cli task notifications <id>
   todo-cli task delete <id> --yes
   todo-cli task +today --format table
   todo-cli task +inbox --format table
@@ -808,16 +890,116 @@ Calendar:
   todo-cli calendar events --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00
   todo-cli calendar +agenda --days 7 --format table
 
+Notifications:
+  todo-cli notify settings
+  todo-cli notify channels
+  todo-cli notify create-setting --channel ntfy --config '{"topic":"todo"}' --default=true
+  todo-cli notify reconcile
+
 Raw API:
   todo-cli api GET /tasks
   todo-cli api PATCH /tasks/1/status --data '{"status":"completed"}'
 `;
 }
 
+function taskHelp(action) {
+  if (['create', '+add', 'update', 'schedule'].includes(action)) {
+    return `todo-cli task ${action || 'create'} - create or update a task
+
+Examples:
+  todo-cli task create --title "当日复盘" --start-time-local "2026-05-11T20:30:00" --timezone Asia/Shanghai
+  todo-cli task create --title "当日复盘" --start-time-local "2026-05-11T20:30:00" --timezone Asia/Shanghai --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
+  todo-cli task create --title "全天任务" --due-date 2026-05-11 --all-day=true
+
+Task fields:
+  --title TEXT                         Required for create
+  --description TEXT, --desc TEXT
+  --priority low|medium|high           Maps to -1|0|1
+  --status pending|completed|cancelled
+  --start-time RFC3339                 Absolute timestamp
+  --end-time RFC3339
+  --start-time-local YYYY-MM-DDTHH:mm  Local wall time, pair with --timezone
+  --end-time-local YYYY-MM-DDTHH:mm
+  --timezone TZ                        Example: Asia/Shanghai
+  --due-date YYYY-MM-DD
+  --all-day=true|false
+  --category-ids 1,2
+  --recurrence-rule JSON               {"freq":"weekly","interval":1,"byday":["MO"]}
+  --recurrence-end-date YYYY-MM-DD
+  --if-match REVISION                  Update guard
+  --client-op-id ID                    Idempotency/debug id
+
+Reminder behavior:
+  New tasks use the user's default reminder settings. Check with:
+    todo-cli auth me
+    todo-cli notify settings
+  Verify generated reminders after create with:
+    todo-cli task notifications <id>
+  Add a manual reminder with:
+    todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
+`;
+  }
+
+  return `todo-cli task - task commands
+
+Examples:
+  todo-cli task list --status pending --format table
+  todo-cli task get <id>
+  todo-cli task create --title "Ship CLI"
+  todo-cli task update <id> --title "New title" --if-match <revision>
+  todo-cli task complete <id>
+  todo-cli task schedule <id> --start-time-local "2026-05-11T14:00:00" --timezone Asia/Shanghai
+  todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
+  todo-cli task notifications <id>
+  todo-cli task delete <id> --yes
+`;
+}
+
+function notifyHelp() {
+  return `todo-cli notify - notification settings and reminder utilities
+
+Examples:
+  todo-cli notify settings
+  todo-cli notify channels
+  todo-cli notify create-setting --channel ntfy --config '{"topic":"todo"}' --default=true
+  todo-cli notify create-setting --channel webhook --config '{"url":"https://example.com/hook"}'
+  todo-cli notify default <setting-id>
+  todo-cli notify test --channel ntfy --config '{"topic":"todo"}'
+  todo-cli notify reconcile
+
+Notes:
+  Task creation can auto-generate reminders only when the user has default reminders enabled and a default notify setting.
+  Check default reminder profile fields with:
+    todo-cli auth me
+  Check delivery settings with:
+    todo-cli notify settings
+`;
+}
+
+function recurrenceHelp() {
+  return `todo-cli recurrence - recurrence-rule JSON examples
+
+Weekly weekdays:
+  --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
+
+Daily:
+  --recurrence-rule '{"freq":"daily","interval":1}'
+
+Monthly:
+  --recurrence-rule '{"freq":"monthly","interval":1}'
+
+Yearly:
+  --recurrence-rule '{"freq":"yearly","interval":1}'
+
+Use --recurrence-end-date YYYY-MM-DD to stop a series.
+Use --start-time-local with --timezone for human wall-clock recurrence creation.
+`;
+}
+
 async function dispatch() {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
   if (flags.help || flags.h || positionals.length === 0) {
-    console.log(help());
+    console.log(help(positionals));
     return;
   }
 
@@ -840,6 +1022,8 @@ async function dispatch() {
     categories: 'category',
     cat: 'category',
     cal: 'calendar',
+    notifications: 'notify',
+    notification: 'notify',
   };
   resource = aliases[resource] || resource;
 
@@ -849,6 +1033,7 @@ async function dispatch() {
   else if (resource === 'auth') result = await handleAuth(ctx, args);
   else if (resource === 'task') result = await handleTask(ctx, args);
   else if (resource === 'category') result = await handleCategory(ctx, args);
+  else if (resource === 'notify') result = await handleNotify(ctx, args);
   else if (resource === 'calendar') result = await handleCalendar(ctx, args);
   else if (resource === 'api') result = await handleRawAPI(ctx, args);
   else if (resource === 'health') result = await handleHealth(ctx);

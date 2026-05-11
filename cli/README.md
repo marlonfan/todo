@@ -78,6 +78,12 @@ Global flags:
 - `--format json|table|ndjson`
 - `--dry-run`
 
+When using `npx`, put the resource/action before flags with values:
+
+```bash
+npx -y @marlonfan/todo-app-cli@latest task create --base-url https://your-todo-server.example.com --title "Review"
+```
+
 ## Skill Installation
 
 Install the AI-facing skill directly with `skills`.
@@ -150,6 +156,8 @@ todo-cli task complete 42
 todo-cli task pending 42
 todo-cli task cancel 42
 todo-cli task schedule 42 --start-time-local "2026-05-11T09:00:00" --timezone Asia/Shanghai
+todo-cli task remind 42 --notify-at "2026-05-11T20:25:00+08:00"
+todo-cli task notifications 42
 todo-cli task delete 42 --yes
 ```
 
@@ -168,6 +176,33 @@ Useful task flags:
 - `--recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO"]}'`
 - `--if-match REVISION`
 - `--client-op-id ID`
+
+Workday recurrence example:
+
+```bash
+todo-cli task create \
+  --title "当日复盘" \
+  --description "工作日晚上进行当日复盘。" \
+  --priority medium \
+  --start-time-local "2026-05-11T20:30:00" \
+  --timezone Asia/Shanghai \
+  --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
+```
+
+Automatic reminders are created only when the user has default reminders enabled and a default notification setting.
+Check and verify with:
+
+```bash
+todo-cli auth me
+todo-cli notify settings
+todo-cli task notifications 42
+```
+
+Use a manual reminder when you need an exact notification time:
+
+```bash
+todo-cli task remind 42 --notify-at "2026-05-11T20:30:00+08:00"
+```
 
 ### Shortcuts
 
@@ -197,6 +232,17 @@ todo-cli calendar events \
   --start 2026-05-11T00:00:00+08:00 \
   --end 2026-05-12T00:00:00+08:00 \
   --format table
+```
+
+### Notifications
+
+```bash
+todo-cli notify settings
+todo-cli notify channels
+todo-cli notify create-setting --channel ntfy --config '{"topic":"todo"}' --default=true
+todo-cli notify default 1
+todo-cli notify test --channel ntfy --config '{"topic":"todo"}'
+todo-cli notify reconcile
 ```
 
 ### Raw API
