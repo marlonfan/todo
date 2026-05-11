@@ -1113,6 +1113,7 @@ function TaskList({ forcedView = '' }) {
   const draftEditVersionRef = useRef(0);
   const draftSyncTimerRef = useRef(0);
   const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
+  const pendingImmediateSubmitSourceRef = useRef('');
   const selectedTaskSnapshotRef = useRef(null);
   const draftSnapshotRef = useRef(null);
   const isDraftDirtyRef = useRef(false);
@@ -2581,7 +2582,10 @@ function TaskList({ forcedView = '' }) {
       return;
     }
     if (savingDraft) {
-      return;
+      if (submitAfter) {
+        pendingImmediateSubmitSourceRef.current = submitSource;
+      }
+      return false;
     }
     // 对于虚拟实例，比较源任务 ID
     const effectiveTaskID = getEffectiveTaskID(taskValue);
@@ -2624,6 +2628,9 @@ function TaskList({ forcedView = '' }) {
       }
       const hasNewEdits = draftEditVersionRef.current !== editVersionAtStart;
       if (hasNewEdits) {
+        if (submitAfter) {
+          pendingImmediateSubmitSourceRef.current = submitSource;
+        }
         return false;
       }
       draftTouchedRef.current = false;
@@ -2654,9 +2661,24 @@ function TaskList({ forcedView = '' }) {
   const submitDraftImmediately = useCallback((submitSource = 'realtime') => {
     if (typeof window === 'undefined') return;
     window.setTimeout(() => {
+      const pending = pendingDraftSubmitRef.current;
+      const pendingTaskID = Number(pending?.taskID || 0);
+      const activeTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current);
+      if (pendingTaskID > 0 && pending?.payload && (!activeTaskID || pendingTaskID === activeTaskID)) {
+        void submitPendingDraft(pendingTaskID, submitSource);
+        return;
+      }
       void handleSaveDraft({ submitAfter: true, submitSource });
     }, 0);
-  }, [handleSaveDraft]);
+  }, [getEffectiveTaskID, handleSaveDraft, submitPendingDraft]);
+
+  useEffect(() => {
+    if (savingDraft) return;
+    const submitSource = pendingImmediateSubmitSourceRef.current;
+    if (!submitSource) return;
+    pendingImmediateSubmitSourceRef.current = '';
+    submitDraftImmediately(submitSource);
+  }, [savingDraft, submitDraftImmediately]);
 
   const flushDraftOnLeave = useCallback((submitSource = 'leave', options = {}) => {
     const runFlush = async () => {
