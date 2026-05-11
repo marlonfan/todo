@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
+const DEFAULT_TIMEOUT_MS = 30000;
 const NO_VALUE_FLAGS = new Set(['dry-run', 'help', 'h', 'yes']);
 
 class CliError extends Error {
@@ -149,6 +150,15 @@ function optionalString(flags, names) {
   return String(value);
 }
 
+function optionalFilePath(flags, names, label = names[0]) {
+  const value = firstFlag(flags, names);
+  if (value === undefined) return undefined;
+  if (value === true || value === false || String(value).trim() === '') {
+    throw new CliError(`missing required option --${label}`);
+  }
+  return String(value);
+}
+
 function optionalNumber(flags, names) {
   const value = optionalString(flags, names);
   if (value === undefined) return undefined;
@@ -202,14 +212,60 @@ function parseJSONFlag(value, label) {
   }
 }
 
-function buildTaskPayload(flags, { partial = false } = {}) {
+async function readTextFile(path, label) {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (err) {
+    throw new CliError(`cannot read --${label} ${path}: ${err.message}`);
+  }
+}
+
+async function optionalTextFromFileFlag(flags, valueNames, fileNames, label) {
+  const value = optionalString(flags, valueNames);
+  const filePath = optionalFilePath(flags, fileNames, fileNames[0]);
+  if (value !== undefined && filePath !== undefined) {
+    throw new CliError(`use either --${valueNames[0]} or --${fileNames[0]}, not both`);
+  }
+  if (filePath !== undefined) return readTextFile(filePath, fileNames[0]);
+  return value;
+}
+
+async function parseJSONInput(flags, valueNames, fileNames, label) {
+  const value = optionalString(flags, valueNames);
+  const filePath = optionalFilePath(flags, fileNames, fileNames[0]);
+  if (value !== undefined && filePath !== undefined) {
+    throw new CliError(`use either --${valueNames[0]} or --${fileNames[0]}, not both`);
+  }
+  const raw = filePath === undefined ? value : await readTextFile(filePath, fileNames[0]);
+  return parseJSONFlag(raw, label);
+}
+
+function parseTimeoutMS(flags, config = {}) {
+  const raw = optionalString(flags, ['timeout-ms', 'timeout']) || process.env.TODO_CLI_TIMEOUT_MS || config.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeoutMS = Number(raw);
+  if (!Number.isFinite(timeoutMS) || timeoutMS <= 0) {
+    throw new CliError(`invalid timeout: ${raw}`);
+  }
+  return timeoutMS;
+}
+
+function timeoutMessage(ctx) {
+  return `request timed out after ${ctx.timeoutMs}ms while connecting to ${ctx.serverBase}. ${connectionHint(ctx)}`;
+}
+
+async function buildTaskPayload(flags, { partial = false } = {}) {
   const payload = {};
 
   const title = optionalString(flags, ['title']);
   if (title !== undefined) payload.title = title;
   if (!partial && !payload.title) throw new CliError('missing required option --title');
 
-  const description = optionalString(flags, ['description', 'desc']);
+  const description = await optionalTextFromFileFlag(
+    flags,
+    ['description', 'desc'],
+    ['description-file', 'desc-file'],
+    'description',
+  );
   if (description !== undefined) payload.description = description;
 
   const priority = parsePriority(optionalString(flags, ['priority']));
@@ -329,14 +385,20 @@ async function apiRequest(ctx, method, path, { query, data, headers = {}, auth =
   }
 
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ctx.timeoutMs);
   try {
     response = await fetch(url, {
       method,
       headers: requestHeaders,
       body: data === undefined ? undefined : JSON.stringify(data),
+      signal: controller.signal,
     });
   } catch (err) {
+    if (err?.name === 'AbortError') throw new CliError(timeoutMessage(ctx), 2);
     throw new CliError(`cannot connect to ${ctx.serverBase}: ${err.message}. ${connectionHint(ctx)}`, 2);
+  } finally {
+    clearTimeout(timeout);
   }
 
   const text = await response.text();
@@ -374,6 +436,72 @@ function selectFields(item, fields) {
 
 function summarizeTask(task) {
   return selectFields(task, ['id', 'title', 'status', 'priority', 'start_time', 'end_time', 'due_date', 'revision', 'updated_at']);
+}
+
+function summarizeInstance(instance) {
+  return selectFields(instance, [
+    'instance_id',
+    'task_id',
+    'title',
+    'status',
+    'priority',
+    'start_time',
+    'end_time',
+    'original_date',
+    'is_recurring',
+  ]);
+}
+
+function filterTaskInstances(items, flags) {
+  const taskID = optionalNumber(flags, ['task-id']);
+  if (taskID === undefined) return items;
+  return (items || []).filter((item) => Number(item?.task_id) === taskID);
+}
+
+function normalizeDateOnly(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : '';
+}
+
+function occurrenceDateOnly(item) {
+  return normalizeDateOnly(item?.original_date || item?.occurrence_date || item?.start_time);
+}
+
+function localDateString(offsetDays = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function findOccurrenceForTask(items, taskID, date) {
+  const matches = (items || []).filter((item) => Number(item?.task_id) === Number(taskID));
+  if (!date) return matches[0] || null;
+  return matches.find((item) => occurrenceDateOnly(item) === date) || null;
+}
+
+async function listDayTasks(ctx, offsetDays = 0) {
+  const tasks = await apiRequest(ctx, 'GET', '/tasks', { query: localRange(1, offsetDays) }) || [];
+  if (!flagEnabled(ctx.flags, ['include-occurrences', 'occurrences'], false)) {
+    return tasks.map(summarizeTask);
+  }
+
+  const date = normalizeDateOnly(optionalString(ctx.flags, ['date'])) || localDateString(offsetDays);
+  const occurrences = await apiRequest(ctx, 'GET', '/tasks/next-occurrences', {
+    query: buildQuery(ctx.flags, { from: ['from'] }),
+  }) || [];
+  const recurringInstances = occurrences
+    .filter((item) => occurrenceDateOnly(item) === date)
+    .map((item) => ({ ...summarizeInstance(item), source: 'occurrence' }));
+  const recurringIDs = new Set(recurringInstances.map((item) => Number(item.task_id)));
+  const baseTasks = tasks
+    .filter((task) => !task?.recurrence_rule || !recurringIDs.has(Number(task.id)))
+    .map((task) => ({ ...summarizeTask(task), source: 'series' }));
+  return [...baseTasks, ...recurringInstances];
 }
 
 function summarizeCategory(category) {
@@ -437,15 +565,21 @@ async function makeContext(flags) {
     serverBase: normalizeServerBaseURL(baseURL.value),
     apiBase: normalizeBaseURL(baseURL.value),
     token: String(flags.token || process.env.TODO_TOKEN || config.token || ''),
+    timeoutMs: parseTimeoutMS(flags, config),
   };
 }
 
 async function checkHealth(ctx) {
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ctx.timeoutMs);
   try {
-    response = await fetch(`${ctx.serverBase}/health`);
+    response = await fetch(`${ctx.serverBase}/health`, { signal: controller.signal });
   } catch (err) {
+    if (err?.name === 'AbortError') throw new CliError(timeoutMessage(ctx), 2);
     throw new CliError(`cannot connect to ${ctx.serverBase}: ${err.message}. ${connectionHint(ctx)}`, 2);
+  } finally {
+    clearTimeout(timeout);
   }
   if (!response.ok) throw new CliError(`HTTP ${response.status}: ${response.statusText}`);
   return response.json();
@@ -589,8 +723,57 @@ async function handleTask(ctx, args) {
     if (!id) throw new CliError('missing task id');
     return apiRequest(ctx, 'GET', `/tasks/${id}`);
   }
+  if (['detail', 'show'].includes(action)) {
+    if (!id) throw new CliError('missing task id');
+    const scope = optionalString(ctx.flags, ['scope']) || 'auto';
+    if (!['auto', 'series', 'occurrence'].includes(scope)) {
+      throw new CliError('invalid --scope: expected auto, series, or occurrence');
+    }
+    const series = await apiRequest(ctx, 'GET', `/tasks/${id}`);
+    if (scope === 'series' || !series?.recurrence_rule) {
+      return {
+        source: 'series',
+        effective: series,
+        series,
+        occurrence: null,
+      };
+    }
+
+    const query = buildQuery(ctx.flags, { from: ['from'] });
+    const requestedDate = normalizeDateOnly(optionalString(ctx.flags, ['date', 'occurrence-date']));
+    const occurrences = await apiRequest(ctx, 'GET', '/tasks/next-occurrences', { query }) || [];
+    const occurrence = findOccurrenceForTask(occurrences, id, requestedDate);
+    if (occurrence) {
+      return {
+        source: 'occurrence',
+        effective: occurrence,
+        series,
+        occurrence,
+      };
+    }
+    if (scope === 'occurrence') {
+      return {
+        source: 'none',
+        effective: null,
+        series,
+        occurrence: null,
+        warning: requestedDate
+          ? `no next occurrence found for task ${id} on ${requestedDate}`
+          : `no next occurrence found for task ${id}`,
+      };
+    }
+    return {
+      source: 'series',
+      effective: series,
+      series,
+      occurrence: null,
+      warning: requestedDate
+        ? `no next occurrence found for task ${id} on ${requestedDate}; fell back to series task`
+        : `no next occurrence found for task ${id}; fell back to series task`,
+    };
+  }
   if (action === 'create' || action === '+add') {
-    const payload = buildTaskPayload(ctx.flags);
+    const payload = await buildTaskPayload(ctx.flags);
     return apiRequest(ctx, 'POST', '/tasks', {
       data: payload,
       headers: buildMutationHeaders(ctx.flags, 'cli.task.create'),
@@ -598,7 +781,7 @@ async function handleTask(ctx, args) {
   }
   if (action === 'update') {
     if (!id) throw new CliError('missing task id');
-    const payload = buildTaskPayload(ctx.flags, { partial: true });
+    const payload = await buildTaskPayload(ctx.flags, { partial: true });
     return apiRequest(ctx, 'PUT', `/tasks/${id}`, {
       data: payload,
       headers: buildMutationHeaders(ctx.flags, 'cli.task.update'),
@@ -627,7 +810,7 @@ async function handleTask(ctx, args) {
   }
   if (action === 'schedule') {
     if (!id) throw new CliError('missing task id');
-    const payload = buildTaskPayload(ctx.flags, { partial: true });
+    const payload = await buildTaskPayload(ctx.flags, { partial: true });
     return apiRequest(ctx, 'PATCH', `/tasks/${id}/schedule`, {
       data: payload,
       headers: buildMutationHeaders(ctx.flags, 'cli.task.schedule'),
@@ -650,6 +833,25 @@ async function handleTask(ctx, args) {
     if (!id) throw new CliError('missing task id');
     return apiRequest(ctx, 'GET', `/tasks/${id}/notifications`);
   }
+  if (['next-occurrences', 'next-instances'].includes(action)) {
+    const items = await apiRequest(ctx, 'GET', '/tasks/next-occurrences', {
+      query: buildQuery(ctx.flags, { from: ['from'] }),
+    }) || [];
+    return filterTaskInstances(items, ctx.flags);
+  }
+  if (['occurrences', 'instances'].includes(action)) {
+    const body = await apiRequest(ctx, 'GET', '/tasks/occurrences', {
+      query: buildQuery(ctx.flags, {
+        status: ['status'],
+        limit: ['limit'],
+        cursor: ['cursor'],
+      }),
+    }) || { items: [] };
+    return {
+      ...body,
+      items: filterTaskInstances(body.items || [], ctx.flags),
+    };
+  }
   if (['remind', 'notify', 'notification'].includes(action)) {
     if (!id) throw new CliError('missing task id');
     return apiRequest(ctx, 'POST', `/tasks/${id}/notifications`, {
@@ -657,13 +859,11 @@ async function handleTask(ctx, args) {
       headers: buildMutationHeaders(ctx.flags, 'cli.task.remind'),
     });
   }
-  if (action === '+today') {
-    const tasks = await apiRequest(ctx, 'GET', '/tasks', { query: localRange(1, 0) }) || [];
-    return tasks.map(summarizeTask);
+  if (action === '+today' || action === 'today') {
+    return listDayTasks(ctx, 0);
   }
-  if (action === '+tomorrow') {
-    const tasks = await apiRequest(ctx, 'GET', '/tasks', { query: localRange(1, 1) }) || [];
-    return tasks.map(summarizeTask);
+  if (action === '+tomorrow' || action === 'tomorrow') {
+    return listDayTasks(ctx, 1);
   }
   if (action === '+inbox') {
     const tasks = await apiRequest(ctx, 'GET', '/tasks', { query: { status: 'pending' } }) || [];
@@ -771,8 +971,8 @@ async function handleRawAPI(ctx, args) {
   const method = String(args[0] || 'GET').toUpperCase();
   const path = args[1];
   if (!path) throw new CliError('api requires METHOD and PATH');
-  const data = parseJSONFlag(optionalString(ctx.flags, ['data', 'body']), 'data');
-  const query = parseJSONFlag(optionalString(ctx.flags, ['query']), 'query') || {};
+  const data = await parseJSONInput(ctx.flags, ['data', 'body'], ['data-file', 'body-file'], 'data');
+  const query = await parseJSONInput(ctx.flags, ['query'], ['query-file'], 'query') || {};
   return apiRequest(ctx, method, path, { data, query, auth: flagEnabled(ctx.flags, ['auth'], true) });
 }
 
@@ -853,10 +1053,11 @@ Global options:
   --config PATH        Config path, default ~/.todo-cli/config.json
   --format json|table|ndjson
   --dry-run            Print request without sending it
+  --timeout-ms MS      HTTP timeout, default ${DEFAULT_TIMEOUT_MS}
 
 Tips:
-  Flags with values are safest after resource/action, especially through npx.
-  Example: npx -y @marlonfan/todo-app-cli@latest task create --base-url URL --title "Task"
+  Run Todo operations with the installed todo-cli binary.
+  Avoid npx fallbacks for normal commands because they may run a different published version.
   Use --help after a resource for focused help, e.g. todo-cli task --help or todo-cli notify --help.
 
 First run:
@@ -874,13 +1075,17 @@ Auth:
 Tasks:
   todo-cli task list --status pending --format table
   todo-cli task get <id>
+  todo-cli task detail <id>
+  todo-cli task today --include-occurrences
   todo-cli task create --title "Ship CLI" --description "notes" --priority high
   todo-cli task update <id> --title "New title" --if-match <revision>
+  todo-cli task update <id> --description-file ./notes.md --if-match <revision>
   todo-cli task complete <id>
   todo-cli task pending <id>
   todo-cli task cancel <id>
   todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
   todo-cli task notifications <id>
+  todo-cli task next-occurrences --task-id <id>
   todo-cli task delete <id> --yes
   todo-cli task +today --format table
   todo-cli task +inbox --format table
@@ -905,6 +1110,7 @@ Notifications:
 Raw API:
   todo-cli api GET /tasks
   todo-cli api PATCH /tasks/1/status --data '{"status":"completed"}'
+  todo-cli api PUT /tasks/42 --data-file ./payload.json
 `;
 }
 
@@ -917,6 +1123,7 @@ Examples:
   todo-cli task list --category-id 3
   todo-cli task list --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00
   todo-cli task list --summary=false
+  todo-cli task today --include-occurrences
 
 Filters:
   --status pending|completed|cancelled
@@ -924,6 +1131,30 @@ Filters:
   --start RFC3339
   --end RFC3339
   --summary=false     Return full task records instead of compact rows
+  --include-occurrences Include recurring instances for today/tomorrow shortcuts
+`;
+  }
+
+  if (['detail', 'show', 'get'].includes(action)) {
+    return `todo-cli task detail - read the effective task detail shown to users
+
+Examples:
+  todo-cli task detail 42
+  todo-cli task detail 42 --date 2026-05-11
+  todo-cli task detail 42 --scope occurrence
+  todo-cli task detail 42 --scope series
+  todo-cli task get 42
+
+How to choose:
+  task detail is the default for "today/current/calendar/task detail" questions.
+  For recurring tasks, task detail returns the next visible occurrence when one exists.
+  task get reads the series task body only.
+  Use task today --include-occurrences before detail when the user has not provided an id.
+
+Options:
+  --scope auto|series|occurrence       Default auto
+  --date YYYY-MM-DD                    Prefer this occurrence date
+  --from RFC3339                       Anchor used by next-occurrences
 `;
   }
 
@@ -935,11 +1166,14 @@ Examples:
   todo-cli task create --title "当日复盘" --start-time-local "2026-05-11T20:30:00" --timezone Asia/Shanghai --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
   todo-cli task create --title "全天任务" --due-date 2026-05-11 --all-day=true
   todo-cli task update 42 --title "New title" --if-match 3
+  todo-cli task update 42 --description-file ./daily-review.md --if-match 3
+  todo-cli task update 42 --description-file ./daily-review.md --occurrence-date 2026-05-11 --if-match 3
   todo-cli task schedule 42 --start-time-local "2026-05-11T14:00:00" --timezone Asia/Shanghai
 
 Task fields:
   --title TEXT                         Required for create
   --description TEXT, --desc TEXT
+  --description-file PATH, --desc-file PATH
   --priority low|medium|high           Maps to -1|0|1
   --status pending|completed|cancelled
   --start-time RFC3339                 Absolute timestamp
@@ -952,6 +1186,7 @@ Task fields:
   --category-ids 1,2
   --recurrence-rule JSON               {"freq":"weekly","interval":1,"byday":["MO"]}
   --recurrence-end-date YYYY-MM-DD
+  --occurrence-date YYYY-MM-DD          Update one recurring occurrence
   --if-match REVISION                  Update guard
   --client-op-id ID                    Idempotency/debug id
 
@@ -963,6 +1198,12 @@ Reminder behavior:
     todo-cli task notifications <id>
   Add a manual reminder with:
     todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
+
+Recurring occurrence checks:
+  If a recurring task detail is opened from calendar/today/next occurrence views, verify that instance too:
+    todo-cli task next-occurrences --task-id 42
+  To update just the displayed occurrence:
+    todo-cli task update 42 --description-file ./daily-review.md --occurrence-date 2026-05-11 --if-match 3
 `;
   }
 
@@ -1014,10 +1255,12 @@ Examples:
   todo-cli task get <id>
   todo-cli task create --title "Ship CLI"
   todo-cli task update <id> --title "New title" --if-match <revision>
+  todo-cli task update <id> --description-file ./notes.md --if-match <revision>
   todo-cli task complete <id>
   todo-cli task schedule <id> --start-time-local "2026-05-11T14:00:00" --timezone Asia/Shanghai
   todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
   todo-cli task notifications <id>
+  todo-cli task next-occurrences --task-id <id>
   todo-cli task delete <id> --yes
 `;
 }
@@ -1112,12 +1355,16 @@ function apiHelp() {
 Examples:
   todo-cli api GET /tasks
   todo-cli api PATCH /tasks/42/status --data '{"status":"completed"}'
+  todo-cli api PUT /tasks/42 --data-file ./payload.json
   todo-cli api GET /calendar --query '{"start":"2026-05-11T00:00:00+08:00","end":"2026-05-12T00:00:00+08:00"}'
+  todo-cli api GET /calendar --query-file ./query.json
   todo-cli api GET /auth/me
 
 Options:
   --data JSON
+  --data-file PATH
   --query JSON
+  --query-file PATH
   --auth=false       Skip bearer token for public endpoints
 
 Prefer wrapped commands first. Use api only when no resource command exists.

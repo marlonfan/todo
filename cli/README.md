@@ -69,6 +69,7 @@ Environment overrides:
 - `TODO_BASE_URL`: server base URL
 - `TODO_TOKEN`: bearer token
 - `TODO_CLI_CONFIG`: config file path
+- `TODO_CLI_TIMEOUT_MS`: HTTP timeout in milliseconds
 
 Global flags:
 
@@ -77,12 +78,11 @@ Global flags:
 - `--config PATH`
 - `--format json|table|ndjson`
 - `--dry-run`
+- `--timeout-ms MS`
 
-When using `npx`, put the resource/action before flags with values:
-
-```bash
-npx -y @marlonfan/todo-app-cli@latest task create --base-url https://your-todo-server.example.com --title "Review"
-```
+Run Todo operations with the installed `todo-cli` binary. Avoid using
+an `npx` package fallback for normal commands because it may run a different
+published version than the installed skill expects.
 
 ## Skill Installation
 
@@ -150,14 +150,19 @@ todo-cli auth logout
 ```bash
 todo-cli task list --status pending --format table
 todo-cli task get 42
+todo-cli task detail 42
+todo-cli task detail 42 --date 2026-05-11
+todo-cli task today --include-occurrences
 todo-cli task create --title "Ship CLI" --description "Markdown notes" --priority high
 todo-cli task update 42 --title "Ship CLI v2" --if-match 3
+todo-cli task update 42 --description-file ./daily-review.md --if-match 3
 todo-cli task complete 42
 todo-cli task pending 42
 todo-cli task cancel 42
 todo-cli task schedule 42 --start-time-local "2026-05-11T09:00:00" --timezone Asia/Shanghai
 todo-cli task remind 42 --notify-at "2026-05-11T20:25:00+08:00"
 todo-cli task notifications 42
+todo-cli task next-occurrences --task-id 42
 todo-cli task delete 42 --yes
 ```
 
@@ -165,6 +170,7 @@ Useful task flags:
 
 - `--title`
 - `--description` or `--desc`
+- `--description-file` or `--desc-file` for long Markdown
 - `--priority low|medium|high`
 - `--status pending|completed|cancelled`
 - `--start-time` / `--end-time`: RFC3339 timestamps
@@ -174,6 +180,7 @@ Useful task flags:
 - `--all-day true|false`
 - `--category-ids 1,2`
 - `--recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO"]}'`
+- `--occurrence-date YYYY-MM-DD` for updating one recurring occurrence
 - `--if-match REVISION`
 - `--client-op-id ID`
 
@@ -202,6 +209,27 @@ Use a manual reminder when you need an exact notification time:
 
 ```bash
 todo-cli task remind 42 --notify-at "2026-05-11T20:30:00+08:00"
+```
+
+For recurring tasks, `task get 42` reads the series task. If the UI detail was opened from a
+calendar/today occurrence, also verify that instance:
+
+```bash
+todo-cli task detail 42
+todo-cli task detail 42 --date 2026-05-11
+todo-cli task next-occurrences --task-id 42
+todo-cli task update 42 --description-file ./daily-review.md --occurrence-date 2026-05-11 --if-match 3
+```
+
+Use `task detail` for user-facing "today/current/calendar/task detail" questions. It returns
+the effective record under `effective`; for recurring tasks that is the visible occurrence when
+one exists. Use `task get` only when you explicitly need the recurring series body, template,
+revision, or recurrence rule.
+
+If the user did not provide an ID, list today's visible records first:
+
+```bash
+todo-cli task today --include-occurrences
 ```
 
 ### Shortcuts
@@ -252,7 +280,9 @@ Use raw API when a feature is not yet wrapped by a resource command.
 ```bash
 todo-cli api GET /tasks
 todo-cli api PATCH /tasks/42/status --data '{"status":"completed"}'
+todo-cli api PUT /tasks/42 --data-file ./payload.json
 todo-cli api GET /calendar --query '{"start":"2026-05-11T00:00:00+08:00","end":"2026-05-12T00:00:00+08:00"}'
+todo-cli api GET /calendar --query-file ./query.json
 ```
 
 ## Skill

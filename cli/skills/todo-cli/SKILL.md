@@ -5,45 +5,37 @@ description: Use the Todo app CLI to manage tasks, categories, calendar events, 
 
 # Todo CLI Skill
 
-Use this skill to operate the Todo app through `todo-cli`, `npx`, or `cli/todo-cli.mjs`.
+Use this skill to operate the Todo app through the installed `todo-cli` command.
 The CLI talks to the running HTTP server, returns JSON by default, and supports
 `--dry-run` for previewing side effects.
 
 ## Command Setup
 
-Always resolve the command before querying or mutating tasks:
+Always verify the installed command before querying or mutating tasks:
 
 ```bash
 todo_cli() {
   if command -v todo-cli >/dev/null 2>&1; then
     todo-cli "$@"
-  elif [ -f ./cli/todo-cli.mjs ]; then
-    node ./cli/todo-cli.mjs "$@"
   else
-    npx -y @marlonfan/todo-app-cli@latest "$@"
+    echo "todo-cli is not installed. Run: npm install -g @marlonfan/todo-app-cli" >&2
+    return 127
   fi
 }
 todo_cli --help
 ```
 
-This function is intentional. Do not store `node ./cli/todo-cli.mjs` or `npx -y ...` in a plain string variable; zsh may treat the whole string as one command name.
+This function is intentional. Do not use an `npx` package fallback, because it can run an older published package than the installed skill expects.
 
-For one-off commands, use the same resolution pattern:
+For one-off commands, require the installed binary:
 
 ```bash
 if command -v todo-cli >/dev/null 2>&1; then
   todo-cli task list --status pending
-elif [ -f ./cli/todo-cli.mjs ]; then
-  node ./cli/todo-cli.mjs task list --status pending
 else
-  npx -y @marlonfan/todo-app-cli@latest task list --status pending
+  echo "todo-cli is not installed. Run: npm install -g @marlonfan/todo-app-cli" >&2
+  exit 127
 fi
-```
-
-If `todo-cli` is not available, it is also valid to run the npm package directly:
-
-```bash
-npx -y @marlonfan/todo-app-cli@latest doctor
 ```
 
 If the user asks for a permanent install, run or tell them to run:
@@ -74,8 +66,8 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 ## Operating Rules
 
 - Define `todo_cli() { ... }` from Command Setup before running Todo commands in a new shell session.
-- Put resource/action before flags when possible, especially with `npx`: use `todo_cli task create --base-url URL --title "Task"`, not `todo_cli --base-url URL task create --title "Task"`.
-- If `todo-cli` is not found, do not switch to unrelated task systems such as Feishu/Lark tasks. Use the `npx -y @marlonfan/todo-app-cli@latest` fallback or ask the user to install the Todo CLI.
+- Put resource/action before flags when possible: use `todo_cli task create --base-url URL --title "Task"`, not `todo_cli --base-url URL task create --title "Task"`.
+- If `todo-cli` is not found, do not switch to unrelated task systems such as Feishu/Lark tasks and do not run the npm package through `npx`. Ask the user to install or update the Todo CLI.
 - Start with `todo_cli doctor` when server availability, configured URL, or auth state is unknown.
 - Use `todo_cli health` only when you need a narrow server liveness check.
 - If health fails against `127.0.0.1:8080`, ask for the user's Todo server URL and run `todo_cli init --base-url URL`.
@@ -87,6 +79,12 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - Deleting requires `--yes`; do not add `--yes` unless the user explicitly asked to delete.
 - Prefer wrapped resource commands before raw API.
 - Use raw API only when no wrapped command exists.
+- For long Markdown descriptions, write the content to a temporary `.md` file and pass `--description-file PATH`; avoid putting large multiline text directly in a shell argument.
+- For large raw API payloads, write JSON to a temporary file and pass `--data-file PATH`.
+- For user-facing detail questions such as "今天的任务详情", "当日任务", "当前页面这个任务", "日历里这个任务", or "看看详情", use `task detail ID` instead of `task get ID`.
+- For recurring tasks, `task detail ID` returns the effective visible record under `effective`; `task get ID` reads the series body only. Use `task get ID` when the user asks about the recurring template, series defaults, revision, recurrence rule, or future default behavior.
+- If the user asks about today's tasks without an ID, start with `task today --include-occurrences` so recurring instances are included in the candidate list.
+- If the user is looking at a specific calendar/today occurrence, prefer `task detail ID --date YYYY-MM-DD`; update the displayed instance with `task update ID --occurrence-date YYYY-MM-DD` when needed.
 - For reminders, check `todo_cli auth me` and `todo_cli notify settings` before promising delivery. Creating a scheduled task only auto-generates reminders when the user's `default_reminder_enabled` is true and a default notify setting exists.
 - When uncertain about flags, run focused help first: `todo_cli task --help`, `todo_cli task create --help`, `todo_cli notify --help`, `todo_cli calendar --help`, `todo_cli category --help`, `todo_cli auth --help`, or `todo_cli api --help`.
 
@@ -117,6 +115,8 @@ Use `todo_cli auth --help` for auth/profile examples.
 todo_cli task list --status pending
 todo_cli task list --category-id 3
 todo_cli task get 42
+todo_cli task detail 42
+todo_cli task today --include-occurrences
 todo_cli +today
 todo_cli +inbox
 ```
@@ -157,6 +157,7 @@ Useful flags:
 
 - `--title`
 - `--description` or `--desc`
+- `--description-file` or `--desc-file` for long Markdown
 - `--priority low|medium|high`
 - `--start-time` / `--end-time` for RFC3339 timestamps
 - `--start-time-local` / `--end-time-local` with `--timezone`
@@ -201,8 +202,13 @@ todo_cli notify reconcile
 ### Update Tasks
 
 ```bash
+todo_cli task detail 42
+todo_cli task detail 42 --date 2026-05-11
 todo_cli task update 42 --title "New title"
 todo_cli task update 42 --description "Updated markdown" --if-match 3
+todo_cli task update 42 --description-file ./daily-review.md --if-match 3
+todo_cli task update 42 --description-file ./daily-review.md --occurrence-date 2026-05-11 --if-match 3
+todo_cli task next-occurrences --task-id 42
 todo_cli task complete 42
 todo_cli task pending 42
 todo_cli task cancel 42
@@ -210,6 +216,7 @@ todo_cli task schedule 42 --start-time-local "2026-05-11T14:00:00" --timezone As
 ```
 
 Use `--if-match REVISION` when the task record includes a `revision`; this helps avoid overwriting newer edits.
+For recurring tasks, use `--occurrence-date YYYY-MM-DD` when the user wants to update the specific occurrence currently shown in the UI. After updating a recurring task, verify with `task detail ID --date YYYY-MM-DD` when the user's complaint is about what the page displays.
 Use `todo_cli task update --help` or `todo_cli task schedule --help` when changing task fields.
 
 ### Delete Tasks
@@ -255,7 +262,9 @@ Use this when wrapped commands do not cover a feature:
 ```bash
 todo_cli api GET /tasks
 todo_cli api PATCH /tasks/42/status --data '{"status":"completed"}'
+todo_cli api PUT /tasks/42 --data-file ./payload.json
 todo_cli api GET /calendar --query '{"start":"2026-05-11T00:00:00+08:00","end":"2026-05-12T00:00:00+08:00"}'
+todo_cli api GET /calendar --query-file ./query.json
 ```
 
 Use `todo_cli api --help` before raw calls.
