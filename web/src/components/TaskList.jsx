@@ -50,7 +50,7 @@ import {
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
-import { shouldHideRecurringSeriesAnchorInPending } from './taskListRecurringVisibility';
+import { isTaskUnsyncedLocally } from './taskListRecurringVisibility';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import { tasksAPI } from '../api/client';
@@ -68,6 +68,7 @@ const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
 const DRAFT_IDLE_SUBMIT_MS = 3000;
 const DRAFT_TEXT_AUTOSAVE_MS = 2500;
+const DRAFT_DESCRIPTION_RENDER_DELAY_MS = 120;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
 const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
 const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled';
@@ -895,7 +896,7 @@ function TaskList({ forcedView = '' }) {
     const params = new URLSearchParams(location.search);
     return (params.get('view') || '') === 'search';
   }, [forcedView, location.pathname, location.search]);
-  const { data: recurringNextOccurrences = [], isFetched: recurringNextOccurrencesFetched } = useQuery({
+  const { data: recurringNextOccurrences = [] } = useQuery({
     queryKey: queryKeys.tasks.nextOccurrences(),
     staleTime: 30 * 1000,
     refetchOnWindowFocus: false,
@@ -958,11 +959,13 @@ function TaskList({ forcedView = '' }) {
       const start = dayjs(item?.start_time || item?.startTime || '');
       if (!start.isValid()) return;
       const startLocal = start.tz(timezone);
-      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
       const occurrenceDate = normalizeOccurrenceDate(
         item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || start.toISOString(),
         timezone,
       ) || startLocal.format('YYYY-MM-DD');
+      const rawInstanceID = String(item?.instance_id || item?.instanceId || '').trim();
+      const fallbackKey = `${taskID}_${occurrenceDate.replace(/-/g, '')}`;
+      const instanceID = rawInstanceID || fallbackKey;
       const status = resolveOccurrenceStatusFromOptimisticMap(
         occurrenceStatusOptimisticMap,
         taskID,
@@ -980,7 +983,12 @@ function TaskList({ forcedView = '' }) {
         occurrenceDate,
         startISO: start.toISOString(),
         endISO: end && end.isValid() ? end.toISOString() : null,
+        title: typeof item?.title === 'string' ? item.title : '',
         description: typeof item?.description === 'string' ? item.description : '',
+        priority: item?.priority,
+        createdAt: item?.created_at || item?.createdAt || '',
+        completedAt: item?.completed_at || item?.completedAt || null,
+        deletedAt: item?.deleted_at || item?.deletedAt || null,
         status,
         startLocal,
       });
@@ -1012,18 +1020,20 @@ function TaskList({ forcedView = '' }) {
       const taskID = Number(task?.id || 0);
       const nextPending = recurringNextPendingMap.get(taskID);
       if (!nextPending) {
-        if (shouldHideRecurringSeriesAnchorInPending({
-          task,
-          hasNextPending: false,
-          nextOccurrencesFetched: recurringNextOccurrencesFetched,
-        })) {
-          // Recurring series with no next pending occurrence should not fall back to series anchor in pending list.
-          return [];
-        }
-        return [task];
+        // Recurring base tasks are hidden from normal task details. Keep only local
+        // unsynced series anchors until the server can generate occurrence rows.
+        return isTaskUnsyncedLocally(task) ? [task] : [];
       }
+      const eventPriority = Number.parseInt(nextPending.priority, 10);
       return [{
         ...task,
+        id: `occ_${nextPending.instanceId}`,
+        source_task_id: taskID,
+        virtual_occurrence: true,
+        title: String(nextPending.title || task?.title || ''),
+        priority: Number.isFinite(eventPriority)
+          ? eventPriority
+          : (Number.parseInt(task?.priority, 10) || 0),
         start_time: nextPending.startISO,
         end_time: nextPending.endISO,
         instance_id: nextPending.instanceId,
@@ -1034,9 +1044,12 @@ function TaskList({ forcedView = '' }) {
           ? nextPending.description
           : String(task?.description || ''),
         status: nextPending.status,
+        created_at: nextPending.createdAt || task?.created_at || task?.createdAt || '',
+        completed_at: nextPending.completedAt,
+        deleted_at: nextPending.deletedAt,
       }];
     });
-  }, [recurringNextOccurrencesFetched, recurringNextPendingMap, tasksRaw]);
+  }, [recurringNextPendingMap, tasksRaw]);
 
   const recurringServerStatusMap = useMemo(() => {
     const statusMap = new Map();
@@ -1158,6 +1171,7 @@ function TaskList({ forcedView = '' }) {
   const draftTouchedRef = useRef(false);
   const draftEditVersionRef = useRef(0);
   const draftSyncTimerRef = useRef(0);
+  const draftDescriptionRenderTimerRef = useRef(0);
   const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
   const pendingImmediateSubmitSourceRef = useRef('');
   const selectedTaskSnapshotRef = useRef(null);
@@ -1217,6 +1231,36 @@ function TaskList({ forcedView = '' }) {
     setDraft(normalizedNext);
     return normalizedNext;
   }, []);
+
+  const scheduleDescriptionDraftRender = useCallback((taskIDInput = 0, sessionIDInput = 0) => {
+    if (typeof window === 'undefined') {
+      setDraft(draftSnapshotRef.current || null);
+      return;
+    }
+    if (draftDescriptionRenderTimerRef.current) {
+      window.clearTimeout(draftDescriptionRenderTimerRef.current);
+    }
+    const taskID = Number(taskIDInput || 0);
+    const sessionID = Number(sessionIDInput || 0);
+    draftDescriptionRenderTimerRef.current = window.setTimeout(() => {
+      draftDescriptionRenderTimerRef.current = 0;
+      if (taskID && Number(draftSourceTaskIDRef.current || 0) !== taskID) return;
+      if (sessionID && Number(activeDescriptionSessionRef.current || 0) !== sessionID) return;
+      setDraft(draftSnapshotRef.current || null);
+    }, DRAFT_DESCRIPTION_RENDER_DELAY_MS);
+  }, []);
+
+  const setDraftDescriptionSnapshot = useCallback((value, taskIDInput = 0, sessionIDInput = 0) => {
+    const prevSnapshot = draftSnapshotRef.current;
+    if (!prevSnapshot) return null;
+    const nextSnapshot = {
+      ...prevSnapshot,
+      description: String(value || ''),
+    };
+    draftSnapshotRef.current = nextSnapshot;
+    scheduleDescriptionDraftRender(taskIDInput, sessionIDInput);
+    return nextSnapshot;
+  }, [scheduleDescriptionDraftRender]);
 
   const beginDescriptionSession = useCallback((taskIDInput, reason = '') => {
     const taskID = Number(taskIDInput || 0);
@@ -1509,6 +1553,7 @@ function TaskList({ forcedView = '' }) {
     const now = dayjs().tz(timezone);
     const todayStart = now.startOf('day');
     const todayEnd = now.endOf('day');
+    const upcomingEndExclusive = todayStart.add(7, 'day');
 
     if (activeCategoryID > 0) {
       return tasks.filter((task) => (task.categories || []).some((cat) => cat.id === activeCategoryID) && task.status === 'pending');
@@ -1552,7 +1597,10 @@ function TaskList({ forcedView = '' }) {
         const time = getTaskPrimaryTime(task);
         if (!time) return false;
         const current = dayjs(time).tz(timezone);
-        return current.isAfter(todayStart) || current.isSame(todayStart);
+        return (
+          (current.isAfter(todayStart) || current.isSame(todayStart))
+          && current.isBefore(upcomingEndExclusive)
+        );
       });
     }
 
@@ -2626,9 +2674,11 @@ function TaskList({ forcedView = '' }) {
     }
 
     if (!contextTaskID || contextTaskID === activeTaskID) {
-      markDescriptionSessionEdited(contextTaskID || activeTaskID, contextSessionID || activeDescriptionSessionRef.current);
+      const resolvedTaskID = contextTaskID || activeTaskID;
+      const resolvedSessionID = contextSessionID || activeDescriptionSessionRef.current;
+      markDescriptionSessionEdited(resolvedTaskID, resolvedSessionID);
       markDraftTouched();
-      setDraftWithSnapshot((prev) => (prev ? { ...prev, description: value } : prev));
+      setDraftDescriptionSnapshot(value, resolvedTaskID, resolvedSessionID);
       logDraftSwitchDebug('draft.description.activeInput', {
         context_task_id: contextTaskID,
         context_session_id: contextSessionID,
@@ -2717,7 +2767,7 @@ function TaskList({ forcedView = '' }) {
     markDescriptionSessionEdited,
     markDraftTouched,
     queryClient,
-    setDraftWithSnapshot,
+    setDraftDescriptionSnapshot,
     shouldAcceptDescriptionSessionInput,
   ]);
 
@@ -3187,6 +3237,10 @@ function TaskList({ forcedView = '' }) {
       window.clearTimeout(draftSyncTimerRef.current);
       draftSyncTimerRef.current = 0;
     }
+    if (draftDescriptionRenderTimerRef.current) {
+      window.clearTimeout(draftDescriptionRenderTimerRef.current);
+      draftDescriptionRenderTimerRef.current = 0;
+    }
     const flush = flushDraftOnLeaveRef.current;
     if (typeof flush === 'function') {
       void flush('leave');
@@ -3261,9 +3315,15 @@ function TaskList({ forcedView = '' }) {
     const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     if (!selectedTask || selectedTask.read_only) return;
-    if (isDraftDirtyRef.current) {
+    const draftValue = draftSnapshotRef.current;
+    const snapshotDirty = !!(
+      draftValue
+      && JSON.stringify(normalizeDraftForCompare(draftValue))
+        !== JSON.stringify(normalizeDraftForCompare(buildDraftFromTask(selectedTask)))
+    );
+    if (isDraftDirtyRef.current || snapshotDirty) {
       let queued = await handleSaveDraft({ submitAfter: false, submitSource: 'manual' });
-      if (!queued && isDraftDirtyRef.current) {
+      if (!queued && (isDraftDirtyRef.current || snapshotDirty)) {
         queued = await handleSaveDraft({ submitAfter: false, submitSource: 'manual' });
       }
       if (!queued) return;
