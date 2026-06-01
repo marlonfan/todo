@@ -2,6 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --background: 210 75% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 217 91% 55%;
+  --primary-foreground: 0 0% 100%;
+  --neutral-blue: 214 88% 62%;
+  --neutral-blue-foreground: 217 72% 28%;
+  --soft-blue: 213 100% 97%;
+  --soft-blue-strong: 213 92% 94%;
+  --blue-surface: 210 100% 99%;
+  --blue-border: 213 74% 91%;
+  --blue-border-strong: 213 70% 84%;
+  --secondary: var(--soft-blue);
+  --secondary-foreground: 222 47% 11%;
+  --muted: var(--soft-blue);
+  --muted-foreground: 215 28% 36%;
+  --accent: var(--soft-blue-strong);
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: var(--blue-border);
+  --input: var(--blue-border);
+  --ring: 217 91% 60%;
+  --radius: 0.5rem;
+}
+
 html {
   font-size: 14px;
   -webkit-text-size-adjust: 100%;
@@ -9,8 +39,9 @@ html {
 }
 
 body {
-  font-family: 'Roboto', 'Noto Sans SC', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
-  @apply bg-[#eaf2ff] text-slate-800 antialiased;
+  font-family: Inter, 'SF Pro Text', 'Noto Sans SC', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+  background: hsl(var(--blue-surface));
+  @apply text-slate-800 antialiased;
 }
 
 #root {
@@ -18,23 +49,30 @@ body {
 }
 
 .md-card {
-  @apply rounded-2xl border border-blue-100 bg-white shadow-sm;
+  border-color: hsl(var(--blue-border));
+  @apply rounded-lg border bg-card text-card-foreground shadow-sm;
 }
 
 .md-nav-item {
-  @apply mt-1 block rounded-xl px-4 py-2.5 text-[0.92rem] transition-colors;
+  @apply mt-0.5 flex min-h-8 items-center rounded-md px-3 py-1.5 text-[0.92rem] transition-colors;
 }
 
 .md-nav-item-active {
-  @apply bg-blue-100 text-blue-800 font-medium;
+  background: hsl(var(--soft-blue-strong));
+  color: hsl(var(--neutral-blue-foreground));
+  @apply font-semibold;
 }
 
 .md-nav-item-idle {
-  @apply text-slate-700 hover:bg-blue-50;
+  @apply text-slate-700 hover:text-blue-950;
+}
+
+.md-nav-item-idle:hover {
+  background: hsl(var(--soft-blue));
 }
 
 .md-page {
-  @apply h-full bg-[#eaf2ff];
+  @apply h-full bg-white;
 }
 
 .md-pane {
@@ -42,19 +80,28 @@ body {
 }
 
 .md-popover {
-  @apply rounded-xl border border-blue-100 bg-white p-2 shadow-lg;
+  @apply rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-md;
 }
 
 .md-toolbar {
-  @apply rounded-2xl border border-blue-100 bg-white px-3 py-2 shadow-sm;
+  @apply rounded-lg border border-border bg-white px-3 py-2 shadow-sm;
 }
 
 .md-input-row {
-  @apply flex min-w-0 items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/40 px-3 py-2 transition-all focus-within:border-blue-300 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-200;
+  border-color: hsl(var(--blue-border));
+  @apply flex min-w-0 items-center gap-2 rounded-md border bg-white px-3 py-2 transition-all focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20;
 }
 
 .md-icon-btn {
-  @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-all duration-150 hover:bg-blue-50 hover:text-blue-700 active:scale-[0.97];
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 transition-colors hover:text-blue-900;
+}
+
+.md-icon-btn:hover {
+  background: hsl(var(--soft-blue));
+}
+
+.md-icon-btn:active {
+  background: hsl(var(--soft-blue-strong));
 }
 
 .settings-page .settings-tabs {
@@ -114,24 +161,24 @@ body {
   @apply rounded-xl border border-blue-100 bg-slate-50 text-slate-800;
 }
 
-/* FullCalendar polish inspired by Schedule-X */
+/* FullCalendar polish for legacy calendar surfaces */
 .todo-calendar.fc {
   @apply h-full font-sans;
   font-size: 0.82rem;
   padding: 10px 12px 8px;
   box-sizing: border-box;
-  --fc-border-color: #e2e8f0;
+  --fc-border-color: #e5e7eb;
   --fc-page-bg-color: #ffffff;
   --fc-neutral-bg-color: #f8fafc;
   --fc-list-event-hover-bg-color: #f1f5f9;
-  --fc-now-indicator-color: #ef4444;
-  --fc-button-text-color: #ffffff;
-  --fc-button-bg-color: #2563eb;
-  --fc-button-border-color: #2563eb;
-  --fc-button-hover-bg-color: #1d4ed8;
-  --fc-button-hover-border-color: #1d4ed8;
-  --fc-button-active-bg-color: #1e40af;
-  --fc-button-active-border-color: #1e40af;
+  --fc-now-indicator-color: #f43f5e;
+  --fc-button-text-color: #334155;
+  --fc-button-bg-color: #ffffff;
+  --fc-button-border-color: #e2e8f0;
+  --fc-button-hover-bg-color: #f8fafc;
+  --fc-button-hover-border-color: #cbd5e1;
+  --fc-button-active-bg-color: #f1f5f9;
+  --fc-button-active-border-color: #cbd5e1;
 }
 
 .todo-calendar.fc .fc-scrollgrid {
@@ -148,14 +195,14 @@ body {
 }
 
 .todo-calendar.fc .fc-button {
-  @apply rounded-lg border border-blue-600 bg-blue-600 px-2.5 py-1 text-xs font-medium text-white shadow-none transition-colors;
+  @apply rounded-md border border-border bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-none transition-colors hover:bg-slate-50;
   -webkit-tap-highlight-color: transparent;
   -webkit-appearance: none;
   appearance: none;
 }
 
 .todo-calendar.fc .fc-button:hover {
-  @apply border-blue-700 bg-blue-700 text-white;
+  @apply border-slate-300 bg-slate-50 text-slate-900;
 }
 
 .todo-calendar.fc .fc-button:focus {
@@ -182,7 +229,7 @@ body {
 
 .todo-calendar.fc .fc-button-primary:not(:disabled).fc-button-active,
 .todo-calendar.fc .fc-button-primary:not(:disabled):active {
-  @apply border-blue-800 bg-blue-800 text-white;
+  @apply border-slate-300 bg-slate-100 text-slate-900;
 }
 
 .todo-calendar.fc .fc-button-primary:disabled {
@@ -190,15 +237,15 @@ body {
 }
 
 .todo-calendar.fc .fc-button-group {
-  @apply rounded-lg border border-blue-600 bg-transparent p-0;
+  @apply rounded-md border border-border bg-white p-0;
 }
 
 .todo-calendar.fc .fc-button-group .fc-button {
-  @apply rounded-none border-0 bg-blue-600 text-white;
+  @apply rounded-none border-0 bg-transparent text-slate-700;
 }
 
 .todo-calendar.fc .fc-button-group .fc-button + .fc-button {
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  border-left: 1px solid #e2e8f0;
 }
 
 .todo-calendar.fc .fc-button-group .fc-button:first-child {
@@ -239,26 +286,26 @@ body {
 }
 
 .fc .fc-button-primary {
-  background-color: #2563eb !important;
-  border-color: #2563eb !important;
-  color: #ffffff !important;
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #334155 !important;
 }
 
 .fc .fc-button-primary:hover {
-  background-color: #1d4ed8 !important;
-  border-color: #1d4ed8 !important;
-  color: #ffffff !important;
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
 }
 
 .fc .fc-button-primary:not(:disabled):active,
 .fc .fc-button-primary:not(:disabled).fc-button-active {
-  background-color: #1e40af !important;
-  border-color: #1e40af !important;
-  color: #ffffff !important;
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
 }
 
 .todo-calendar.fc .fc-button-group .fc-button.fc-button-active {
-  @apply border border-blue-800 bg-blue-800 text-white;
+  @apply border border-slate-300 bg-slate-100 text-slate-900;
 }
 
 .todo-calendar.fc .fc-col-header-cell-cushion {
@@ -271,7 +318,7 @@ body {
 }
 
 .todo-calendar.fc .fc-day-today {
-  background-color: #eff6ff !important;
+  background-color: transparent !important;
 }
 
 .todo-calendar.fc .fc-timegrid-slot {
@@ -342,17 +389,17 @@ body {
 }
 
 .todo-calendar.fc .fc-daygrid-day {
-  border-color: #dbeafe;
+  border-color: #e5e7eb;
 }
 
 .todo-calendar.fc .fc-daygrid-day:hover {
-  background: #f8fbff;
+  background: #f8fafc;
 }
 
 .todo-calendar.fc .fc-daygrid-more-link {
-  border: 1px solid #dbeafe;
-  background: #eff6ff;
-  color: #1d4ed8;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
   border-radius: 999px;
   padding: 1px 8px;
 }
@@ -360,17 +407,17 @@ body {
 /* Fallback for native FullCalendar "more" popover if it appears. */
 .todo-calendar.fc .fc-popover,
 .fc .fc-popover {
-  border: 1px solid #dbeafe !important;
-  border-radius: 12px !important;
-  box-shadow: 0 8px 24px -14px rgba(30, 64, 175, 0.45) !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 14px 28px -20px rgba(15, 23, 42, 0.35) !important;
   overflow: hidden;
 }
 
 .todo-calendar.fc .fc-popover .fc-popover-header,
 .fc .fc-popover .fc-popover-header {
-  background: #eff6ff !important;
-  color: #1e3a8a !important;
-  border-bottom: 1px solid #dbeafe !important;
+  background: #f8fafc !important;
+  color: #334155 !important;
+  border-bottom: 1px solid #e2e8f0 !important;
 }
 
 /* Modal Styles */
@@ -446,15 +493,15 @@ body {
 }
 
 .btn-primary {
-  @apply rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all duration-150 hover:bg-blue-700 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-55;
+  @apply rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-55;
 }
 
 .btn-secondary {
-  @apply rounded-full bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 transition-all duration-150 hover:bg-blue-100 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-55;
+  @apply rounded-md bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-55;
 }
 
 .btn-danger {
-  @apply rounded-full bg-rose-600 px-4 py-2 text-sm font-medium text-white transition-all duration-150 hover:bg-rose-700 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-55;
+  @apply rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:pointer-events-none disabled:opacity-55;
 }
 
 .md-toast {
@@ -471,7 +518,9 @@ body {
 
 /* Sidebar */
 .sidebar {
-  @apply h-full w-72 overflow-y-auto border-r border-blue-100 bg-white/95 backdrop-blur;
+  border-color: hsl(var(--blue-border));
+  background: #ffffff;
+  @apply h-full w-72 overflow-y-auto border-r backdrop-blur;
 }
 
 /* Priority Colors */
@@ -806,8 +855,7 @@ body {
 
 /* Calendar redesign: Apple-first, dense layout */
 .calendar-shell {
-  background:
-    radial-gradient(140% 70% at 0% 0%, rgba(191, 219, 254, 0.24) 0%, rgba(248, 250, 252, 0.9) 52%, rgba(248, 250, 252, 1) 100%);
+  background: #ffffff;
 }
 
 .calendar-shell button {
@@ -821,7 +869,7 @@ body {
 }
 
 .calendar-topbar {
-  box-shadow: 0 1px 0 rgba(148, 163, 184, 0.24);
+  box-shadow: 0 1px 0 hsl(var(--blue-border-strong) / 0.52);
 }
 
 /* Reduce paint pressure while calendar pages are transitioning. */
@@ -838,9 +886,9 @@ body {
   padding: 8px 10px 10px;
   font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", "Arial", sans-serif;
   font-size: 0.8rem;
-  --fc-border-color: #e2e8f0;
+  --fc-border-color: hsl(var(--blue-border));
   --fc-page-bg-color: #fff;
-  --fc-neutral-bg-color: #f8fafc;
+  --fc-neutral-bg-color: hsl(var(--soft-blue));
   --fc-now-indicator-color: #ef4444;
 }
 
@@ -871,28 +919,29 @@ body {
 .todo-calendar.fc .fc-timegrid-axis-cushion,
 .todo-calendar.fc .fc-timegrid-slot-label-cushion {
   font-size: 10px;
-  color: #94a3b8;
+  color: #64748b;
+  font-weight: 600;
 }
 
 .todo-calendar.fc .fc-timegrid-event {
   border: 0;
   border-left: 0;
-  border-radius: 8px;
-  background: rgba(37, 99, 235, 0.14);
+  border-radius: 6px;
+  background: hsl(var(--soft-blue-strong));
   color: #0f172a;
-  box-shadow: 0 2px 8px -8px rgba(15, 23, 42, 0.5);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .todo-calendar.fc .fc-daygrid-event {
   border: 0;
   border-left: 0;
-  border-radius: 8px;
-  background: rgba(37, 99, 235, 0.14);
+  border-radius: 4px;
+  background: hsl(var(--soft-blue-strong));
   color: #0f172a;
   margin-top: 1px;
   padding: 0 1px;
   min-height: 17px;
-  box-shadow: 0 2px 8px -8px rgba(15, 23, 42, 0.45);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .todo-calendar.fc .fc-daygrid-event .fc-event-title {
@@ -1080,15 +1129,15 @@ body {
 .fc .fc-timeGridThreeDay-view .fc-timegrid-axis {
   width: 58px !important;
   border-left: 0 !important;
-  border-right: 1px solid #dbeafe !important;
-  background: #f8fbff !important;
+  border-right: 1px solid hsl(var(--blue-border)) !important;
+  background: #ffffff !important;
 }
 
 .fc .fc-timeGridWeek-view .fc-timegrid-slot-label,
 .fc .fc-timeGridDay-view .fc-timegrid-slot-label,
 .fc .fc-timeGridThreeDay-view .fc-timegrid-slot-label {
-  border-right: 1px solid #dbeafe !important;
-  background: #f8fbff !important;
+  border-right: 1px solid hsl(var(--blue-border)) !important;
+  background: #ffffff !important;
 }
 
 .fc .fc-timeGridWeek-view .fc-timegrid-slot-label-frame,
@@ -1110,9 +1159,9 @@ body {
   padding: 0 !important;
   border-radius: 0 !important;
   font-size: 11px !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.02em !important;
-  color: #3b82f6 !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+  color: #64748b !important;
   background: transparent !important;
 }
 

@@ -41,7 +41,7 @@ function Register({ setUser }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#eaf2ff] px-4">
+    <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--blue-surface))] px-4">
       <div className="md-card w-full max-w-md space-y-7 p-8">
         <div>
           <h2 className="text-3xl font-bold text-center text-slate-900">{t('app.name')}</h2>

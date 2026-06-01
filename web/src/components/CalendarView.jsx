@@ -1377,14 +1377,14 @@ function CalendarView() {
 
   return (
     <div className="calendar-shell md-page relative flex h-full flex-col [&_button:focus]:outline-none [&_button:focus-visible]:outline-none">
-      <div className="calendar-topbar sticky top-0 z-30 border-b border-blue-100 bg-white/90 backdrop-blur">
+      <div className="calendar-topbar sticky top-0 z-30 border-b border-border bg-white/95 backdrop-blur">
         <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
           <div className="inline-flex items-center gap-2">
-            <div className={`inline-flex items-center rounded-xl border border-blue-100 bg-white shadow-sm ${isCompactMobile ? 'h-9' : 'p-1'}`}>
+            <div className={`inline-flex items-center rounded-md border border-[hsl(var(--blue-border))] bg-white shadow-none ${isCompactMobile ? 'h-9' : 'p-0.5'}`}>
               <button
                 type="button"
                 onClick={() => handleNavigatePeriod(-1)}
-                className={`md-icon-btn text-slate-600 focus:outline-none focus-visible:outline-none ${
+                className={`md-icon-btn text-slate-600 hover:bg-white hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
                   isCompactMobile ? 'h-full w-8 text-sm' : 'h-8 w-8'
                 }`}
                 aria-label="previous period"
@@ -1394,7 +1394,7 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={handleGoToday}
-                className={`inline-flex items-center rounded-lg text-xs font-semibold text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none ${
+                className={`inline-flex items-center rounded-md text-xs font-medium text-slate-700 hover:bg-white hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
                   isCompactMobile ? 'h-full px-3' : 'h-8 px-2.5'
                 }`}
               >
@@ -1403,7 +1403,7 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={() => handleNavigatePeriod(1)}
-                className={`md-icon-btn text-slate-600 focus:outline-none focus-visible:outline-none ${
+                className={`md-icon-btn text-slate-600 hover:bg-white hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
                   isCompactMobile ? 'h-full w-8 text-sm' : 'h-8 w-8'
                 }`}
                 aria-label="next period"
@@ -1418,7 +1418,7 @@ function CalendarView() {
                 aria-expanded={viewDropdownOpen}
                 aria-label="calendar view selector"
                 onClick={() => setViewDropdownOpen((prev) => !prev)}
-                className={`inline-flex items-center gap-1 rounded-xl border border-blue-100 bg-white text-xs font-semibold text-slate-700 shadow-sm hover:bg-blue-50 focus:outline-none focus-visible:outline-none ${
+                className={`inline-flex items-center gap-1 rounded-md border border-[hsl(var(--blue-border))] bg-white text-xs font-medium text-slate-800 shadow-none hover:bg-[hsl(var(--soft-blue))] focus:outline-none focus-visible:outline-none ${
                   isCompactMobile ? 'h-9 px-3' : 'h-10 px-3'
                 }`}
               >
@@ -1428,7 +1428,7 @@ function CalendarView() {
                 </svg>
               </button>
               {viewDropdownOpen && (
-                <div className="absolute left-0 top-11 z-40 min-w-[7.5rem] overflow-hidden rounded-xl border border-blue-100 bg-white py-1 shadow-lg">
+                <div className="absolute left-0 top-11 z-40 min-w-[7.5rem] overflow-hidden rounded-md border border-[hsl(var(--blue-border))] bg-white py-1 shadow-lg">
                   {viewOptions.map((option) => (
                     <button
                       key={option.value}
@@ -1437,10 +1437,10 @@ function CalendarView() {
                         handleChangeView(option.value);
                         setViewDropdownOpen(false);
                       }}
-                      className={`flex w-full items-center px-3 py-2 text-left text-xs font-semibold focus:outline-none focus-visible:outline-none ${
+                      className={`flex w-full items-center px-3 py-2 text-left text-xs font-medium focus:outline-none focus-visible:outline-none ${
                         activeCalendarView === option.value
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'text-slate-700 hover:bg-blue-50'
+                          ? 'bg-[hsl(var(--soft-blue-strong))] text-blue-950'
+                          : 'text-slate-700 hover:bg-[hsl(var(--soft-blue))] hover:text-blue-950'
                       }`}
                     >
                       {option.label}
@@ -1466,7 +1466,7 @@ function CalendarView() {
             <button
               type="button"
               onClick={() => openSearchDialog()}
-              className={`inline-flex items-center justify-center rounded-lg border border-blue-100 bg-white text-slate-600 hover:bg-blue-50 focus:outline-none focus-visible:outline-none ${
+              className={`inline-flex items-center justify-center rounded-md border border-[hsl(var(--blue-border))] bg-white text-slate-600 hover:bg-[hsl(var(--soft-blue))] hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
                 isCompactMobile ? 'h-9 w-9' : 'h-8 w-8'
               }`}
               title={t('common.search')}
@@ -1553,12 +1553,12 @@ function CalendarView() {
             className="md-card w-full max-w-lg shadow-lg"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-blue-100 px-3 py-2.5">
+            <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
               <h3 className="flex min-w-0 items-center gap-1.5 pr-2 text-sm font-semibold text-slate-800">
                 <span className="truncate">{readonlyEventDetail.title || 'Untitled event'}</span>
                 {readonlyEventDetail.allDay && (
                   <span
-                    className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-blue-50 text-[10px] text-blue-700"
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-100 text-[10px] text-slate-500"
                     title="All day"
                     aria-label="All day"
                   >
@@ -1614,7 +1614,7 @@ function CalendarView() {
                     href={readonlyEventDetail.meetingLink}
                     target="_blank"
                     rel="noreferrer"
-                    className="block break-all text-blue-700 hover:underline"
+                    className="block break-all text-sky-700 hover:underline"
                   >
                     {readonlyEventDetail.meetingLink}
                   </a>
@@ -1637,7 +1637,7 @@ function CalendarView() {
             className="md-card w-full max-w-md shadow-lg"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-blue-100 px-3 py-2">
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
               <h3 className="text-sm font-semibold text-slate-800">
                 {moreEventsDateLabel} · {t('task.taskCount', { count: moreEvents.length })}
               </h3>
@@ -1656,7 +1656,7 @@ function CalendarView() {
                     <button
                       key={event.id}
                       type="button"
-                      className="mb-1 block w-full rounded-lg border-l-2 border-l-blue-400 bg-slate-50/80 px-2.5 py-1.5 text-left transition-colors hover:bg-blue-50/70"
+                      className="mb-1 block w-full rounded-md border border-[hsl(var(--blue-border))] border-l-2 border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue-strong))] px-2.5 py-1.5 text-left transition-colors hover:bg-[hsl(var(--soft-blue))]"
                       onClick={() => {
                         requestCloseMoreEventsModal();
                         openTaskFromCalendarEvent(event);
@@ -1674,7 +1674,7 @@ function CalendarView() {
                   <button
                     key={event.id}
                     type="button"
-                    className="mb-1 block w-full rounded-lg border-l-2 border-l-blue-400 bg-slate-50/80 px-2.5 py-1.5 text-left transition-colors hover:bg-blue-50/70"
+                    className="mb-1 block w-full rounded-md border border-[hsl(var(--blue-border))] border-l-2 border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue-strong))] px-2.5 py-1.5 text-left transition-colors hover:bg-[hsl(var(--soft-blue))]"
                     onClick={() => {
                       requestCloseMoreEventsModal();
                       openTaskFromCalendarEvent(event);

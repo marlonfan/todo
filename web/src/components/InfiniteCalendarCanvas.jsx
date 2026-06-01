@@ -1286,7 +1286,7 @@ export default function InfiniteCalendarCanvas({
       columns.push(
         <div
           key={`day-${i}`}
-          className="pointer-events-none absolute bottom-0 border-l border-blue-100"
+          className="pointer-events-none absolute bottom-0 border-l border-[hsl(var(--blue-border))]/70"
           style={{ left: x, width: dayWidth, top: timeGridBodyTop }}
         />
       );
@@ -1296,7 +1296,7 @@ export default function InfiniteCalendarCanvas({
     for (let h = 1; h <= 24; h += 1) {
       const y = timeGridBodyTop + h * HOUR_HEIGHT;
       hourLines.push(
-        <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-blue-100" style={{ top: y }} />
+        <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-[hsl(var(--blue-border))]/70" style={{ top: y }} />
       );
     }
 
@@ -1304,7 +1304,7 @@ export default function InfiniteCalendarCanvas({
     for (let h = 0; h < 24; h += 1) {
       const y = timeGridBodyTop + h * HOUR_HEIGHT;
       timeAxis.push(
-        <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-500" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
+        <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-700/80" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
           {String(h).padStart(2, '0')}:00
         </div>
       );
@@ -1499,12 +1499,12 @@ export default function InfiniteCalendarCanvas({
           height: h,
           zIndex: 20 + col,
         },
-        className: `canvas-event absolute overflow-hidden rounded-md px-1.5 py-0.5 text-[11px] border-l-[3px] ring-2 ring-white ${
+        className: `canvas-event absolute overflow-hidden rounded-md border border-l-[3px] px-1.5 py-0.5 text-[11px] shadow-sm ring-2 ring-white ${
           readonly
-            ? 'bg-slate-200 border-slate-500 text-slate-700'
+            ? 'border-[hsl(var(--blue-border))] border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue))] text-slate-700'
             : status === 'completed'
-              ? 'bg-emerald-100 border-emerald-600 text-emerald-900 line-through'
-              : 'bg-blue-100 border-blue-600 text-blue-900'
+              ? 'border-emerald-200 border-l-emerald-600 bg-emerald-100 text-emerald-900 line-through'
+              : 'border-[hsl(var(--blue-border))] border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue))] text-slate-900'
         }`,
         titleStyle,
       };
@@ -1526,13 +1526,13 @@ export default function InfiniteCalendarCanvas({
           {showNowLine && (
             <>
               <div
-                className="pointer-events-none absolute border-t border-rose-500/85"
+                className="pointer-events-none absolute border-t border-rose-500/70"
                 style={{
                   left: TIME_AXIS_WIDTH,
                   right: 0,
                   top: nowLineY,
                   zIndex: 56,
-                  boxShadow: '0 0 8px rgba(244,63,94,0.45)',
+                  boxShadow: '0 0 4px rgba(244,63,94,0.22)',
                 }}
               />
               <div
@@ -1587,7 +1587,7 @@ export default function InfiniteCalendarCanvas({
             className="pointer-events-none absolute left-0"
             style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 58 }}
           >
-            <span className="inline-flex h-5 items-center rounded-r-full bg-rose-500 px-2 text-[10px] font-semibold text-white shadow-sm">
+            <span className="inline-flex h-5 items-center rounded-r-full bg-rose-500/95 px-2 text-[10px] font-semibold text-white shadow-sm">
               {currentTimeLabel}
             </span>
           </div>
@@ -1626,19 +1626,19 @@ export default function InfiniteCalendarCanvas({
       dayHeaderCells.push(
         <div
           key={`hdr-${i}`}
-          className="pointer-events-none absolute top-0 flex flex-col items-center justify-center border-b border-l border-blue-100 bg-white px-1 text-center"
+          className="pointer-events-none absolute top-0 flex flex-col items-center justify-center border-b border-l border-[hsl(var(--blue-border))]/70 bg-white px-1 text-center"
           style={{ left: x, width: dayWidth, height: TIMEGRID_HEADER_HEIGHT }}
         >
           <span className={`text-[10px] font-semibold tracking-[0.08em] ${
-            isTodayColumn ? 'text-blue-700' : 'text-slate-500'
+            isTodayColumn ? 'text-[hsl(var(--neutral-blue-foreground))]' : 'text-slate-600'
           }`}
           >
             周{weekDayLabels[day.day()]}
           </span>
           <span className={`mt-1.5 inline-flex min-w-[40px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold ${
             isTodayColumn
-              ? 'bg-blue-600 text-white shadow-sm'
-              : 'bg-slate-100 text-slate-700'
+              ? 'bg-[hsl(var(--neutral-blue))] text-white shadow-sm'
+              : 'text-slate-700'
           }`}
           >
             {day.format('M/D')}
@@ -1649,7 +1649,7 @@ export default function InfiniteCalendarCanvas({
       allDayColumns.push(
         <div
           key={`all-day-col-${i}`}
-          className="pointer-events-none absolute border-b border-l border-blue-100 bg-white/95"
+          className="pointer-events-none absolute border-b border-l border-[hsl(var(--blue-border))]/70 bg-white"
           style={{ left: x, width: dayWidth, top: allDayAreaTop, height: allDayAreaHeight }}
         />
       );
@@ -1686,10 +1686,10 @@ export default function InfiniteCalendarCanvas({
             key={`${item.eventKey}::${dayKey}`}
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
-            className={`canvas-event absolute z-30 overflow-hidden rounded px-1 text-[10px] leading-tight ${
+            className={`canvas-event absolute z-30 overflow-hidden rounded-sm border px-1 text-[10px] leading-tight shadow-sm ${
               readonly
-                ? 'bg-slate-500/85 text-white'
-                : 'bg-blue-600/80 text-white'
+                ? 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-700'
+                : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
             } ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
             style={{
               ...visualStyle,
@@ -1709,7 +1709,7 @@ export default function InfiniteCalendarCanvas({
           <button
             key={`all-day-more-${dayKey}`}
             type="button"
-            className="canvas-ui-action absolute inline-flex items-center rounded px-1 text-[10px] font-semibold leading-tight text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+            className="canvas-ui-action absolute inline-flex items-center rounded px-1 text-[10px] font-semibold leading-tight text-blue-700 hover:bg-[hsl(var(--soft-blue-strong))] hover:text-blue-950 focus:outline-none focus-visible:outline-none"
             style={{
               left: x + 2,
               top: y,
@@ -1743,11 +1743,11 @@ export default function InfiniteCalendarCanvas({
       <div className="absolute left-0 right-0 top-0 z-[72] overflow-hidden" style={{ height: timeGridTopHeight }}>
         <div className="absolute inset-0 bg-white" />
         <div
-          className="pointer-events-none absolute left-0 top-0 z-20 border-b border-blue-100 bg-white"
+          className="pointer-events-none absolute left-0 top-0 z-20 border-b border-[hsl(var(--blue-border))] bg-white"
           style={{ width: TIME_AXIS_WIDTH, height: timeGridTopHeight }}
         >
           <div
-            className="absolute left-0 right-0 flex items-center justify-end pr-2 text-[10px] font-semibold tracking-[0.08em] text-blue-500"
+            className="absolute left-0 right-0 flex items-center justify-end pr-2 text-[10px] font-semibold tracking-[0.08em] text-blue-700/75"
             style={{ top: allDayAreaTop, height: allDayAreaHeight }}
           >
             全天
@@ -1776,7 +1776,7 @@ export default function InfiniteCalendarCanvas({
       const weekStart = monthNativeStartWeek.add(w, 'week');
       const y = w * MONTH_WEEK_HEIGHT;
       rows.push(
-        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-blue-100" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
+        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-[hsl(var(--blue-border))]/70" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
           {Array.from({ length: 7 }).map((_, d) => {
             const day = weekStart.add(d, 'day');
             const dayKey = day.format('YYYY-MM-DD');
@@ -1785,8 +1785,8 @@ export default function InfiniteCalendarCanvas({
               <button
                 key={`${w}-${d}`}
                 type="button"
-                className={`absolute flex items-start justify-start border-0 border-l border-blue-100 p-0 text-left focus:outline-none focus-visible:outline-none ${
-                  isToday ? 'bg-blue-50/55' : 'bg-transparent'
+                className={`absolute flex items-start justify-start border-0 border-l border-[hsl(var(--blue-border))]/70 p-0 text-left focus:outline-none focus-visible:outline-none ${
+                  isToday ? 'bg-[hsl(var(--soft-blue))]/70' : 'bg-transparent'
                 }`}
                 style={{
                   top: 0,
@@ -1815,13 +1815,13 @@ export default function InfiniteCalendarCanvas({
                         <span
                           className={`inline-flex items-center rounded-full text-xs font-semibold ${
                             isToday
-                              ? 'bg-blue-600 px-2 py-0.5 text-white shadow-sm'
+                              ? 'bg-[hsl(var(--neutral-blue))] px-2 py-0.5 text-white shadow-sm'
                               : 'px-0 text-slate-700'
                           }`}
                         >
                           {day.format('M/D')}
                         </span>
-                        <span className="text-[10px] text-slate-400">
+                        <span className="text-[10px] text-slate-500">
                           {displayInfo.lunarDisplay}
                         </span>
                       </div>
@@ -1897,8 +1897,8 @@ export default function InfiniteCalendarCanvas({
             type="button"
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
-            className={`canvas-event absolute h-5 overflow-hidden rounded border-0 px-1 text-left text-[10px] focus:outline-none focus-visible:outline-none ${
-              readonly ? 'bg-slate-500/85 text-white' : 'bg-blue-600/80 text-white'
+            className={`canvas-event absolute h-5 overflow-hidden rounded-sm border px-1 text-left text-[10px] shadow-sm focus:outline-none focus-visible:outline-none ${
+              readonly ? 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-700' : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
             }`}
             style={{
               left: x,
@@ -1927,7 +1927,7 @@ export default function InfiniteCalendarCanvas({
           <button
             key={`more-${key}`}
             type="button"
-            className="canvas-ui-action absolute inline-flex h-5 items-center whitespace-nowrap rounded px-1 text-left text-[10px] font-semibold leading-5 text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:outline-none"
+            className="canvas-ui-action absolute inline-flex h-5 items-center whitespace-nowrap rounded px-1 text-left text-[10px] font-semibold leading-5 text-blue-700 hover:bg-[hsl(var(--soft-blue-strong))] hover:text-blue-950 focus:outline-none focus-visible:outline-none"
             style={{
               left: x,
               top: y,
@@ -1960,11 +1960,11 @@ export default function InfiniteCalendarCanvas({
     return (
       <>
         <div
-          className="pointer-events-none sticky top-0 z-20 grid grid-cols-7 border-b border-blue-100 bg-white/95 text-xs font-semibold text-slate-600 backdrop-blur"
+          className="pointer-events-none sticky top-0 z-20 grid grid-cols-7 border-b border-[hsl(var(--blue-border))]/70 bg-white/95 text-xs font-semibold text-blue-950 backdrop-blur"
           style={{ height: MONTH_HEADER_HEIGHT }}
         >
           {weekDayLabels.map((label) => (
-            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-blue-100">
+            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-[hsl(var(--blue-border))]/70">
               周{label}
             </div>
           ))}

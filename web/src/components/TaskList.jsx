@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
+import { Plus } from 'lucide-react';
 import TaskModal from './TaskModal';
 import {
   formatDateTime,
@@ -63,6 +64,15 @@ import {
   updateTaskStatusLocal,
 } from '../data/taskMutations';
 import { onTaskIDRemapped } from '../data/syncEngine';
+import { Button } from './ui/Button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from './ui/DropdownMenu';
 
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
@@ -791,30 +801,36 @@ const TaskRow = React.memo(function TaskRow({
         });
         onSelectTask(task);
       }}
-      className={`group cursor-pointer rounded-lg px-3 py-3 transition ${
+      className={`group relative cursor-pointer border-b border-[hsl(var(--blue-border))] px-3 py-2.5 transition-colors last:border-b-0 ${
         selected
-          ? 'bg-blue-50/70'
-          : 'bg-slate-50/70 hover:bg-blue-50/50'
+          ? 'bg-[hsl(var(--soft-blue-strong))] before:absolute before:bottom-2 before:left-0 before:top-2 before:w-0.5 before:rounded-r-full before:bg-[hsl(var(--neutral-blue))]'
+          : 'bg-white hover:bg-[hsl(var(--soft-blue))]'
       }`}
     >
-      <div className="flex items-center gap-3">
-        <input
-          type="checkbox"
+      <div className="flex items-center gap-2.5">
+        <button
+          type="button"
           data-testid="task-row-status-checkbox"
-          checked={isCompleted}
+          aria-pressed={isCompleted}
           disabled={isDeleted || isReadOnly}
-          onChange={(e) => {
+          onClick={(e) => {
             e.stopPropagation();
             onToggleStatus(task, isCompleted ? 'pending' : 'completed');
           }}
-          className="h-4 w-4 shrink-0 rounded border-slate-300 accent-blue-600 cursor-pointer"
-        />
-        <h3 className={`min-w-0 flex-1 truncate text-base ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+          className={`grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition-colors ${
+            isCompleted
+              ? 'border-blue-600 bg-blue-600 text-white'
+              : 'border-slate-300 bg-white text-transparent hover:border-blue-500 hover:bg-blue-50'
+          } disabled:cursor-not-allowed disabled:opacity-45`}
+        >
+          <span className="text-[10px] leading-none">✓</span>
+        </button>
+        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] leading-5 ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
           {task.title}
         </h3>
-        <div className="hidden shrink-0 items-center gap-2 text-sm sm:flex">
+        <div className="hidden shrink-0 items-center gap-2 text-xs sm:flex">
           {isReadOnly && (
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>
+            <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>
           )}
           {isDeleted && (
             <button
@@ -824,18 +840,18 @@ const TaskRow = React.memo(function TaskRow({
                 onToggleStatus(task, 'pending');
               }}
               disabled={isReadOnly}
-              className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
+              className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
               title={labels.markPending}
             >
               ↺
             </button>
           )}
-          {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
+          {isDeleted && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
           <span title={priority.title} className={priority.className}>{priority.text}</span>
           {task.categories?.slice(0, 2).map((cat) => (
             <span
               key={cat.id}
-              className="inline-flex max-w-[6rem] items-center gap-1 rounded px-1.5 py-0.5"
+              className="inline-flex max-w-[6rem] items-center gap-1 rounded-sm px-1.5 py-0.5"
               style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
             >
               <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
@@ -852,15 +868,15 @@ const TaskRow = React.memo(function TaskRow({
       </div>
 
       {/* Mobile: time and tags on second line */}
-      <div className="mt-1 flex flex-wrap items-center gap-2 pl-7 text-sm sm:hidden">
+      <div className="mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs text-slate-500 sm:hidden">
         {formatDisplayTimeWithYear(displayTime, timezone)}
-        {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
-        {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
+        {isDeleted && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
+        {isReadOnly && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
         <span title={priority.title} className={priority.className}>{priority.text}</span>
         {task.categories?.slice(0, 2).map((cat) => (
           <span
             key={cat.id}
-            className="inline-flex max-w-[6rem] items-center gap-1 rounded px-1.5 py-0.5"
+            className="inline-flex max-w-[6rem] items-center gap-1 rounded-sm px-1.5 py-0.5"
             style={{ backgroundColor: `${cat.color}20`, color: cat.color }}
           >
             <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cat.color }} />
@@ -3639,10 +3655,10 @@ function TaskList({ forcedView = '' }) {
       <div className="grid h-full grid-cols-1 gap-0 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
         <section className="md-pane flex h-full min-h-0 flex-col">
           {showListHeader && (
-            <div className="border-b border-blue-100 px-3 py-2.5">
+            <div className="border-b border-border bg-white px-3 py-2.5">
               <div className="flex min-h-[36px] items-center justify-end gap-2 md:gap-3">
                 <div className="hidden min-w-0 md:block md:flex-none">
-                  <h2 className="truncate text-sm font-semibold text-slate-800 md:text-base">{viewTitle}</h2>
+                  <h2 className="truncate text-sm font-semibold text-slate-900 md:text-base">{viewTitle}</h2>
                   <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
                 </div>
                 <div className="flex min-w-0 items-center gap-2 md:flex-1">
@@ -3675,90 +3691,66 @@ function TaskList({ forcedView = '' }) {
                     </div>
                   )}
                   {canShowSortGroup && !isCompactMobile && (
-                    <div ref={listToolbarPanelRef} className="relative flex items-center gap-1">
-                      <button
-                        type="button"
-                        data-testid="task-sort-toggle-button"
-                        onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
-                        className={`md-icon-btn text-sm ${
-                          listToolbarPanel === 'sort'
-                            ? 'bg-sky-50 text-sky-700'
-                            : 'text-slate-500'
-                        }`}
-                        title={t('common.filter')}
-                      >
-                        <IconSort className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
-                        className={`md-icon-btn text-sm ${
-                          listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
-                            ? 'bg-indigo-50 text-indigo-700'
-                            : 'text-slate-500'
-                        }`}
-                        title={t('task.groupNone')}
-                      >
-                        <IconGroup className="h-4 w-4" />
-                      </button>
-
-                      {listToolbarPanel === 'sort' && (
-                        <div className="md-popover absolute right-0 top-10 z-20 w-52">
-                          <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                            {t('common.filter')}
-                          </div>
-                          <div className="space-y-1">
+                    <div className="flex items-center gap-1">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            data-testid="task-sort-toggle-button"
+                            className="text-slate-500 hover:text-slate-950 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950"
+                            title={t('common.filter')}
+                          >
+                            <IconSort className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-52">
+                          <DropdownMenuLabel>{t('common.filter')}</DropdownMenuLabel>
+                          <DropdownMenuRadioGroup value={sortBy} onValueChange={setSortBy}>
                             {sortOptions.map((option) => (
-                              <button
+                              <DropdownMenuRadioItem
                                 key={option.value}
-                                type="button"
+                                value={option.value}
                                 data-testid={`task-sort-option-${option.value}`}
-                                onClick={() => {
-                                  setSortBy(option.value);
-                                  setListToolbarPanel('');
-                                }}
-                                className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
-                                  sortBy === option.value
-                                    ? 'bg-sky-50 text-sky-700'
-                                    : 'text-slate-600 hover:bg-slate-50'
-                                }`}
+                                className="text-xs"
                               >
                                 {option.label}
-                              </button>
+                              </DropdownMenuRadioItem>
                             ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {listToolbarPanel === 'group' && (
-                        <div className="md-popover absolute right-0 top-10 z-20 w-52">
-                          <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                            {t('task.groupNone')}
-                          </div>
-                          <div className="space-y-1">
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className={`${
+                              effectiveGroupBy !== 'none'
+                                ? 'bg-slate-100 text-slate-950'
+                                : 'text-slate-500 hover:text-slate-950'
+                            } focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950`}
+                            title={t('task.groupNone')}
+                          >
+                            <IconGroup className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-52">
+                          <DropdownMenuLabel>{t('task.groupNone')}</DropdownMenuLabel>
+                          <DropdownMenuRadioGroup value={effectiveGroupBy} onValueChange={setGroupBy}>
                             {listGroupOptions.map((option) => (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => {
-                                  setGroupBy(option.value);
-                                  setListToolbarPanel('');
-                                }}
-                                className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
-                                  effectiveGroupBy === option.value
-                                    ? 'bg-indigo-50 text-indigo-700'
-                                    : 'text-slate-600 hover:bg-slate-50'
-                                }`}
-                              >
+                              <DropdownMenuRadioItem key={option.value} value={option.value} className="text-xs">
                                 {option.label}
-                              </button>
+                              </DropdownMenuRadioItem>
                             ))}
-                          </div>
-                        </div>
-                      )}
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   )}
-                  <button
+                  <Button
                     type="button"
                     data-testid="task-new-button"
                     onClick={() => {
@@ -3768,17 +3760,18 @@ function TaskList({ forcedView = '' }) {
                       }
                       openAdvancedModal(null);
                     }}
-                    className="btn-primary hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg px-0 py-0 text-base md:inline-flex"
+                    size="icon"
+                    className="hidden md:inline-flex"
                     title={t('task.newTask')}
                   >
-                    +
-                  </button>
+                    <Plus className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
             </div>
           )}
 
-          <div className="mobile-scrollbar-hidden flex-1 overflow-auto p-1.5 md:p-2">
+          <div className="mobile-scrollbar-hidden flex-1 overflow-auto bg-white md:bg-white md:p-2">
             {loading ? (
               <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
             ) : filteredTasks.length === 0 ? (
@@ -3791,11 +3784,11 @@ function TaskList({ forcedView = '' }) {
                 {taskGroups.map((group) => (
                   <div key={group.key} className="space-y-1">
                     {group.title ? (
-                      <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      <div className="sticky top-0 z-[1] bg-white/95 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700/60 backdrop-blur md:bg-white/95">
                         {group.title} · {group.tasks.length}
                       </div>
                     ) : null}
-                    <div className="space-y-1">
+                    <div className="overflow-hidden border-y border-[hsl(var(--blue-border))] bg-white md:rounded-md md:border">
                       {group.tasks.map((task) => (
                         <TaskRow
                           key={task.id}

@@ -19,6 +19,7 @@ import {
   IconTag,
   IconTrash,
 } from './icons/TaskIcons';
+import { Button } from './ui/Button';
 import { getTokenStore } from '../api/client';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import { useCategoriesQuery } from '../query/hooks';
@@ -576,7 +577,7 @@ function MainLayout({ user, setUser }) {
   }
 
   return (
-    <div className="h-screen bg-[#eaf2ff] flex flex-col md:flex-row">
+    <div className="h-screen bg-white flex flex-col md:flex-row">
       {activeSyncConflict && (
         <div className="fixed right-2 top-2 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
           <div className="text-xs font-semibold text-amber-900">{t('task.syncConflictTitle')}</div>
@@ -609,15 +610,17 @@ function MainLayout({ user, setUser }) {
         </div>
       )}
       {!hideMobileHeader && (
-        <div className="md:hidden flex h-12 items-center justify-between border-b border-blue-100 bg-white/95 px-4 backdrop-blur">
+        <div className="md:hidden flex h-12 items-center justify-between border-b border-border bg-white/95 px-4 backdrop-blur">
           <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
-          <button
+          <Button
             type="button"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-100 bg-blue-50/70 text-blue-700"
+            variant="ghost"
+            size="icon"
+            className="text-slate-700"
           >
             {mobileMenuOpen ? '✕' : '☰'}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -635,12 +638,12 @@ function MainLayout({ user, setUser }) {
         className={`sidebar flex flex-col fixed md:static inset-y-0 left-0 z-40 transform transition-transform duration-200
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
-        <div className="m-3 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 px-4 py-4 text-white shadow-sm">
-          <h1 className="text-xl font-semibold">{t('app.name')}</h1>
-          <p className="text-sm text-blue-100">{user.username}</p>
+        <div className="m-3 rounded-md border border-border bg-white px-3 py-3 shadow-sm">
+          <h1 className="text-base font-semibold text-slate-950">{t('app.name')}</h1>
+          <p className="truncate text-xs text-slate-500">{user.username}</p>
         </div>
 
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 space-y-1 p-3">
           <Link
             to="/"
             className={navItemClass(activeTab === 'calendar')}
@@ -651,7 +654,7 @@ function MainLayout({ user, setUser }) {
             </span>
           </Link>
 
-          <div className="mt-4 px-4 text-xs font-semibold uppercase tracking-wide text-blue-400">
+          <div className="mt-4 px-3 text-[11px] font-semibold uppercase tracking-wide text-blue-700/65">
             {t('task.listView')}
           </div>
           {taskNavItems.map((item) => {
@@ -716,7 +719,7 @@ function MainLayout({ user, setUser }) {
             ))}
           </div>
 
-          <div className="mt-4 border-t border-blue-100 pt-3">
+          <div className="mt-4 border-t border-border pt-3">
             <Link
               to="/tasks?view=completed"
               className={navItemClass(isTaskNavActive('/tasks?view=completed'))}
@@ -757,7 +760,7 @@ function MainLayout({ user, setUser }) {
           </Link>
         </nav>
 
-        <div className="border-t border-blue-100 p-3">
+        <div className="border-t border-border p-3">
           <button
             onClick={handleLogout}
             className="md-nav-item md-nav-item-idle w-full text-left"
@@ -787,7 +790,7 @@ function MainLayout({ user, setUser }) {
         </Routes>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-blue-100 bg-white/95 backdrop-blur md:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-white/95 backdrop-blur md:hidden">
         <div className={`grid h-14 ${mobileTabs.length === 5 ? 'grid-cols-5' : mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
@@ -801,12 +804,12 @@ function MainLayout({ user, setUser }) {
                   title={item.label}
                   onClick={() => openSearchDialog()}
                   className={`appearance-none border-0 bg-transparent p-0 flex items-center justify-center ${
-                    active ? 'text-blue-700' : 'text-slate-500'
+                    active ? 'text-slate-950' : 'text-slate-500'
                   }`}
                 >
                   <span
                     className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                      active ? 'border-blue-700' : 'border-transparent hover:border-blue-200'
+                      active ? 'border-[hsl(var(--neutral-blue-foreground))]' : 'border-transparent hover:border-[hsl(var(--blue-border-strong))]'
                     }`}
                   >
                     <ItemIcon className="h-[18px] w-[18px]" />
@@ -821,12 +824,12 @@ function MainLayout({ user, setUser }) {
                 aria-label={item.label}
                 title={item.label}
                 className={`flex items-center justify-center ${
-                  active ? 'text-blue-700' : 'text-slate-500'
+                  active ? 'text-slate-950' : 'text-slate-500'
                 }`}
               >
                 <span
                   className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                    active ? 'border-blue-700' : 'border-transparent hover:border-blue-200'
+                    active ? 'border-[hsl(var(--neutral-blue-foreground))]' : 'border-transparent hover:border-[hsl(var(--blue-border-strong))]'
                   }`}
                 >
                   <ItemIcon className="h-[18px] w-[18px]" />
