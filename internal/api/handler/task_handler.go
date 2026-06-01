@@ -79,6 +79,7 @@ func parseOccurrenceStatuses(raw string) ([]models.TaskStatus, error) {
 		return []models.TaskStatus{
 			models.TaskStatusCompleted,
 			models.TaskStatusCancelled,
+			models.TaskStatusSkipped,
 		}, nil
 	}
 	parts := strings.Split(trimmed, ",")
@@ -87,7 +88,7 @@ func parseOccurrenceStatuses(raw string) ([]models.TaskStatus, error) {
 	for _, part := range parts {
 		value := models.TaskStatus(strings.TrimSpace(part))
 		switch value {
-		case models.TaskStatusPending, models.TaskStatusCompleted, models.TaskStatusCancelled:
+		case models.TaskStatusPending, models.TaskStatusCompleted, models.TaskStatusCancelled, models.TaskStatusSkipped:
 		default:
 			return nil, errors.New("invalid status filter")
 		}

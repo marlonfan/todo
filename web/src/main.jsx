@@ -13,9 +13,23 @@ import { initPlatform } from './platform/init'
   // Service Worker：Tauri 桌面端不需要
   if ('serviceWorker' in navigator && !('__TAURI_INTERNALS__' in window)) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch((err) => {
-        console.error('Service worker registration failed:', err);
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => {
+          registration.addEventListener('updatefound', () => {
+            const worker = registration.installing;
+            if (!worker) return;
+
+            worker.addEventListener('statechange', () => {
+              if (worker.state === 'activated' && navigator.serviceWorker.controller) {
+                window.location.reload();
+              }
+            });
+          });
+        })
+        .catch((err) => {
+          console.error('Service worker registration failed:', err);
+        });
     });
   }
 

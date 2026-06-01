@@ -334,98 +334,10 @@ func (s *NotifyService) ProcessPendingNotifications() error {
 			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
 		} else {
 			_ = s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusSent, &now, "")
-			if n.Source == models.NotificationSourceDefaultAuto {
-				if rollErr := s.scheduleNextRecurringDefaultReminderAfterSend(&n, now); rollErr != nil {
-					log.Printf("Failed to schedule next recurring reminder after send for notification %d: %v", n.ID, rollErr)
-				}
-			}
 		}
 	}
 
 	return nil
-}
-
-func (s *NotifyService) scheduleNextRecurringDefaultReminderAfterSend(n *models.Notification, sentAt time.Time) error {
-	if n == nil || n.Source != models.NotificationSourceDefaultAuto || n.Task == nil {
-		return nil
-	}
-	userID := n.Task.UserID
-	if userID <= 0 {
-		return nil
-	}
-
-	task, err := s.taskRepo.GetByIDAndUser(n.TaskID, userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		return err
-	}
-	if task.RecurrenceRule == nil || task.Status != models.TaskStatusPending {
-		return nil
-	}
-
-	user, err := s.userRepo.GetByID(userID)
-	if err != nil {
-		return err
-	}
-	if !user.DefaultReminderEnabled {
-		return nil
-	}
-
-	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		return err
-	}
-
-	minutes := user.DefaultReminderMinutes
-	if minutes <= 0 {
-		minutes = 5
-	}
-
-	from := sentAt.UTC()
-	estimatedCurrentStart := n.NotifyAt.UTC().Add(time.Duration(minutes) * time.Minute)
-	if estimatedCurrentStart.After(from) {
-		from = estimatedCurrentStart
-	}
-	from = from.Add(time.Second)
-
-	nextStart, err := s.resolveNextPendingRecurringReminderStart(task, from)
-	if err != nil {
-		return err
-	}
-	if nextStart == nil {
-		return nil
-	}
-
-	resolvedStart := resolveReminderStartForTask(
-		nextStart.UTC(),
-		task.AllDay,
-		user.Timezone,
-		user.DefaultMorningTime,
-	)
-	notifyAt := resolvedStart.Add(-time.Duration(minutes) * time.Minute)
-	now := time.Now().UTC()
-	if !notifyAt.After(now) {
-		return nil
-	}
-
-	nextNotification := &models.Notification{
-		TaskID:       task.ID,
-		Source:       models.NotificationSourceDefaultAuto,
-		DeliveryMode: models.NotificationDeliveryCurrentDefault,
-		Channel:      defaultSetting.Channel,
-		Config:       cloneNotifyConfig(defaultSetting.Config),
-		NotifyAt:     notifyAt,
-		NextRetryAt:  &notifyAt,
-		DedupeKey:    buildDedupeKey(task.ID, models.NotificationSourceDefaultAuto, notifyAt),
-		RetryCount:   0,
-		Status:       models.NotifyStatusPending,
-	}
-	return s.notifyRepo.ReplaceActiveByTaskSource(nextNotification)
 }
 
 func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Task, from time.Time) (*time.Time, error) {
@@ -438,8 +350,9 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 		fromUTC = time.Now().UTC()
 	}
 	fromDate := fromUTC.Truncate(24 * time.Hour)
+	searchStart := fromDate.AddDate(-3, 0, 0)
 	horizon := fromDate.AddDate(3, 0, 0)
-	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(task.UserID, []int64{task.ID}, fromDate, horizon)
+	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(task.UserID, []int64{task.ID}, searchStart, horizon)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +364,8 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 
 	tz := s.resolveUserTimezone(task.UserID, nil)
 	loc := loadLocationOrUTC(tz)
-	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon, tz)
+	occurrences := buildTaskOccurrenceStarts(task, searchStart, horizon, tz)
+	var earliestPending *time.Time
 	for _, occurrenceStart := range occurrences {
 		localOcc := occurrenceStart.In(loc)
 		dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
@@ -469,13 +383,13 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 		if override != nil && override.StartTime != nil {
 			startTime = override.StartTime.UTC()
 		}
-		if !startTime.After(fromUTC) {
-			continue
+		if earliestPending == nil || startTime.Before(*earliestPending) {
+			next := startTime
+			earliestPending = &next
 		}
-		return &startTime, nil
 	}
 
-	return nil, nil
+	return earliestPending, nil
 }
 
 func (s *NotifyService) resolveUserTimezone(userID int64, taskUser *models.User) string {

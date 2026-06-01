@@ -66,6 +66,9 @@ func backfillTaskOccurrences(db *gorm.DB) error {
 			next := row.UpdatedAt.UTC()
 			occ.DeletedAt = &next
 			occ.CompletedAt = nil
+		case models.TaskStatusSkipped:
+			occ.CompletedAt = nil
+			occ.DeletedAt = nil
 		}
 	}
 	for _, row := range overrideRows {

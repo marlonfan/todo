@@ -166,6 +166,7 @@ function formatConflictValue(field, value, categories, t) {
   if (field === 'status') {
     if (value === 'completed') return t('task.statusCompleted');
     if (value === 'cancelled') return t('task.statusCancelled');
+    if (value === 'skipped') return t('task.statusSkipped');
     return t('task.statusPending');
   }
   if (field === 'all_day') {

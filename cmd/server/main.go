@@ -195,6 +195,9 @@ func setupStaticFiles(r *gin.Engine) {
 			if f, err := staticFS.Open(requestPath); err == nil {
 				if info, statErr := f.Stat(); statErr == nil && !info.IsDir() {
 					f.Close()
+					if requestPath == "sw.js" || requestPath == "index.html" {
+						c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+					}
 					c.FileFromFS(requestPath, http.FS(staticFS))
 					return
 				}
@@ -223,6 +226,7 @@ func setupStaticFiles(r *gin.Engine) {
 			return
 		}
 
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.Data(http.StatusOK, "text/html", content)
 	})
 }

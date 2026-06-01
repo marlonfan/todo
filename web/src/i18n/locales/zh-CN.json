@@ -73,6 +73,8 @@
     "statusPending": "待办",
     "statusCompleted": "已完成",
     "statusCancelled": "已取消",
+    "statusSkipped": "已跳过",
+    "skipThis": "跳过本次",
     "markComplete": "标记完成",
     "markPending": "标记待办",
     "completedTasks": "已完成任务",

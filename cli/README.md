@@ -158,6 +158,7 @@ todo-cli task update 42 --title "Ship CLI v2" --if-match 3
 todo-cli task update 42 --description-file ./daily-review.md --if-match 3
 todo-cli task complete 42
 todo-cli task pending 42
+todo-cli task skip 42
 todo-cli task cancel 42
 todo-cli task schedule 42 --start-time-local "2026-05-11T09:00:00" --timezone Asia/Shanghai
 todo-cli task remind 42 --notify-at "2026-05-11T20:25:00+08:00"
@@ -172,7 +173,7 @@ Useful task flags:
 - `--description` or `--desc`
 - `--description-file` or `--desc-file` for long Markdown
 - `--priority low|medium|high`
-- `--status pending|completed|cancelled`
+- `--status pending|completed|cancelled|skipped`
 - `--start-time` / `--end-time`: RFC3339 timestamps
 - `--start-time-local` / `--end-time-local`: local timestamps interpreted with `--timezone`
 - `--timezone`

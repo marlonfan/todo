@@ -14,6 +14,7 @@ const (
 	TaskStatusPending   TaskStatus = "pending"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusCancelled TaskStatus = "cancelled"
+	TaskStatusSkipped   TaskStatus = "skipped"
 )
 
 // Priority represents task priority
@@ -173,7 +174,7 @@ type UpdateTaskRequest struct {
 	Title             string          `json:"title" binding:"omitempty,max=200"`
 	Description       string          `json:"description"`
 	Priority          *Priority       `json:"priority"`
-	Status            TaskStatus      `json:"status" binding:"omitempty,oneof=pending completed cancelled"` // Fix 2: 添加 Status
+	Status            TaskStatus      `json:"status" binding:"omitempty,oneof=pending completed cancelled skipped"` // Fix 2: 添加 Status
 	InstanceID        string          `json:"instance_id"`
 	OccurrenceDate    string          `json:"occurrence_date"`
 	StartTime         *time.Time      `json:"start_time"`
@@ -189,7 +190,7 @@ type UpdateTaskRequest struct {
 }
 
 type UpdateTaskStatusRequest struct {
-	Status         TaskStatus `json:"status" binding:"required,oneof=pending completed cancelled"`
+	Status         TaskStatus `json:"status" binding:"required,oneof=pending completed cancelled skipped"`
 	InstanceID     string     `json:"instance_id"`
 	OccurrenceDate string     `json:"occurrence_date"`
 }

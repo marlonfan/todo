@@ -1467,7 +1467,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     try {
       if (scope === 'single') {
         const instanceID = String(task.instanceId || task.instance_id || '').trim();
-        const payload = { status: 'cancelled' };
+        const payload = { status: 'skipped' };
         const validInstanceID = /^\d+_\d{8}$/.test(instanceID);
         if (validInstanceID) {
           payload.instance_id = instanceID;
@@ -2426,7 +2426,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   disabled={loading}
                   className="btn-secondary w-full"
                 >
-                  {t('task.deleteOnlyThis')}
+                  {t('task.skipThis')}
                 </button>
                 <button
                   type="button"

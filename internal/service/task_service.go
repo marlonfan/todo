@@ -44,6 +44,8 @@ type recurringOccurrencePatch struct {
 
 const taskActivityMergeWindow = 15 * time.Minute
 
+var errRecurringOccurrenceBlockedByEarlierPending = errors.New("earlier recurring occurrence must be handled first")
+
 func (e *RevisionConflictError) Error() string {
 	return "revision conflict"
 }
@@ -86,6 +88,9 @@ func statusTimestampTransition(
 		next := now.UTC()
 		deletedAt = &next
 		completedAt = nil
+	case models.TaskStatusSkipped:
+		completedAt = nil
+		deletedAt = nil
 	default:
 		completedAt = nil
 		deletedAt = nil
@@ -285,7 +290,7 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 			continue
 		}
 		occurrences := buildTaskOccurrenceStarts(task, searchStart, horizon, tz)
-		var latestAtOrBeforeFrom *models.TaskInstance
+		var earliestPending *models.TaskInstance
 		var firstAfterFromPending *models.TaskInstance
 		for _, occurrenceStart := range occurrences {
 			localOcc := occurrenceStart.In(loc)
@@ -349,9 +354,9 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 			}
 
 			if !instance.StartTime.After(fromCutoff) {
-				if latestAtOrBeforeFrom == nil || instance.StartTime.After(latestAtOrBeforeFrom.StartTime) {
+				if earliestPending == nil || instance.StartTime.Before(earliestPending.StartTime) {
 					candidate := instance
-					latestAtOrBeforeFrom = &candidate
+					earliestPending = &candidate
 				}
 				continue
 			}
@@ -361,8 +366,8 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 			}
 		}
 
-		if latestAtOrBeforeFrom != nil && latestAtOrBeforeFrom.Status == models.TaskStatusPending {
-			instances = append(instances, *latestAtOrBeforeFrom)
+		if earliestPending != nil && earliestPending.Status == models.TaskStatusPending {
+			instances = append(instances, *earliestPending)
 			continue
 		}
 		if firstAfterFromPending != nil {
@@ -572,6 +577,11 @@ func (s *TaskService) Update(
 	occurrencePatchNeeded := task.RecurrenceRule != nil && hasOccurrenceContext &&
 		(occurrenceStatusValue != nil || occurrenceDescriptionValue != nil)
 	if occurrencePatchNeeded {
+		if occurrenceStatusValue != nil && s.shouldEnforceRecurringOccurrenceOrder(userID, task, occurrenceDateValue, *occurrenceStatusValue) {
+			if err := s.ensureRecurringOccurrenceIsNextPending(userID, task, occurrenceDateValue); err != nil {
+				return nil, err
+			}
+		}
 		if err := s.upsertRecurringOccurrence(task, occurrenceDateValue, recurringOccurrencePatch{
 			status:      occurrenceStatusValue,
 			description: occurrenceDescriptionValue,
@@ -644,6 +654,11 @@ func (s *TaskService) UpdateStatus(
 			return nil, err
 		}
 		if found {
+			if s.shouldEnforceRecurringOccurrenceOrder(userID, task, date, status) {
+				if err := s.ensureRecurringOccurrenceIsNextPending(userID, task, date); err != nil {
+					return nil, err
+				}
+			}
 			if err := s.upsertRecurringOccurrence(task, date, recurringOccurrencePatch{
 				status: &status,
 			}); err != nil {
@@ -687,6 +702,52 @@ func (s *TaskService) UpdateStatus(
 		log.Printf("Warning: failed to record task activity after task status update for user %d task %d: %v", userID, updatedTask.ID, err)
 	}
 	return updatedTask, nil
+}
+
+func (s *TaskService) shouldEnforceRecurringOccurrenceOrder(userID int64, task *models.Task, occurrenceDate time.Time, status models.TaskStatus) bool {
+	switch status {
+	case models.TaskStatusCompleted, models.TaskStatusCancelled, models.TaskStatusSkipped:
+	default:
+		return false
+	}
+	if task == nil || task.RecurrenceRule == nil {
+		return false
+	}
+	existing, err := s.taskRepo.GetTaskOccurrence(userID, task.ID, occurrenceDate)
+	if err == nil && existing != nil && existing.Status != models.TaskStatusPending {
+		return false
+	}
+	return true
+}
+
+func (s *TaskService) ensureRecurringOccurrenceIsNextPending(userID int64, task *models.Task, occurrenceDate time.Time) error {
+	if task == nil || task.RecurrenceRule == nil {
+		return nil
+	}
+	baseStart, _ := deriveOccurrenceRangeFromTask(task, occurrenceDate, s.resolveUserTimezone(userID))
+	from := occurrenceDate.UTC()
+	if baseStart != nil {
+		from = baseStart.UTC()
+	}
+	nextPending, err := s.ListNextPendingOccurrences(userID, from)
+	if err != nil {
+		return err
+	}
+	requestedDate := occurrenceDate.UTC().Truncate(24 * time.Hour)
+	for _, item := range nextPending {
+		if item.TaskID != task.ID {
+			continue
+		}
+		if item.OriginalDate.UTC().Truncate(24 * time.Hour).Equal(requestedDate) {
+			return nil
+		}
+		return fmt.Errorf(
+			"%w: next pending occurrence is %s",
+			errRecurringOccurrenceBlockedByEarlierPending,
+			item.OriginalDate.UTC().Format("2006-01-02"),
+		)
+	}
+	return fmt.Errorf("%w: no pending occurrence found", errRecurringOccurrenceBlockedByEarlierPending)
 }
 
 func requiresRecurringOccurrenceContext(task *models.Task, status models.TaskStatus, hasOccurrenceContext bool) bool {
@@ -865,8 +926,9 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 		fromUTC = time.Now().UTC()
 	}
 	fromDate := fromUTC.Truncate(24 * time.Hour)
+	searchStart := fromDate.AddDate(-3, 0, 0)
 	horizon := fromDate.AddDate(3, 0, 0)
-	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, []int64{task.ID}, fromDate, horizon)
+	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, []int64{task.ID}, searchStart, horizon)
 	if err != nil {
 		return nil, err
 	}
@@ -878,7 +940,8 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 
 	tz := s.resolveUserTimezone(userID)
 	loc := loadLocationOrUTC(tz)
-	occurrences := buildTaskOccurrenceStarts(task, fromDate, horizon, tz)
+	occurrences := buildTaskOccurrenceStarts(task, searchStart, horizon, tz)
+	var earliestPending *time.Time
 	for _, occurrenceStart := range occurrences {
 		localOcc := occurrenceStart.In(loc)
 		// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
@@ -897,13 +960,13 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 		if override != nil && override.StartTime != nil {
 			startTime = override.StartTime.UTC()
 		}
-		if !startTime.After(fromUTC) {
-			continue
+		if earliestPending == nil || startTime.Before(*earliestPending) {
+			next := startTime
+			earliestPending = &next
 		}
-		return &startTime, nil
 	}
 
-	return nil, nil
+	return earliestPending, nil
 }
 
 type taskActivitySnapshot struct {

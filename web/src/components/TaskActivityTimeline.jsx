@@ -67,6 +67,7 @@ function formatStatus(value, t) {
   if (status === 'pending') return t('task.statusPending');
   if (status === 'completed') return t('task.statusCompleted');
   if (status === 'cancelled') return t('task.statusCancelled');
+  if (status === 'skipped') return t('task.statusSkipped');
   return stringifyFallback(value);
 }
 

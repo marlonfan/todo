@@ -870,3 +870,114 @@ func TestCompleteOccurrenceWithLegacyScheduleOverrideDoesNotSkipNextWeek(t *test
 		t.Fatalf("next pending occurrence for task %d not found", task.ID)
 	}
 }
+
+func TestListNextPendingOccurrencesReturnsEarliestMissedOccurrence(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "Strict backlog",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &start,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "weekly",
+			Interval: 1,
+			ByDay:    []string{"MO"},
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	nextPending, err := svc.ListNextPendingOccurrences(userID, time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("list next pending occurrences: %v", err)
+	}
+	found := false
+	for _, item := range nextPending {
+		if item.TaskID != task.ID {
+			continue
+		}
+		found = true
+		expectedDate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+		if !item.OriginalDate.UTC().Equal(expectedDate) {
+			t.Fatalf("next pending occurrence date = %s, want %s", item.OriginalDate.UTC().Format("2006-01-02"), expectedDate.Format("2006-01-02"))
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("next pending occurrence for task %d not found", task.ID)
+	}
+}
+
+func TestRecurringOccurrenceCannotCompleteFutureBeforeEarlierPending(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+
+	start := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID:    userID,
+		Title:     "Strict order",
+		Status:    models.TaskStatusPending,
+		Priority:  models.PriorityMedium,
+		StartTime: &start,
+		Revision:  1,
+		RecurrenceRule: &models.RecurrenceRule{
+			Freq:     "weekly",
+			Interval: 1,
+			ByDay:    []string{"MO"},
+		},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	revision := int64(1)
+	_, err := svc.UpdateStatus(
+		userID,
+		task.ID,
+		models.TaskStatusCompleted,
+		buildOccurrenceInstanceID(task.ID, time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)),
+		"2026-06-08",
+		&revision,
+		nil,
+	)
+	if !errors.Is(err, errRecurringOccurrenceBlockedByEarlierPending) {
+		t.Fatalf("complete future occurrence err = %v, want blocked by earlier pending", err)
+	}
+
+	_, err = svc.UpdateStatus(
+		userID,
+		task.ID,
+		models.TaskStatusSkipped,
+		buildOccurrenceInstanceID(task.ID, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)),
+		"2026-06-01",
+		&revision,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("skip earliest occurrence: %v", err)
+	}
+
+	nextPending, err := svc.ListNextPendingOccurrences(userID, time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("list next pending occurrences: %v", err)
+	}
+	found := false
+	for _, item := range nextPending {
+		if item.TaskID != task.ID {
+			continue
+		}
+		found = true
+		expectedDate := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+		if !item.OriginalDate.UTC().Equal(expectedDate) {
+			t.Fatalf("next pending after skip = %s, want %s", item.OriginalDate.UTC().Format("2006-01-02"), expectedDate.Format("2006-01-02"))
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("next pending occurrence for task %d not found", task.ID)
+	}
+}

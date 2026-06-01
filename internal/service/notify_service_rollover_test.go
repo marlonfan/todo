@@ -174,8 +174,8 @@ func seedAllDayRecurringTaskAndDueReminder(
 	return task, start
 }
 
-func TestProcessPendingNotificationsSchedulesNextRecurringReminderAfterSend(t *testing.T) {
-	notifySvc, _, taskRepo, notifyRepo, userID, notifier := newNotifyRolloverTestServices(t)
+func TestProcessPendingNotificationsDoesNotAdvanceRecurringReminderBeforeOccurrenceHandled(t *testing.T) {
+	notifySvc, taskSvc, taskRepo, notifyRepo, userID, notifier := newNotifyRolloverTestServices(t)
 	task, start := seedRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
 
 	if err := notifySvc.ProcessPendingNotifications(); err != nil {
@@ -186,11 +186,39 @@ func TestProcessPendingNotificationsSchedulesNextRecurringReminderAfterSend(t *t
 		t.Fatalf("send count = %d, want 1", notifier.sent)
 	}
 
+	notifications, err := notifyRepo.GetByTask(task.ID)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	active := 0
+	for _, item := range notifications {
+		if item.Source == models.NotificationSourceDefaultAuto && item.Status == models.NotifyStatusPending {
+			active++
+		}
+	}
+	if active != 0 {
+		t.Fatalf("pending default_auto notifications = %d, want 0 before occurrence is handled", active)
+	}
+
+	firstDate := start.UTC().Truncate(24 * time.Hour)
+	_, err = taskSvc.UpdateStatus(
+		userID,
+		task.ID,
+		models.TaskStatusCompleted,
+		buildOccurrenceInstanceID(task.ID, firstDate),
+		firstDate.Format("2006-01-02"),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("complete current occurrence: %v", err)
+	}
+
 	expectedNextNotifyAt := start.AddDate(0, 0, 1).Add(-5 * time.Minute)
 	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
 }
 
-func TestProcessPendingNotificationsSkipsCancelledNextOccurrenceReminder(t *testing.T) {
+func TestRecurringReminderAdvancesAfterCurrentOccurrenceIsSkipped(t *testing.T) {
 	notifySvc, taskSvc, taskRepo, notifyRepo, userID, _ := newNotifyRolloverTestServices(t)
 	task, start := seedRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
 
@@ -198,22 +226,21 @@ func TestProcessPendingNotificationsSkipsCancelledNextOccurrenceReminder(t *test
 		t.Fatalf("process pending notifications: %v", err)
 	}
 
-	nextOccurrenceStart := start.AddDate(0, 0, 1).UTC()
-	nextOccurrenceDate := nextOccurrenceStart.Truncate(24 * time.Hour)
+	currentOccurrenceDate := start.UTC().Truncate(24 * time.Hour)
 	_, err := taskSvc.UpdateStatus(
 		userID,
 		task.ID,
-		models.TaskStatusCancelled,
-		buildOccurrenceInstanceID(task.ID, nextOccurrenceDate),
-		nextOccurrenceDate.Format("2006-01-02"),
+		models.TaskStatusSkipped,
+		buildOccurrenceInstanceID(task.ID, currentOccurrenceDate),
+		currentOccurrenceDate.Format("2006-01-02"),
 		nil,
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("cancel next occurrence: %v", err)
+		t.Fatalf("skip current occurrence: %v", err)
 	}
 
-	expectedNextNotifyAt := start.AddDate(0, 0, 2).Add(-5 * time.Minute)
+	expectedNextNotifyAt := start.AddDate(0, 0, 1).Add(-5 * time.Minute)
 	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
 }
 
@@ -229,11 +256,22 @@ func TestProcessPendingNotificationsSchedulesNextAllDayRecurringReminderAtMornin
 		t.Fatalf("send count = %d, want 1", notifier.sent)
 	}
 
-	expectedNextNotifyAt := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1).Add(9*time.Hour - 5*time.Minute)
-	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
+	notifications, err := notifyRepo.GetByTask(task.ID)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	active := 0
+	for _, item := range notifications {
+		if item.Source == models.NotificationSourceDefaultAuto && item.Status == models.NotifyStatusPending {
+			active++
+		}
+	}
+	if active != 0 {
+		t.Fatalf("pending default_auto notifications = %d, want 0 before occurrence is handled", active)
+	}
 }
 
-func TestReconcileUserRemindersSchedulesNextRecurringOccurrenceAfterPastAnchor(t *testing.T) {
+func TestReconcileUserRemindersDoesNotSkipPastRecurringBacklog(t *testing.T) {
 	notifySvc, _, taskRepo, notifyRepo, userID, _ := newNotifyRolloverTestServices(t)
 
 	start := time.Now().UTC().Truncate(time.Minute).Add(-23 * time.Hour)
@@ -257,6 +295,17 @@ func TestReconcileUserRemindersSchedulesNextRecurringOccurrenceAfterPastAnchor(t
 		t.Fatalf("reconcile reminders: %v", err)
 	}
 
-	expectedNextNotifyAt := start.AddDate(0, 0, 1).Add(-5 * time.Minute)
-	assertSinglePendingAutoReminder(t, notifyRepo, task.ID, expectedNextNotifyAt)
+	notifications, err := notifyRepo.GetByTask(task.ID)
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	active := 0
+	for _, item := range notifications {
+		if item.Source == models.NotificationSourceDefaultAuto && item.Status == models.NotifyStatusPending {
+			active++
+		}
+	}
+	if active != 0 {
+		t.Fatalf("pending default_auto notifications = %d, want 0 while oldest occurrence is overdue", active)
+	}
 }

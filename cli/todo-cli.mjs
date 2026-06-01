@@ -808,6 +808,13 @@ async function handleTask(ctx, args) {
       headers: buildMutationHeaders(ctx.flags, 'cli.task.status'),
     });
   }
+  if (action === 'skip') {
+    if (!id) throw new CliError('missing task id');
+    return apiRequest(ctx, 'PATCH', `/tasks/${id}/status`, {
+      data: { status: 'skipped' },
+      headers: buildMutationHeaders(ctx.flags, 'cli.task.status'),
+    });
+  }
   if (action === 'schedule') {
     if (!id) throw new CliError('missing task id');
     const payload = await buildTaskPayload(ctx.flags, { partial: true });
@@ -1082,6 +1089,7 @@ Tasks:
   todo-cli task update <id> --description-file ./notes.md --if-match <revision>
   todo-cli task complete <id>
   todo-cli task pending <id>
+  todo-cli task skip <id>
   todo-cli task cancel <id>
   todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
   todo-cli task notifications <id>
@@ -1126,7 +1134,7 @@ Examples:
   todo-cli task today --include-occurrences
 
 Filters:
-  --status pending|completed|cancelled
+  --status pending|completed|cancelled|skipped
   --category-id ID
   --start RFC3339
   --end RFC3339
@@ -1175,7 +1183,7 @@ Task fields:
   --description TEXT, --desc TEXT
   --description-file PATH, --desc-file PATH
   --priority low|medium|high           Maps to -1|0|1
-  --status pending|completed|cancelled
+  --status pending|completed|cancelled|skipped
   --start-time RFC3339                 Absolute timestamp
   --end-time RFC3339
   --start-time-local YYYY-MM-DDTHH:mm  Local wall time, pair with --timezone
@@ -1222,12 +1230,13 @@ Notes:
 `;
   }
 
-  if (['complete', 'pending', 'reopen', 'cancel'].includes(action)) {
+  if (['complete', 'pending', 'reopen', 'cancel', 'skip'].includes(action)) {
     return `todo-cli task status - update task status
 
 Examples:
   todo-cli task complete 42
   todo-cli task pending 42
+  todo-cli task skip 42
   todo-cli task cancel 42
 
 Safety:

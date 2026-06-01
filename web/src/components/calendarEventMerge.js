@@ -314,7 +314,7 @@ export function buildProjectedEventsFromTasks(tasks, options) {
   const list = Array.isArray(tasks) ? tasks : [];
 
   return list
-    .filter((task) => (task?.status || 'pending') !== 'cancelled')
+    .filter((task) => !['cancelled', 'skipped'].includes(task?.status || 'pending'))
     .filter((task) => !(task?.read_only || String(task?.source || '') === 'caldav'))
     .filter((task) => {
       const isRecurring = !!(task?.recurrence_rule || task?.recurrenceRule);
@@ -368,7 +368,7 @@ export function buildTaskStatusIndex(tasks) {
     const taskID = Number(task?.id || 0);
     if (!taskID) return;
     present.add(taskID);
-    if ((task.status || 'pending') === 'cancelled') {
+    if (['cancelled', 'skipped'].includes(task.status || 'pending')) {
       cancelled.add(taskID);
     }
   });
@@ -412,7 +412,7 @@ export function mergeCalendarEvents(serverEvents, projectedEvents, taskStatusInd
     const taskID = Number(event?.extendedProps?.taskId || 0);
     const serverStatus = event?.extendedProps?.status || 'pending';
     const isRecurring = !!event?.extendedProps?.isRecurring;
-    if (taskID && serverStatus === 'cancelled') {
+    if (taskID && ['cancelled', 'skipped'].includes(serverStatus)) {
       if (isRecurring) {
         const recurringKey = buildRecurringInstanceKey(event);
         if (recurringKey) {

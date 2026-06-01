@@ -36,6 +36,27 @@ test('buildProjectedEventsFromTasks filters cancelled tasks', () => {
   assert.equal(projected[0].extendedProps.taskId, 1);
 });
 
+test('buildProjectedEventsFromTasks filters skipped tasks', () => {
+  const tasks = [
+    {
+      id: 3,
+      title: 'skip',
+      status: 'skipped',
+      start_time: '2026-03-01T10:00:00Z',
+      end_time: '2026-03-01T11:00:00Z',
+      priority: 0,
+    },
+  ];
+  const projected = buildProjectedEventsFromTasks(tasks, {
+    rangeStart: '2026-03-01T00:00:00Z',
+    rangeEnd: '2026-03-02T00:00:00Z',
+    timezone: 'UTC',
+    toCalendarISO: (v) => v,
+  });
+
+  assert.equal(projected.length, 0);
+});
+
 test('buildProjectedEventsFromTasks excludes readonly caldav tasks', () => {
   const tasks = [
     {
@@ -328,4 +349,33 @@ test('mergeCalendarEvents suppresses projected recurring instance when server ma
   const merged = mergeCalendarEvents(server, projected, { cancelled: new Set(), present: new Set() });
   assert.equal(merged.length, 1);
   assert.equal(merged[0].id, '35_20260326');
+});
+
+test('mergeCalendarEvents suppresses projected recurring instance when server marks it skipped', () => {
+  const server = [
+    {
+      id: '36_20260319',
+      start: '2026-03-19T01:00:00Z',
+      title: 'server skipped recurring',
+      extendedProps: { taskId: 36, status: 'skipped', isRecurring: true, instanceId: '36_20260319' },
+    },
+  ];
+  const projected = [
+    {
+      id: '36_20260319',
+      start: '2026-03-19T01:00:00Z',
+      title: 'projected recurring',
+      extendedProps: { taskId: 36, status: 'pending', isRecurring: true, instanceId: '36_20260319' },
+    },
+    {
+      id: '36_20260326',
+      start: '2026-03-26T01:00:00Z',
+      title: 'projected recurring 2',
+      extendedProps: { taskId: 36, status: 'pending', isRecurring: true, instanceId: '36_20260326' },
+    },
+  ];
+
+  const merged = mergeCalendarEvents(server, projected, { cancelled: new Set(), present: new Set() });
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, '36_20260326');
 });

@@ -71,7 +71,7 @@ const DRAFT_TEXT_AUTOSAVE_MS = 2500;
 const DRAFT_DESCRIPTION_RENDER_DELAY_MS = 120;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
 const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
-const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled';
+const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled,skipped';
 const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
 const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
 const DELETE_DIALOG_KIND_TASK = 'task';
@@ -751,7 +751,8 @@ const TaskRow = React.memo(function TaskRow({
   onToggleStatus,
 }) {
   const isCompleted = task.status === 'completed';
-  const isDeleted = task.status === 'cancelled';
+  const isSkipped = task.status === 'skipped';
+  const isDeleted = task.status === 'cancelled' || isSkipped;
   const isReadOnly = !!task.read_only;
   const priorityValue = Number.parseInt(task.priority, 10) || 0;
   const priority = priorityValue === 1
@@ -829,7 +830,7 @@ const TaskRow = React.memo(function TaskRow({
               ↺
             </button>
           )}
-          {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
+          {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
           <span title={priority.title} className={priority.className}>{priority.text}</span>
           {task.categories?.slice(0, 2).map((cat) => (
             <span
@@ -853,7 +854,7 @@ const TaskRow = React.memo(function TaskRow({
       {/* Mobile: time and tags on second line */}
       <div className="mt-1 flex flex-wrap items-center gap-2 pl-7 text-sm sm:hidden">
         {formatDisplayTimeWithYear(displayTime, timezone)}
-        {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{labels.statusCancelled}</span>}
+        {isDeleted && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
         {isReadOnly && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
         <span title={priority.title} className={priority.className}>{priority.text}</span>
         {task.categories?.slice(0, 2).map((cat) => (
@@ -1568,8 +1569,8 @@ function TaskList({ forcedView = '' }) {
 
     if (view === 'deleted') {
       return [
-        ...recurringInstanceTasks.filter((task) => task.status === 'cancelled'),
-        ...tasks.filter((task) => task.status === 'cancelled'),
+        ...recurringInstanceTasks.filter((task) => ['cancelled', 'skipped'].includes(task.status)),
+        ...tasks.filter((task) => ['cancelled', 'skipped'].includes(task.status)),
       ];
     }
 
@@ -1675,7 +1676,9 @@ function TaskList({ forcedView = '' }) {
             ? t('task.statusPending')
             : status === 'completed'
               ? t('task.statusCompleted')
-              : t('task.statusCancelled');
+          : status === 'skipped'
+            ? t('task.statusSkipped')
+            : t('task.statusCancelled');
         pushTaskToGroup(status, title, task);
         return;
       }
@@ -1718,7 +1721,7 @@ function TaskList({ forcedView = '' }) {
 
     let groups = Array.from(groupMap.values());
     if (effectiveGroupBy === 'status') {
-      const order = { pending: 0, completed: 1, cancelled: 2 };
+      const order = { pending: 0, completed: 1, skipped: 2, cancelled: 3 };
       groups.sort((a, b) => (order[a.key] ?? 9) - (order[b.key] ?? 9));
       return groups;
     }
@@ -3370,7 +3373,7 @@ function TaskList({ forcedView = '' }) {
     setDeleteDialogSubmitting(true);
     try {
       if (action === 'single') {
-        const payload = { status: 'cancelled' };
+        const payload = { status: 'skipped' };
         if (fallbackInstanceID) payload.instance_id = fallbackInstanceID;
         if (fallbackOccurrenceDate) payload.occurrence_date = fallbackOccurrenceDate;
         await updateTaskStatusLocal(queryClient, taskID, payload, { submitMeta, awaitPersist: true });
@@ -3388,7 +3391,7 @@ function TaskList({ forcedView = '' }) {
           await updateTaskLocal(queryClient, taskID, {
             recurrence_end_date: occurrenceStart.subtract(1, 'second').utc().toISOString(),
           }, { submitMeta, awaitPersist: true });
-          const occurrencePayload = { status: 'cancelled' };
+          const occurrencePayload = { status: 'skipped' };
           if (fallbackInstanceID) occurrencePayload.instance_id = fallbackInstanceID;
           if (fallbackOccurrenceDate) occurrencePayload.occurrence_date = fallbackOccurrenceDate;
           if (occurrencePayload.instance_id || occurrencePayload.occurrence_date) {
@@ -3501,6 +3504,7 @@ function TaskList({ forcedView = '' }) {
     priorityMediumShort: i18n.language === 'zh-CN' ? '中' : 'Medium',
     priorityLowShort: i18n.language === 'zh-CN' ? '低' : 'Low',
     statusCancelled: t('task.statusCancelled'),
+    statusSkipped: t('task.statusSkipped'),
     markPending: t('task.markPending'),
   }), [i18n.language, t]);
 
@@ -4669,7 +4673,7 @@ function TaskList({ forcedView = '' }) {
                   }}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {deleteDialogSubmitting ? t('task.submitting') : t('task.deleteOnlyThis')}
+                  {deleteDialogSubmitting ? t('task.submitting') : t('task.skipThis')}
                 </button>
                 <button
                   type="button"

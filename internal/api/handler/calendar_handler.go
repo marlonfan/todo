@@ -67,7 +67,7 @@ func (h *CalendarHandler) GetEvents(c *gin.Context) {
 	// Add regular tasks
 	for _, task := range tasks {
 		// Soft-deleted tasks should not appear on calendar.
-		if task.Status == models.TaskStatusCancelled {
+		if task.Status == models.TaskStatusCancelled || task.Status == models.TaskStatusSkipped {
 			continue
 		}
 		// Skip recurring tasks (they will be handled by instances)
@@ -80,7 +80,7 @@ func (h *CalendarHandler) GetEvents(c *gin.Context) {
 
 	// Add recurring instances
 	for _, instance := range instances {
-		// Keep cancelled recurring instances in calendar payload as tombstones.
+		// Keep inactive recurring instances in calendar payload as tombstones.
 		// Frontend merge uses them to suppress projected fallback instances.
 		event := instanceToEvent(&instance)
 		events = append(events, event)

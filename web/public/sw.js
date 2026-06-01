@@ -1,7 +1,5 @@
-const CACHE_NAME = "todo-kimi-cache-v3";
+const CACHE_NAME = "todo-kimi-cache-v4";
 const STATIC_ASSETS = [
-  "/",
-  "/index.html",
   "/manifest.webmanifest",
   "/icons/icon-192.svg",
   "/icons/icon-512.svg"
@@ -9,7 +7,10 @@ const STATIC_ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -37,8 +38,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          if (response && response.ok) {
+            const responseClone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put("/index.html", responseClone));
+          }
           return response;
         })
         .catch(() => caches.match(request).then((cached) => cached || caches.match("/index.html")))

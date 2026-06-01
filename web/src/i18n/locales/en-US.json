@@ -73,6 +73,8 @@
     "statusPending": "Pending",
     "statusCompleted": "Completed",
     "statusCancelled": "Cancelled",
+    "statusSkipped": "Skipped",
+    "skipThis": "Skip this",
     "markComplete": "Mark Complete",
     "markPending": "Mark Pending",
     "completedTasks": "Completed Tasks",

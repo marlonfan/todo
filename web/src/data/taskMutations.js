@@ -32,6 +32,12 @@ function deriveStatusTimestamps(currentStatus, nextStatus, currentCompletedAt, c
       deleted_at: nowValue,
     };
   }
+  if (status === 'skipped') {
+    return {
+      completed_at: null,
+      deleted_at: null,
+    };
+  }
   return {
     completed_at: null,
     deleted_at: null,
