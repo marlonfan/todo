@@ -52,6 +52,13 @@ import {
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
+import {
+  getTaskPrimaryLocalTime,
+  getTaskPrimaryTime,
+  isTaskOverdue,
+  shouldIncludeTaskInTodayView,
+  shouldIncludeTaskInUpcomingView,
+} from './taskListOverdue';
 import { isTaskUnsyncedLocally } from './taskListRecurringVisibility';
 import {
   buildNextPendingFromProjectedTask,
@@ -342,14 +349,15 @@ function alignStartToWeekdayLocal(startInput, weekdayKeys) {
   return start.add(bestDiff, 'day').format('YYYY-MM-DDTHH:mm');
 }
 
-function formatDisplayTimeWithYear(date, timezoneName) {
+function formatDisplayDateWithYear(date, timezoneName) {
   if (!date) return '';
   const tz = timezoneName || getUserTimezone();
   const d = dayjs(date).tz(tz);
+  if (!d.isValid()) return '';
   const currentYear = dayjs().tz(tz).year();
   // 如果日期年份与当前年份不同，显示年份
-  if (d.year() !== currentYear) return d.format('YYYY/MM/DD HH:mm');
-  return d.format('MM/DD HH:mm');
+  if (d.year() !== currentYear) return d.format('YYYY/MM/DD');
+  return d.format('MM/DD');
 }
 
 function lunarDateLabel(d, showYear = false) {
@@ -511,10 +519,6 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
     lunarDay: fallbackLunar.day,
     lunarIsLeapMonth: fallbackLunar.isLeapMonth,
   };
-}
-
-function getTaskPrimaryTime(task) {
-  return task.start_time || task.due_date || '';
 }
 
 function getTaskCompletedTime(task) {
@@ -831,6 +835,8 @@ const TaskRow = React.memo(function TaskRow({
       ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-emerald-600' }
       : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-sky-600' };
   const displayTime = resolveTaskDisplayTime(task, timeMode);
+  const overdue = timeMode === 'primary' && isTaskOverdue(task, timezone);
+  const displayTimeLabel = formatDisplayDateWithYear(displayTime, timezone);
 
   return (
     <div
@@ -921,15 +927,21 @@ const TaskRow = React.memo(function TaskRow({
           {task.categories?.length > 2 && (
             <span className="text-slate-400">+{task.categories.length - 2}</span>
           )}
-          <span className="text-slate-400">
-            {formatDisplayTimeWithYear(displayTime, timezone)}
-          </span>
+          {displayTimeLabel && (
+            <span className={overdue ? 'font-medium text-rose-600' : 'text-slate-400'}>
+              {displayTimeLabel}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Mobile: time and tags on second line */}
       <div className="mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs text-slate-500 sm:hidden">
-        {formatDisplayTimeWithYear(displayTime, timezone)}
+        {displayTimeLabel && (
+          <span className={overdue ? 'font-medium text-rose-600' : 'text-slate-500'}>
+            {displayTimeLabel}
+          </span>
+        )}
         {isDeleted && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
         {isReadOnly && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
         <span title={priority.title} className={priority.className}>{priority.text}</span>
@@ -1727,8 +1739,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const baseFilteredTasks = useMemo(() => {
     const now = dayjs().tz(timezone);
     const todayStart = now.startOf('day');
-    const todayEnd = now.endOf('day');
-    const upcomingEndExclusive = todayStart.add(7, 'day');
 
     if (activeCategoryID > 0) {
       return tasks.filter((task) => (task.categories || []).some((cat) => cat.id === activeCategoryID) && task.status === 'pending');
@@ -1759,24 +1769,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
 
     if (view === 'today') {
-      return pending.filter((task) => {
-        const time = getTaskPrimaryTime(task);
-        if (!time) return false;
-        const current = dayjs(time).tz(timezone);
-        return (current.isAfter(todayStart) || current.isSame(todayStart)) && (current.isBefore(todayEnd) || current.isSame(todayEnd));
-      });
+      return pending.filter((task) => shouldIncludeTaskInTodayView(task, timezone, todayStart));
     }
 
     if (view === 'upcoming') {
-      return pending.filter((task) => {
-        const time = getTaskPrimaryTime(task);
-        if (!time) return false;
-        const current = dayjs(time).tz(timezone);
-        return (
-          (current.isAfter(todayStart) || current.isSame(todayStart))
-          && current.isBefore(upcomingEndExclusive)
-        );
-      });
+      return pending.filter((task) => shouldIncludeTaskInUpcomingView(task, timezone, todayStart));
     }
 
     return pending;
@@ -1857,6 +1854,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         return;
       }
 
+      if (isTaskOverdue(task, timezone)) {
+        pushTaskToGroup('overdue', t('task.overdueGroup'), task);
+        return;
+      }
+
       if (effectiveGroupBy === 'priority') {
         const priority = Number.parseInt(task.priority, 10) || 0;
         const key = String(priority);
@@ -1866,12 +1868,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       }
 
       if (effectiveGroupBy === 'due') {
-        const taskTime = getTaskPrimaryTime(task);
-        if (!taskTime) {
+        const current = getTaskPrimaryLocalTime(task, timezone);
+        if (!current) {
           pushTaskToGroup('no-date', t('task.noDate'), task);
           return;
         }
-        const current = dayjs(taskTime).tz(timezone);
         const currentYear = dayjs().tz(timezone).year();
         const dateLabel = current.year() !== currentYear
           ? current.format('YYYY/MM/DD ddd')
@@ -1902,12 +1903,18 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
     if (effectiveGroupBy === 'priority') {
       const order = { 1: 0, 0: 1, '-1': 2 };
-      groups.sort((a, b) => (order[a.key] ?? 9) - (order[b.key] ?? 9));
+      groups.sort((a, b) => {
+        if (a.key === 'overdue') return -1;
+        if (b.key === 'overdue') return 1;
+        return (order[a.key] ?? 9) - (order[b.key] ?? 9);
+      });
       return groups;
     }
 
     if (effectiveGroupBy === 'due') {
       groups.sort((a, b) => {
+        if (a.key === 'overdue') return -1;
+        if (b.key === 'overdue') return 1;
         if (a.key === 'no-date') return 1;
         if (b.key === 'no-date') return -1;
         return a.key.localeCompare(b.key);
@@ -1915,7 +1922,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       return groups;
     }
 
-    groups.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'));
+    groups.sort((a, b) => {
+      if (a.key === 'overdue') return -1;
+      if (b.key === 'overdue') return 1;
+      return a.title.localeCompare(b.title, 'zh-Hans-CN');
+    });
     return groups;
   }, [effectiveGroupBy, showCategoryEmoji, sortedTasks, t, timezone]);
 

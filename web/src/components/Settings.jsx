@@ -6,6 +6,8 @@ import {
   Bell,
   CalendarClock,
   Cloud,
+  Eye,
+  EyeOff,
   KeyRound,
   MonitorCog,
   Shield,
@@ -104,6 +106,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const [profileUser, setProfileUser] = useState(currentUser || cachedUser || {});
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
+  const [passwordVisible, setPasswordVisible] = useState({ current: false, next: false, confirm: false });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [timezone, setTimezone] = useState(getUserTimezone());
   const [defaultReminderEnabled, setDefaultReminderEnabled] = useState(!!cachedUser.default_reminder_enabled);
@@ -384,6 +387,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
         new_password: passwordForm.next,
       });
       setPasswordForm({ current: '', next: '', confirm: '' });
+      setPasswordVisible({ current: false, next: false, confirm: false });
       showToast('success', t('settings.passwordUpdated'));
     } catch (err) {
       showToast('error', err.response?.data?.error || t('settings.passwordUpdateFailed'));
@@ -916,55 +920,75 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
               </div>
 
-              <form onSubmit={handlePasswordSubmit} className="rounded-xl bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <KeyRound className="h-4 w-4 text-slate-500" />
-                  {t('settings.changePassword')}
-                </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">{t('settings.currentPassword')}</label>
-                    <input
-                      type="password"
-                      value={passwordForm.current}
-                      onChange={(e) => setPasswordForm((prev) => ({ ...prev, current: e.target.value }))}
-                      className="form-input"
-                      autoComplete="current-password"
-                      required
-                    />
+              <form onSubmit={handlePasswordSubmit} className="settings-password-card">
+                <div className="settings-password-card-header">
+                  <div className="settings-password-icon">
+                    <KeyRound className="h-4 w-4" />
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">{t('settings.newPassword')}</label>
-                    <input
-                      type="password"
-                      value={passwordForm.next}
-                      onChange={(e) => setPasswordForm((prev) => ({ ...prev, next: e.target.value }))}
-                      className="form-input"
-                      autoComplete="new-password"
-                      minLength={6}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">{t('settings.confirmNewPassword')}</label>
-                    <input
-                      type="password"
-                      value={passwordForm.confirm}
-                      onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirm: e.target.value }))}
-                      className="form-input"
-                      autoComplete="new-password"
-                      minLength={6}
-                      required
-                    />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-950">{t('settings.changePassword')}</div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{t('settings.changePasswordHint')}</p>
                   </div>
                 </div>
-                <button
-                  type="submit"
-                  disabled={passwordBusy}
-                  className="btn-primary mt-4 inline-flex items-center disabled:opacity-60"
-                >
-                  {passwordBusy ? t('common.loading') : t('settings.savePassword')}
-                </button>
+                <div className="settings-password-fields">
+                  {[
+                    {
+                      key: 'current',
+                      label: t('settings.currentPassword'),
+                      autoComplete: 'current-password',
+                      minLength: undefined,
+                    },
+                    {
+                      key: 'next',
+                      label: t('settings.newPassword'),
+                      autoComplete: 'new-password',
+                      minLength: 6,
+                    },
+                    {
+                      key: 'confirm',
+                      label: t('settings.confirmNewPassword'),
+                      autoComplete: 'new-password',
+                      minLength: 6,
+                    },
+                  ].map((field) => {
+                    const visible = passwordVisible[field.key];
+                    return (
+                      <div key={field.key} className={`settings-password-field ${field.key === 'current' ? 'md:col-span-2' : ''}`}>
+                        <label className="settings-password-label">{field.label}</label>
+                        <div className="settings-password-input-wrap">
+                          <input
+                            type={visible ? 'text' : 'password'}
+                            value={passwordForm[field.key]}
+                            onChange={(e) => setPasswordForm((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                            className="settings-password-input"
+                            autoComplete={field.autoComplete}
+                            minLength={field.minLength}
+                            required
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setPasswordVisible((prev) => ({ ...prev, [field.key]: !prev[field.key] }))}
+                            className="settings-password-visibility-btn"
+                            aria-label={visible ? t('settings.hidePassword') : t('settings.showPassword')}
+                            title={visible ? t('settings.hidePassword') : t('settings.showPassword')}
+                          >
+                            {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="settings-password-footer">
+                  <p className="text-xs leading-5 text-slate-500">{t('settings.passwordRequirementHint')}</p>
+                  <button
+                    type="submit"
+                    disabled={passwordBusy}
+                    className="settings-password-submit"
+                  >
+                    {passwordBusy ? t('common.loading') : t('settings.savePassword')}
+                  </button>
+                </div>
               </form>
             </div>
           )}

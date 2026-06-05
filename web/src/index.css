@@ -565,19 +565,194 @@ body {
 }
 
 .settings-page .settings-tabs {
-  @apply mb-5 inline-flex rounded-xl border border-blue-100 bg-white p-1 shadow-sm;
+  display: inline-flex;
+  gap: 0.48rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid #dbeafe;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 0.38rem;
+  box-shadow:
+    0 12px 28px -24px rgba(37, 99, 235, 0.32),
+    inset 0 0 0 1px rgba(239, 246, 255, 0.7);
 }
 
 .settings-page .settings-tab-btn {
-  @apply rounded-lg px-4 py-2 text-sm font-medium transition-colors;
+  min-height: 2.52rem;
+  border-radius: 0.78rem;
+  padding: 0 1.08rem;
+  color: #475569;
+  font-size: 0.92rem;
+  font-weight: 650;
+  line-height: 1;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
 }
 
 .settings-page .settings-tab-btn-active {
-  @apply bg-blue-100 text-blue-800;
+  background: #dbeafe;
+  color: #1d4ed8;
+  box-shadow: 0 8px 18px -14px rgba(37, 99, 235, 0.55);
 }
 
 .settings-page .settings-tab-btn-idle {
-  @apply text-slate-600 hover:bg-blue-50 hover:text-slate-800;
+  background: transparent;
+}
+
+.settings-page .settings-tab-btn-idle:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.settings-page .settings-tab-btn:active {
+  transform: scale(0.98);
+}
+
+.settings-password-card {
+  border: 1px solid #edf2f7;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 1.12rem;
+  box-shadow: 0 18px 42px -36px rgba(15, 23, 42, 0.34);
+}
+
+.settings-password-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.72rem;
+}
+
+.settings-password-icon {
+  display: grid;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.78rem;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.settings-password-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.86rem;
+  margin-top: 1rem;
+}
+
+@media (min-width: 768px) {
+  .settings-password-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.settings-password-label {
+  display: block;
+  margin-bottom: 0.34rem;
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.settings-password-input-wrap {
+  position: relative;
+}
+
+.settings-page .settings-password-input {
+  width: 100%;
+  min-height: 2.76rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.9rem;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0 2.65rem 0 0.9rem;
+  font-size: 0.92rem;
+  outline: none;
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.settings-page .settings-password-input:focus {
+  border-color: #93c5fd;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+}
+
+.settings-password-visibility-btn {
+  position: absolute;
+  top: 50%;
+  right: 0.36rem;
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.7rem;
+  color: #94a3b8;
+  transform: translateY(-50%);
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.settings-password-visibility-btn:hover {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.settings-password-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin-top: 1rem;
+  border-top: 1px solid #eef2f7;
+  padding-top: 0.9rem;
+}
+
+@media (min-width: 768px) {
+  .settings-password-footer {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.settings-password-submit {
+  display: inline-flex;
+  min-height: 2.45rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.86rem;
+  background: #2563eb;
+  color: #ffffff;
+  padding: 0 1rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  box-shadow: 0 12px 24px -18px rgba(37, 99, 235, 0.9);
+  transition:
+    background-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.settings-password-submit:hover {
+  background: #1d4ed8;
+}
+
+.settings-password-submit:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.settings-password-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
 }
 
 .settings-page .settings-scroll-area {
@@ -644,8 +819,8 @@ body {
   background-color: #fff1f2 !important;
 }
 
-.settings-page input[type="text"],
-.settings-page input[type="password"],
+.settings-page input[type="text"]:not(.settings-password-input),
+.settings-page input[type="password"]:not(.settings-password-input),
 .settings-page input[type="time"],
 .settings-page select {
   @apply rounded-xl border border-blue-100 bg-slate-50 text-slate-800;
