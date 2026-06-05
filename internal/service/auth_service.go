@@ -161,6 +161,13 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 		return nil, err
 	}
 
+	if req.AvatarURL != nil {
+		avatarURL := strings.TrimSpace(*req.AvatarURL)
+		if avatarURL != "" && !strings.HasPrefix(avatarURL, "data:image/") && !strings.HasPrefix(avatarURL, "http://") && !strings.HasPrefix(avatarURL, "https://") {
+			return nil, errors.New("avatar_url must be an image data URL or http(s) URL")
+		}
+		user.AvatarURL = avatarURL
+	}
 	if req.Timezone != "" {
 		tz := strings.TrimSpace(req.Timezone)
 		if _, err := time.LoadLocation(tz); err != nil {
@@ -272,4 +279,20 @@ func (s *AuthService) UpdateProfile(userID int64, req *models.UpdateProfileReque
 
 	resp := user.ToResponse()
 	return &resp, nil
+}
+
+func (s *AuthService) UpdatePassword(userID int64, req *models.UpdatePasswordRequest) error {
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return err
+	}
+	if !utils.CheckPassword(req.CurrentPassword, user.PasswordHash) {
+		return errors.New("current password is incorrect")
+	}
+	hash, err := utils.HashPassword(req.NewPassword)
+	if err != nil {
+		return err
+	}
+	user.PasswordHash = hash
+	return s.userRepo.Update(user)
 }

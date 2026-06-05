@@ -26,6 +26,23 @@ export function IconStatus({ className }) {
   );
 }
 
+export function IconCheck({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <path d="M5 12.5L9.5 17L19 7" />
+    </BaseIcon>
+  );
+}
+
+export function IconX({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <path d="M6.5 6.5L17.5 17.5" />
+      <path d="M17.5 6.5L6.5 17.5" />
+    </BaseIcon>
+  );
+}
+
 export function IconFlag({ className }) {
   return (
     <BaseIcon className={className}>

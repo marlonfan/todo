@@ -1,6 +1,26 @@
 import React, { useEffect, useImperativeHandle, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import Vditor from 'vditor';
 import 'vditor/dist/index.css';
+import vditorLuteUrl from 'vditor/dist/js/lute/lute.min.js?url';
+
+async function loadVditorI18n(language) {
+  if (String(language || '').toLowerCase().startsWith('zh')) {
+    await import('vditor/dist/js/i18n/zh_CN.js');
+    return window.VditorI18n;
+  }
+  await import('vditor/dist/js/i18n/en_US.js');
+  return window.VditorI18n;
+}
+
+function removeStaleVditorScript(id, globalName) {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return;
+  if (globalName && window[globalName]) return;
+  const script = document.getElementById(id);
+  if (script) {
+    script.remove();
+  }
+}
 
 function isDraftSwitchDebugEnabled() {
   if (typeof window === 'undefined') return false;
@@ -38,6 +58,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   fill = false,
   className = '',
 }, ref) {
+  const { i18n } = useTranslation();
   const mountRef = useRef(null);
   const editorRef = useRef(null);
   const initializingRef = useRef(true);
@@ -108,6 +129,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   useEffect(() => {
     let disposed = false;
     let unbindFastInput = null;
+    let instance = null;
     const mountID = mountIDRef.current;
     if (mountRef.current) {
       mountRef.current.style.height = resolveHeight();
@@ -133,82 +155,99 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         editable.removeEventListener('compositionend', handleFastInput, true);
       };
     };
-    const instance = new Vditor(mountID, {
-      mode: 'ir',
-      value: value || '',
-      height: resolveHeight(),
-      cache: { enable: false },
-      toolbar: [],
-      counter: { enable: false },
-      typewriterMode: false,
-      placeholder: placeholder || '',
-      image: { isPreview: true },
-      preview: {
-        mode: 'editor',
-        delay: 0,
-        render: {
-          media: {
-            enable: true,
+    const initEditor = async () => {
+      let vditorI18n = null;
+      try {
+        vditorI18n = await loadVditorI18n(i18n?.language);
+      } catch {
+        vditorI18n = window.VditorI18n || null;
+      }
+      if (disposed || !mountRef.current) return;
+      removeStaleVditorScript('vditorLuteScript', 'Lute');
+      removeStaleVditorScript('vditorIconScript');
+
+      instance = new Vditor(mountRef.current, {
+        mode: 'ir',
+        value: value || '',
+        height: resolveHeight(),
+        cache: { enable: false },
+        toolbar: [],
+        counter: { enable: false },
+        typewriterMode: false,
+        placeholder: placeholder || '',
+        image: { isPreview: true },
+        lang: String(i18n?.language || '').toLowerCase().startsWith('zh') ? 'zh_CN' : 'en_US',
+        i18n: vditorI18n || undefined,
+        _lutePath: vditorLuteUrl,
+        icon: '',
+        preview: {
+          mode: 'editor',
+          delay: 0,
+          render: {
+            media: {
+              enable: true,
+            },
+          },
+          markdown: {
+            codeBlockPreview: true,
+            listStyle: true,
+            sanitize: false,
           },
         },
-        markdown: {
-          codeBlockPreview: true,
-          listStyle: true,
-          sanitize: false,
-        },
-      },
-      input: (currentValue) => {
-        if (initializingRef.current) {
-          logEditorDebug('editor.inputSkipInitializing', {
+        input: (currentValue) => {
+          if (initializingRef.current) {
+            logEditorDebug('editor.inputSkipInitializing', {
+              current_value: summarizeDebugText(currentValue),
+              pending_external: summarizeDebugText(pendingExternalValueRef.current),
+            });
+            return;
+          }
+          lastInternalValueRef.current = String(currentValue || '');
+          markdownInputVersionRef.current = fastInputVersionRef.current;
+          logEditorDebug('editor.markdownInput', {
+            syncing: !!syncingRef.current,
+            fast_input_version: fastInputVersionRef.current,
+            markdown_input_version: markdownInputVersionRef.current,
             current_value: summarizeDebugText(currentValue),
-            pending_external: summarizeDebugText(pendingExternalValueRef.current),
           });
-          return;
-        }
-        lastInternalValueRef.current = String(currentValue || '');
-        markdownInputVersionRef.current = fastInputVersionRef.current;
-        logEditorDebug('editor.markdownInput', {
-          syncing: !!syncingRef.current,
-          fast_input_version: fastInputVersionRef.current,
-          markdown_input_version: markdownInputVersionRef.current,
-          current_value: summarizeDebugText(currentValue),
-        });
-        if (syncingRef.current) return;
-        if (typeof onChangeRef.current === 'function') {
-          onChangeRef.current(currentValue);
-        }
-      },
-      after: () => {
-        if (disposed) {
-          safeDestroy(instance);
-          return;
-        }
-        readyRef.current = true;
-        editorRef.current = instance;
-        bindFastInput();
-        const pendingValue = String(pendingExternalValueRef.current || '');
-        if (typeof instance.getValue === 'function' && typeof instance.setValue === 'function') {
-          if (normalize(instance.getValue()) !== normalize(pendingValue)) {
-            syncingRef.current = true;
-            try {
-              instance.setValue(pendingValue, false);
-              lastInternalValueRef.current = pendingValue;
-              fastInputValueRef.current = pendingValue;
-              fastInputVersionRef.current += 1;
-              markdownInputVersionRef.current = fastInputVersionRef.current;
-              logEditorDebug('editor.after.applyPending', {
-                fast_input_version: fastInputVersionRef.current,
-                markdown_input_version: markdownInputVersionRef.current,
-                pending_value: summarizeDebugText(pendingValue),
-              });
-            } finally {
-              syncingRef.current = false;
+          if (syncingRef.current) return;
+          if (typeof onChangeRef.current === 'function') {
+            onChangeRef.current(currentValue);
+          }
+        },
+        after: () => {
+          if (disposed) {
+            safeDestroy(instance);
+            return;
+          }
+          readyRef.current = true;
+          editorRef.current = instance;
+          bindFastInput();
+          const pendingValue = String(pendingExternalValueRef.current || '');
+          if (typeof instance?.getValue === 'function' && typeof instance?.setValue === 'function') {
+            if (normalize(instance.getValue()) !== normalize(pendingValue)) {
+              syncingRef.current = true;
+              try {
+                instance.setValue(pendingValue, false);
+                lastInternalValueRef.current = pendingValue;
+                fastInputValueRef.current = pendingValue;
+                fastInputVersionRef.current += 1;
+                markdownInputVersionRef.current = fastInputVersionRef.current;
+                logEditorDebug('editor.after.applyPending', {
+                  fast_input_version: fastInputVersionRef.current,
+                  markdown_input_version: markdownInputVersionRef.current,
+                  pending_value: summarizeDebugText(pendingValue),
+                });
+              } finally {
+                syncingRef.current = false;
+              }
             }
           }
-        }
-        initializingRef.current = false;
-      },
-    });
+          initializingRef.current = false;
+        },
+      });
+    };
+    initEditor();
     window.setTimeout(() => {
       if (disposed) return;
       bindFastInput();

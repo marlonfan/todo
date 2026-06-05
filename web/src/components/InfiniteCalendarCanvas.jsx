@@ -4,6 +4,7 @@ import { flushSync } from 'react-dom';
 import { commitOffsetFromWheelSession, resolvePanDelta, shouldCommitWheelSession } from './canvasMotionMath';
 import { getDayDisplayInfo, clearHolidayCache } from '../utils/holidays';
 import { getShowChineseHolidays, onUIPrefsChanged } from '../utils/uiPrefs';
+import { getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
 
 const HOUR_HEIGHT = 56;
 const MONTH_WEEK_HEIGHT = 164;
@@ -627,7 +628,9 @@ export default function InfiniteCalendarCanvas({
   }, [commitOffsetAfterGesture, commitOffsetPx, flushPanLayer, isMonthView, settleInertia, stepPx]);
 
   const reference = useMemo(() => {
-    const base = anchorDate ? dayjs(anchorDate).tz(timezone) : dayjs().tz(timezone);
+    const base = view === 'timeGridDay'
+      ? parseCalendarDate(anchorDate, timezone)
+      : (anchorDate ? dayjs(anchorDate).tz(timezone) : dayjs().tz(timezone));
     if (view === 'dayGridMonth') return base.startOf('week');
     if (view === 'timeGridWeek') return base.startOf('week');
     return base.startOf('day');
@@ -715,7 +718,7 @@ export default function InfiniteCalendarCanvas({
       ? reference.add(Math.floor(cameraSteps), 'week').startOf('week')
       : reference.add(Math.floor(cameraSteps), 'day').startOf('day');
     const spanDays = view === 'dayGridMonth' ? 42 : dayColumns;
-    const currentEnd = currentStart.add(spanDays, 'day').endOf('day');
+    const currentEnd = getCalendarDisplayEnd(currentStart, spanDays);
     const rangeStart = visibleWindow.start.toISOString();
     const rangeEnd = visibleWindow.end.toISOString();
     const centerDate = view === 'dayGridMonth'
@@ -1286,7 +1289,7 @@ export default function InfiniteCalendarCanvas({
       columns.push(
         <div
           key={`day-${i}`}
-          className="pointer-events-none absolute bottom-0 border-l border-[hsl(var(--blue-border))]/70"
+          className="pointer-events-none absolute bottom-0 border-l border-[var(--calendar-grid-line)]"
           style={{ left: x, width: dayWidth, top: timeGridBodyTop }}
         />
       );
@@ -1296,7 +1299,7 @@ export default function InfiniteCalendarCanvas({
     for (let h = 1; h <= 24; h += 1) {
       const y = timeGridBodyTop + h * HOUR_HEIGHT;
       hourLines.push(
-        <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-[hsl(var(--blue-border))]/70" style={{ top: y }} />
+        <div key={`h-${h}`} className="pointer-events-none absolute left-0 right-0 border-t border-[var(--calendar-grid-line-soft)]" style={{ top: y }} />
       );
     }
 
@@ -1304,7 +1307,7 @@ export default function InfiniteCalendarCanvas({
     for (let h = 0; h < 24; h += 1) {
       const y = timeGridBodyTop + h * HOUR_HEIGHT;
       timeAxis.push(
-        <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-semibold text-blue-700/80" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
+        <div key={`t-${h}`} className="pointer-events-none absolute left-0 z-40 flex items-start justify-end pr-2 text-[11px] font-medium text-slate-400" style={{ top: y + 2, width: TIME_AXIS_WIDTH }}>
           {String(h).padStart(2, '0')}:00
         </div>
       );
@@ -1499,12 +1502,12 @@ export default function InfiniteCalendarCanvas({
           height: h,
           zIndex: 20 + col,
         },
-        className: `canvas-event absolute overflow-hidden rounded-md border border-l-[3px] px-1.5 py-0.5 text-[11px] shadow-sm ring-2 ring-white ${
+        className: `canvas-event absolute overflow-hidden px-1.5 py-0.5 text-[11px] ${
           readonly
-            ? 'border-slate-300 border-l-slate-400 bg-slate-100 text-slate-700'
+            ? 'calendar-event-readonly'
             : status === 'completed'
-              ? 'border-emerald-200 border-l-emerald-600 bg-emerald-100 text-emerald-900 line-through'
-              : 'border-[hsl(var(--blue-border))] border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue))] text-slate-900'
+              ? 'calendar-event-completed line-through'
+              : 'calendar-event-task'
         }`,
         titleStyle,
       };
@@ -1526,22 +1529,22 @@ export default function InfiniteCalendarCanvas({
           {showNowLine && (
             <>
               <div
-                className="pointer-events-none absolute border-t border-rose-500/70"
+                className="pointer-events-none absolute border-t border-blue-500/80"
                 style={{
                   left: TIME_AXIS_WIDTH,
                   right: 0,
                   top: nowLineY,
                   zIndex: 56,
-                  boxShadow: '0 0 4px rgba(244,63,94,0.22)',
+                  boxShadow: '0 0 4px rgba(37,99,235,0.18)',
                 }}
               />
               <div
-                className="pointer-events-none absolute h-2.5 w-2.5 rounded-full border border-white bg-rose-500 shadow"
+                className="pointer-events-none absolute h-2.5 w-2.5 rounded-full border border-white bg-blue-500 shadow"
                 style={{
                   left: nowDotX - 5,
                   top: nowLineY - 5,
                   zIndex: 57,
-                  boxShadow: '0 0 0 3px rgba(244,63,94,0.2)',
+                  boxShadow: '0 0 0 3px rgba(37,99,235,0.16)',
                 }}
               />
             </>
@@ -1587,7 +1590,7 @@ export default function InfiniteCalendarCanvas({
             className="pointer-events-none absolute left-0"
             style={{ top: nowLineY - 10, width: TIME_AXIS_WIDTH - 4, zIndex: 58 }}
           >
-            <span className="inline-flex h-5 items-center rounded-r-full bg-rose-500/95 px-2 text-[10px] font-semibold text-white shadow-sm">
+            <span className="inline-flex h-5 items-center rounded-r-full bg-blue-500 px-2 text-[10px] font-semibold text-white shadow-sm">
               {currentTimeLabel}
             </span>
           </div>
@@ -1626,18 +1629,18 @@ export default function InfiniteCalendarCanvas({
       dayHeaderCells.push(
         <div
           key={`hdr-${i}`}
-          className="pointer-events-none absolute top-0 flex flex-col items-center justify-center border-b border-l border-[hsl(var(--blue-border))]/70 bg-white px-1 text-center"
+          className="pointer-events-none absolute top-0 flex flex-col items-center justify-center border-b border-l border-[var(--calendar-grid-line)] bg-[var(--calendar-header-bg)] px-1 text-center"
           style={{ left: x, width: dayWidth, height: TIMEGRID_HEADER_HEIGHT }}
         >
           <span className={`text-[10px] font-semibold tracking-[0.08em] ${
-            isTodayColumn ? 'text-[hsl(var(--neutral-blue-foreground))]' : 'text-slate-600'
+            isTodayColumn ? 'text-slate-950' : 'text-slate-500'
           }`}
           >
             周{weekDayLabels[day.day()]}
           </span>
           <span className={`mt-1.5 inline-flex min-w-[40px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold ${
             isTodayColumn
-              ? 'bg-[hsl(var(--neutral-blue))] text-white shadow-sm'
+              ? 'bg-blue-500 text-white shadow-sm'
               : 'text-slate-700'
           }`}
           >
@@ -1649,7 +1652,7 @@ export default function InfiniteCalendarCanvas({
       allDayColumns.push(
         <div
           key={`all-day-col-${i}`}
-          className="pointer-events-none absolute border-b border-l border-[hsl(var(--blue-border))]/70 bg-white"
+          className="pointer-events-none absolute border-b border-l border-[var(--calendar-grid-line)] bg-white"
           style={{ left: x, width: dayWidth, top: allDayAreaTop, height: allDayAreaHeight }}
         />
       );
@@ -1686,10 +1689,10 @@ export default function InfiniteCalendarCanvas({
             key={`${item.eventKey}::${dayKey}`}
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
-            className={`canvas-event absolute z-30 overflow-hidden rounded-sm border px-1 text-[10px] leading-tight shadow-sm ${
+            className={`canvas-event absolute z-30 overflow-hidden px-1 text-[10px] leading-tight ${
               readonly
-                ? 'border-slate-300 bg-slate-100 text-slate-700'
-                : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
+                ? 'calendar-event-readonly'
+                : 'calendar-event-task'
             } ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
             style={{
               ...visualStyle,
@@ -1709,7 +1712,7 @@ export default function InfiniteCalendarCanvas({
           <button
             key={`all-day-more-${dayKey}`}
             type="button"
-            className="canvas-ui-action absolute inline-flex items-center rounded px-1 text-[10px] font-semibold leading-tight text-blue-700 hover:bg-[hsl(var(--soft-blue-strong))] hover:text-blue-950 focus:outline-none focus-visible:outline-none"
+            className="canvas-ui-action absolute inline-flex items-center px-1 text-[10px] font-semibold leading-tight focus:outline-none focus-visible:outline-none"
             style={{
               left: x + 2,
               top: y,
@@ -1741,13 +1744,13 @@ export default function InfiniteCalendarCanvas({
     }
     return (
       <div className="absolute left-0 right-0 top-0 z-[72] overflow-hidden" style={{ height: timeGridTopHeight }}>
-        <div className="absolute inset-0 bg-white" />
+        <div className="absolute inset-0 bg-[var(--calendar-header-bg)]" />
         <div
-          className="pointer-events-none absolute left-0 top-0 z-20 border-b border-[hsl(var(--blue-border))] bg-white"
+          className="pointer-events-none absolute left-0 top-0 z-20 border-b border-[var(--calendar-grid-line)] bg-[var(--calendar-header-bg)]"
           style={{ width: TIME_AXIS_WIDTH, height: timeGridTopHeight }}
         >
           <div
-            className="absolute left-0 right-0 flex items-center justify-end pr-2 text-[10px] font-semibold tracking-[0.08em] text-blue-700/75"
+            className="absolute left-0 right-0 flex items-center justify-end pr-2 text-[10px] font-semibold text-slate-400"
             style={{ top: allDayAreaTop, height: allDayAreaHeight }}
           >
             全天
@@ -1776,7 +1779,7 @@ export default function InfiniteCalendarCanvas({
       const weekStart = monthNativeStartWeek.add(w, 'week');
       const y = w * MONTH_WEEK_HEIGHT;
       rows.push(
-        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-[hsl(var(--blue-border))]/70" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
+        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-[var(--calendar-grid-line)]" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
           {Array.from({ length: 7 }).map((_, d) => {
             const day = weekStart.add(d, 'day');
             const dayKey = day.format('YYYY-MM-DD');
@@ -1785,8 +1788,8 @@ export default function InfiniteCalendarCanvas({
               <button
                 key={`${w}-${d}`}
                 type="button"
-                className={`absolute flex items-start justify-start border-0 border-l border-[hsl(var(--blue-border))]/70 p-0 text-left focus:outline-none focus-visible:outline-none ${
-                  isToday ? 'bg-[hsl(var(--soft-blue))]/70' : 'bg-transparent'
+                className={`absolute flex items-start justify-start border-0 border-l border-[var(--calendar-grid-line-soft)] p-0 text-left transition-colors hover:bg-slate-50/70 focus:outline-none focus-visible:outline-none ${
+                  isToday ? 'bg-slate-50/80' : 'bg-transparent'
                 }`}
                 style={{
                   top: 0,
@@ -1815,7 +1818,7 @@ export default function InfiniteCalendarCanvas({
                         <span
                           className={`inline-flex items-center rounded-full text-xs font-semibold ${
                             isToday
-                              ? 'bg-[hsl(var(--neutral-blue))] px-2 py-0.5 text-white shadow-sm'
+                              ? 'bg-blue-500 px-2 py-0.5 text-white shadow-sm'
                               : 'px-0 text-slate-700'
                           }`}
                         >
@@ -1828,7 +1831,7 @@ export default function InfiniteCalendarCanvas({
                       {showChineseHolidays && displayInfo.primaryHoliday && (
                         <span
                           className={`text-[10px] font-medium leading-tight truncate max-w-[50%] ${
-                            displayInfo.isHoliday ? 'text-rose-500' : 'text-emerald-600'
+                            displayInfo.isHoliday ? 'text-rose-500' : 'text-teal-600'
                           }`}
                         >
                           {displayInfo.primaryHoliday}
@@ -1839,7 +1842,7 @@ export default function InfiniteCalendarCanvas({
                 })()}
                 {isToday && (
                   <span
-                    className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500/90 shadow"
+                    className="pointer-events-none absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-blue-500/80"
                     aria-hidden="true"
                   />
                 )}
@@ -1897,8 +1900,8 @@ export default function InfiniteCalendarCanvas({
             type="button"
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
-            className={`canvas-event absolute h-5 overflow-hidden rounded-sm border px-1 text-left text-[10px] shadow-sm focus:outline-none focus-visible:outline-none ${
-              readonly ? 'border-slate-300 bg-slate-100 text-slate-700' : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
+            className={`canvas-event absolute h-5 overflow-hidden px-1 text-left text-[10px] focus:outline-none focus-visible:outline-none ${
+              readonly ? 'calendar-event-readonly' : 'calendar-event-task'
             }`}
             style={{
               left: x,
@@ -1927,7 +1930,7 @@ export default function InfiniteCalendarCanvas({
           <button
             key={`more-${key}`}
             type="button"
-            className="canvas-ui-action absolute inline-flex h-5 items-center whitespace-nowrap rounded px-1 text-left text-[10px] font-semibold leading-5 text-blue-700 hover:bg-[hsl(var(--soft-blue-strong))] hover:text-blue-950 focus:outline-none focus-visible:outline-none"
+            className="canvas-ui-action absolute inline-flex h-5 items-center whitespace-nowrap px-1 text-left text-[10px] font-semibold leading-5 focus:outline-none focus-visible:outline-none"
             style={{
               left: x,
               top: y,
@@ -1960,11 +1963,11 @@ export default function InfiniteCalendarCanvas({
     return (
       <>
         <div
-          className="pointer-events-none sticky top-0 z-20 grid grid-cols-7 border-b border-[hsl(var(--blue-border))]/70 bg-white/95 text-xs font-semibold text-blue-950 backdrop-blur"
+          className="pointer-events-none sticky top-0 z-20 grid grid-cols-7 border-b border-[var(--calendar-grid-line)] bg-[var(--calendar-header-bg)]/95 text-xs font-semibold text-slate-500 backdrop-blur"
           style={{ height: MONTH_HEADER_HEIGHT }}
         >
           {weekDayLabels.map((label) => (
-            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-[hsl(var(--blue-border))]/70">
+            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-[var(--calendar-grid-line-soft)]">
               周{label}
             </div>
           ))}
@@ -1984,7 +1987,7 @@ export default function InfiniteCalendarCanvas({
   return (
     <div
       ref={viewportRef}
-      className="relative h-full overflow-hidden bg-white"
+      className="calendar-canvas-root relative h-full overflow-hidden bg-white"
       onWheel={isMonthView ? undefined : handleWheel}
       onPointerDown={isMonthView ? undefined : handlePointerDown}
       onPointerMove={isMonthView ? undefined : handlePointerMove}
@@ -1999,7 +2002,7 @@ export default function InfiniteCalendarCanvas({
       {isMonthView ? (
         <div
           ref={monthScrollRef}
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+          className="calendar-canvas-scroll absolute inset-0 overflow-y-auto overflow-x-hidden"
           style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
           onScroll={handleMonthScroll}
         >
@@ -2019,7 +2022,7 @@ export default function InfiniteCalendarCanvas({
           />
           <div
             ref={timeGridScrollRef}
-            className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+            className="calendar-canvas-scroll absolute inset-0 overflow-y-auto overflow-x-hidden"
             style={{
               touchAction: eventGestureLocked ? 'none' : 'pan-y',
               overscrollBehaviorY: 'none',

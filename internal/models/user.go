@@ -11,6 +11,7 @@ type User struct {
 	Username               string    `json:"username" gorm:"uniqueIndex;size:50;not null"`
 	Email                  string    `json:"email" gorm:"uniqueIndex;size:100;not null"`
 	PasswordHash           string    `json:"-" gorm:"size:255;not null"`
+	AvatarURL              string    `json:"avatar_url" gorm:"type:text"`
 	Timezone               string    `json:"timezone" gorm:"size:50;default:'UTC'"`
 	CalendarDefaultView    string    `json:"calendar_default_view" gorm:"size:20;default:'timeGridDay'"`
 	DefaultReminderEnabled bool      `json:"default_reminder_enabled" gorm:"default:false"`
@@ -45,25 +46,32 @@ type UserLoginRequest struct {
 }
 
 type UpdateProfileRequest struct {
-	Timezone               string `json:"timezone" binding:"omitempty,max=50"`
-	CalendarDefaultView    string `json:"calendar_default_view" binding:"omitempty,oneof=dayGridMonth timeGridWeek timeGridDay"`
-	DefaultReminderEnabled *bool  `json:"default_reminder_enabled"`
-	DefaultReminderMinutes *int   `json:"default_reminder_minutes" binding:"omitempty,min=1,max=10080"`
-	DefaultTimeGranularity *int   `json:"default_time_granularity" binding:"omitempty,min=5,max=60"`
-	DefaultTaskStartTime   string `json:"default_task_start_time" binding:"omitempty,len=5"`
-	DefaultMorningTime     string `json:"default_morning_time" binding:"omitempty,len=5"`
-	DefaultNoonTime        string `json:"default_noon_time" binding:"omitempty,len=5"`
-	DefaultAfternoonTime   string `json:"default_afternoon_time" binding:"omitempty,len=5"`
-	DefaultEveningTime     string `json:"default_evening_time" binding:"omitempty,len=5"`
-	MobileDefaultTab       string `json:"mobile_default_tab" binding:"omitempty,oneof=tasks calendar settings"`
-	MobileDefaultTaskView  string `json:"mobile_default_task_view" binding:"omitempty,max=40"`
-	MobileTabPreset        string `json:"mobile_tab_preset" binding:"omitempty,oneof=tasks_calendar_settings tasks_calendar_categories_settings tasks_inbox_calendar_settings"`
+	AvatarURL              *string `json:"avatar_url" binding:"omitempty,max=2000000"`
+	Timezone               string  `json:"timezone" binding:"omitempty,max=50"`
+	CalendarDefaultView    string  `json:"calendar_default_view" binding:"omitempty,oneof=dayGridMonth timeGridWeek timeGridDay"`
+	DefaultReminderEnabled *bool   `json:"default_reminder_enabled"`
+	DefaultReminderMinutes *int    `json:"default_reminder_minutes" binding:"omitempty,min=1,max=10080"`
+	DefaultTimeGranularity *int    `json:"default_time_granularity" binding:"omitempty,min=5,max=60"`
+	DefaultTaskStartTime   string  `json:"default_task_start_time" binding:"omitempty,len=5"`
+	DefaultMorningTime     string  `json:"default_morning_time" binding:"omitempty,len=5"`
+	DefaultNoonTime        string  `json:"default_noon_time" binding:"omitempty,len=5"`
+	DefaultAfternoonTime   string  `json:"default_afternoon_time" binding:"omitempty,len=5"`
+	DefaultEveningTime     string  `json:"default_evening_time" binding:"omitempty,len=5"`
+	MobileDefaultTab       string  `json:"mobile_default_tab" binding:"omitempty,oneof=tasks calendar settings"`
+	MobileDefaultTaskView  string  `json:"mobile_default_task_view" binding:"omitempty,max=40"`
+	MobileTabPreset        string  `json:"mobile_tab_preset" binding:"omitempty,oneof=tasks_calendar_settings tasks_calendar_categories_settings tasks_inbox_calendar_settings"`
+}
+
+type UpdatePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required,min=6"`
 }
 
 type UserResponse struct {
 	ID                     int64     `json:"id"`
 	Username               string    `json:"username"`
 	Email                  string    `json:"email"`
+	AvatarURL              string    `json:"avatar_url"`
 	Timezone               string    `json:"timezone"`
 	CalendarDefaultView    string    `json:"calendar_default_view"`
 	DefaultReminderEnabled bool      `json:"default_reminder_enabled"`
@@ -147,6 +155,7 @@ func (u *User) ToResponse() UserResponse {
 		ID:                     u.ID,
 		Username:               u.Username,
 		Email:                  u.Email,
+		AvatarURL:              u.AvatarURL,
 		Timezone:               u.Timezone,
 		CalendarDefaultView:    calendarDefaultView,
 		DefaultReminderEnabled: u.DefaultReminderEnabled,

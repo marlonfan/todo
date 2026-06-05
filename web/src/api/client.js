@@ -125,6 +125,7 @@ export const authAPI = {
   me: () => apiClient.get('/auth/me'),
   refresh: () => apiClient.post('/auth/refresh'),
   updateProfile: (data) => apiClient.patch('/auth/profile', data),
+  updatePassword: (data) => apiClient.patch('/auth/password', data),
   reconcileReminders: () => apiClient.post('/auth/reconcile-reminders'),
 };
 

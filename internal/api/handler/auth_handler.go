@@ -114,6 +114,24 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+func (h *AuthHandler) UpdatePassword(c *gin.Context) {
+	rawUserID, _ := c.Get("userID")
+	userID := rawUserID.(int64)
+
+	var req models.UpdatePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.authService.UpdatePassword(userID, &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "password updated successfully"})
+}
+
 // ReconcileReminders 重建所有提醒
 func (h *AuthHandler) ReconcileReminders(c *gin.Context) {
 	rawUserID, exists := c.Get("userID")

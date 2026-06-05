@@ -216,6 +216,7 @@ function MainLayout({ user, setUser }) {
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
   const [mobilePrefs, setMobilePrefs] = useState(readMobilePrefsFromStorage);
   const [searchDialog, setSearchDialog] = useState({ open: false, query: '' });
+  const [settingsOpen, setSettingsOpen] = useState(location.pathname === '/settings');
   const [syncConflicts, setSyncConflicts] = useState(() => getSyncConflicts());
   const [resolveConflictID, setResolveConflictID] = useState(0);
   const [resolveSelections, setResolveSelections] = useState({});
@@ -231,6 +232,14 @@ function MainLayout({ user, setUser }) {
   });
   const { data: categories = [] } = useCategoriesQuery();
 
+  const openSettings = useCallback(() => {
+    setSettingsOpen(true);
+    setMobileMenuOpen(false);
+    if (location.pathname === '/settings') {
+      navigate('/tasks?view=all', { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
   useEffect(() => {
     const unsubscribe = subscribeSearchOverlay((next) => {
       setSearchDialog(next);
@@ -244,13 +253,18 @@ function MainLayout({ user, setUser }) {
 
   useEffect(() => {
     setMobileMenuOpen(false);
+    if (location.pathname === '/settings') {
+      setSettingsOpen(true);
+      navigate('/tasks?view=all', { replace: true });
+      return;
+    }
     if (location.pathname === '/' || location.pathname === '/tasks') {
       setWorkspaceVisited((prev) => {
         const key = location.pathname === '/' ? 'calendar' : 'tasks';
         return prev[key] ? prev : { ...prev, [key]: true };
       });
     }
-  }, [location.pathname, location.search]);
+  }, [location.pathname, location.search, navigate]);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
@@ -265,6 +279,17 @@ function MainLayout({ user, setUser }) {
       window.removeEventListener('storage', syncMobilePrefs);
     };
   }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [settingsOpen]);
 
   // 计算初始重定向目标（仅在首次挂载时、路径为 / 时），lazy initializer 保证只算一次
   const [initialRedirectTo] = useState(() => {
@@ -344,9 +369,10 @@ function MainLayout({ user, setUser }) {
       },
       settings: {
         key: 'settings',
-        to: '/settings',
+        to: '#settings',
         label: t('nav.settings'),
         icon: IconSettings,
+        action: 'open_settings',
       },
     };
 
@@ -404,6 +430,7 @@ function MainLayout({ user, setUser }) {
 
   const navItemClass = (active) => `md-nav-item ${active ? 'md-nav-item-active' : 'md-nav-item-idle'}`;
   const appInitial = String(t('app.name') || 'T').trim().slice(0, 1).toUpperCase();
+  const userAvatarURL = String(user?.avatar_url || '').trim();
   const hideMobileHeader = location.pathname === '/';
   const taskPanelLocationRef = useRef(
     location.pathname === '/tasks'
@@ -663,9 +690,19 @@ function MainLayout({ user, setUser }) {
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
         <div className="mx-5 mb-5 mt-6 flex h-12 items-center gap-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-blue-600 text-sm font-semibold text-white shadow-sm">
-            {appInitial}
-          </div>
+          <button
+            type="button"
+            onClick={openSettings}
+            className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-blue-600 text-sm font-semibold text-white shadow-sm transition hover:ring-2 hover:ring-blue-200"
+            title={t('nav.settings')}
+            aria-label={t('nav.settings')}
+          >
+            {userAvatarURL ? (
+              <img src={userAvatarURL} alt={t('settings.avatar')} className="h-full w-full object-cover" />
+            ) : (
+              appInitial
+            )}
+          </button>
           <div className="flex min-w-0 flex-col justify-center">
             <h1 className="truncate text-lg font-semibold leading-6 text-slate-950">{t('app.name')}</h1>
             <p className="-mt-0.5 truncate text-sm leading-5 text-slate-500">{user.username}</p>
@@ -780,15 +817,16 @@ function MainLayout({ user, setUser }) {
             </Link>
           </div>
 
-          <Link
-            to="/settings"
-            className={navItemClass(activeTab === 'settings')}
+          <button
+            type="button"
+            onClick={openSettings}
+            className={`${navItemClass(settingsOpen)} w-full text-left`}
           >
             <span className="inline-flex min-w-0 items-center gap-2">
               <IconSettings className="h-[18px] w-[18px] shrink-0" />
               <span className="truncate">{t('nav.settings')}</span>
             </span>
-          </Link>
+          </button>
         </nav>
 
         <div className="border-t border-slate-200 p-5">
@@ -820,7 +858,6 @@ function MainLayout({ user, setUser }) {
         <Routes>
           <Route path="/search" element={<TaskList forcedView="search" />} />
           <Route path="/categories" element={<CategoryManager />} />
-          <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>
 
@@ -829,21 +866,27 @@ function MainLayout({ user, setUser }) {
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
             const active = isMobileTabActive(item);
-            if (item.action === 'open_search') {
+            if (item.action === 'open_search' || item.action === 'open_settings') {
               return (
                 <button
                   key={item.key}
                   type="button"
                   aria-label={item.label}
                   title={item.label}
-                  onClick={() => openSearchDialog()}
+                  onClick={() => {
+                    if (item.action === 'open_settings') {
+                      openSettings();
+                      return;
+                    }
+                    openSearchDialog();
+                  }}
                   className={`appearance-none border-0 bg-transparent p-0 flex items-center justify-center ${
-                    active ? 'text-slate-950' : 'text-slate-500'
+                    (item.action === 'open_settings' ? settingsOpen : active) ? 'text-slate-950' : 'text-slate-500'
                   }`}
                 >
                   <span
                     className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                      active ? 'border-[hsl(var(--neutral-blue-foreground))]' : 'border-transparent hover:border-[hsl(var(--blue-border-strong))]'
+                      (item.action === 'open_settings' ? settingsOpen : active) ? 'border-[hsl(var(--neutral-blue-foreground))]' : 'border-transparent hover:border-[hsl(var(--blue-border-strong))]'
                     }`}
                   >
                     <ItemIcon className="h-[18px] w-[18px]" />
@@ -964,6 +1007,30 @@ function MainLayout({ user, setUser }) {
         initialQuery={searchDialog.query || ''}
         onClose={() => closeSearchDialog()}
       />
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 p-3 backdrop-blur-[1px]"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSettingsOpen(false);
+            }
+          }}
+        >
+          <div
+            className="h-[min(46rem,calc(100vh-2rem))] w-[min(54rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('settings.title')}
+          >
+            <Settings
+              modal
+              user={user}
+              setUser={setUser}
+              onClose={() => setSettingsOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

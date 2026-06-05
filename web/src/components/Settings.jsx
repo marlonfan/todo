@@ -3,6 +3,16 @@ import Select from './ui/Select';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  Bell,
+  CalendarClock,
+  Cloud,
+  KeyRound,
+  MonitorCog,
+  Shield,
+  UserCircle,
+  X,
+} from 'lucide-react';
+import {
   ALLOWED_TIME_GRANULARITIES,
   getUserTimezone,
   logTimeDebug,
@@ -81,7 +91,7 @@ function normalizeCalendarDefaultView(value) {
   return CALENDAR_DEFAULT_VIEWS.includes(value) ? value : 'timeGridDay';
 }
 
-function Settings() {
+function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   let cachedUser = {};
@@ -91,6 +101,10 @@ function Settings() {
     cachedUser = {};
   }
   const [language, setLanguage] = useState(i18n.language || 'zh-CN');
+  const [profileUser, setProfileUser] = useState(currentUser || cachedUser || {});
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const [timezone, setTimezone] = useState(getUserTimezone());
   const [defaultReminderEnabled, setDefaultReminderEnabled] = useState(!!cachedUser.default_reminder_enabled);
   const [defaultReminderMinutes, setDefaultReminderMinutes] = useState(
@@ -126,7 +140,7 @@ function Settings() {
   );
   const [showCategoryEmoji, setShowCategoryEmojiState] = useState(getShowCategoryEmoji());
   const [showChineseHolidays, setShowChineseHolidaysState] = useState(getShowChineseHolidays());
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState(() => (modal ? 'account' : 'general'));
   const [calendarDefaultView, setCalendarDefaultView] = useState(
     normalizeCalendarDefaultView(cachedUser.calendar_default_view)
   );
@@ -220,6 +234,8 @@ function Settings() {
       .then((res) => {
         if (!active) return;
         const user = res.data || {};
+        setProfileUser(user);
+        setUser?.(user);
         localStorage.setItem('user', JSON.stringify(user));
         if (user.timezone) {
           setTimezone(user.timezone);
@@ -265,13 +281,15 @@ function Settings() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [setUser]);
 
   const persistProfile = async (payload, rollback) => {
     setSaveToast(null);
     try {
       const res = await authAPI.updateProfile(payload);
       const user = res.data || {};
+      setProfileUser(user);
+      setUser?.(user);
       localStorage.setItem('user', JSON.stringify(user));
       window.dispatchEvent(new CustomEvent('user:profile-updated', { detail: user }));
       if (user.timezone) {
@@ -313,6 +331,64 @@ function Settings() {
     } catch (err) {
       if (typeof rollback === 'function') rollback();
       showToast('error', err.response?.data?.error || t('settings.saveFailed'));
+    }
+  };
+
+  const handleAvatarFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('error', t('settings.avatarInvalid'));
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      showToast('error', t('settings.avatarTooLarge'));
+      return;
+    }
+    setAvatarBusy(true);
+    try {
+      const dataURL = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsDataURL(file);
+      });
+      await persistProfile({ avatar_url: dataURL });
+    } catch (err) {
+      showToast('error', err.response?.data?.error || t('settings.avatarSaveFailed'));
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    setAvatarBusy(true);
+    try {
+      await persistProfile({ avatar_url: '' });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const handlePasswordSubmit = async (event) => {
+    event.preventDefault();
+    if (passwordForm.next !== passwordForm.confirm) {
+      showToast('error', t('settings.passwordMismatch'));
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      await authAPI.updatePassword({
+        current_password: passwordForm.current,
+        new_password: passwordForm.next,
+      });
+      setPasswordForm({ current: '', next: '', confirm: '' });
+      showToast('success', t('settings.passwordUpdated'));
+    } catch (err) {
+      showToast('error', err.response?.data?.error || t('settings.passwordUpdateFailed'));
+    } finally {
+      setPasswordBusy(false);
     }
   };
 
@@ -653,8 +729,18 @@ function Settings() {
     }
   };
 
+  const avatarURL = String(profileUser.avatar_url || '').trim();
+  const profileInitial = String(profileUser.username || cachedUser.username || 'T').trim().slice(0, 1).toUpperCase();
+  const settingsNavItems = [
+    { key: 'account', label: t('settings.accountSecurity'), icon: UserCircle },
+    { key: 'general', label: t('settings.preferences'), icon: MonitorCog },
+    { key: 'notifications', label: t('settings.notifications'), icon: Bell },
+    { key: 'sync', label: t('settings.syncSettings'), icon: Cloud },
+    { key: 'caldav', label: t('settings.caldav.tab'), icon: CalendarClock },
+  ];
+
   return (
-    <div className="settings-page md-page flex h-full flex-col">
+    <div className={`settings-page ${modal ? 'flex h-full min-h-0 overflow-hidden bg-white' : 'md-page flex h-full flex-col'}`}>
       {saveToast && (
         <div className="fixed right-4 top-4 z-[70]">
           <div
@@ -668,14 +754,67 @@ function Settings() {
           </div>
         </div>
       )}
-      <div className="hidden border-b border-blue-100 bg-white/90 p-4 md:block">
-        <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
-      </div>
+      {modal ? (
+        <aside className="hidden w-56 shrink-0 border-r border-slate-200 bg-slate-50/80 px-3 py-5 md:block">
+          <div className="mb-4 px-2 text-base font-semibold text-slate-950">{t('settings.title')}</div>
+          <nav className="space-y-1">
+            {settingsNavItems.map((item) => {
+              const ItemIcon = item.icon;
+              const active = activeTab === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setActiveTab(item.key)}
+                  className={`flex h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm transition-colors ${
+                    active
+                      ? 'bg-white text-slate-950 shadow-sm'
+                      : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
+                  }`}
+                >
+                  <ItemIcon className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+      ) : (
+        <div className="hidden border-b border-blue-100 bg-white/90 p-4 md:block">
+          <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
+        </div>
+      )}
 
-      <div className="flex-1 overflow-auto p-4 md:p-5">
-        <div className="w-full">
+      <div className={`settings-scroll-area ${modal ? 'min-w-0 flex-1 overflow-auto' : 'flex-1 overflow-auto p-4 md:p-5'}`}>
+        <div className={`${modal ? 'mx-auto max-w-3xl p-5 md:p-7' : 'w-full'}`}>
+          {modal && (
+            <div className="mb-5 flex items-center justify-between gap-3 md:mb-6">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-950">{settingsNavItems.find((item) => item.key === activeTab)?.label || t('settings.title')}</h2>
+                <p className="mt-1 text-sm text-slate-500">{t('settings.modalHint')}</p>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label={t('common.close')}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          )}
           {/* Tab Navigation */}
-          <div className="settings-tabs">
+          <div className={`${modal ? 'settings-tabs mb-5 md:hidden' : 'settings-tabs'}`}>
+            <button
+              onClick={() => setActiveTab('account')}
+              className={`settings-tab-btn ${
+                activeTab === 'account'
+                  ? 'settings-tab-btn-active'
+                  : 'settings-tab-btn-idle'
+              }`}
+            >
+              {t('settings.accountSecurity')}
+            </button>
             <button
               onClick={() => setActiveTab('general')}
               className={`settings-tab-btn ${
@@ -718,6 +857,117 @@ function Settings() {
               {t('settings.caldav.tab')}
             </button>
           </div>
+
+          {activeTab === 'account' && (
+            <div className="space-y-4 p-1 md:p-0">
+              <div className="rounded-xl bg-slate-50 p-5">
+                <div className="flex flex-col items-center text-center">
+                  <div className="relative">
+                    <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full bg-blue-600 text-2xl font-semibold text-white shadow-sm">
+                      {avatarURL ? (
+                        <img src={avatarURL} alt={t('settings.avatar')} className="h-full w-full object-cover" />
+                      ) : (
+                        <span>{profileInitial}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-3 text-base font-semibold text-slate-950">{profileUser.username || cachedUser.username}</div>
+                  <div className="mt-1 text-sm text-slate-500">{profileUser.email || cachedUser.email}</div>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        disabled={avatarBusy}
+                        onChange={handleAvatarFileChange}
+                      />
+                      {avatarBusy ? t('common.loading') : t('settings.uploadAvatar')}
+                    </label>
+                    {avatarURL && (
+                      <button
+                        type="button"
+                        disabled={avatarBusy}
+                        onClick={handleRemoveAvatar}
+                        className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {t('settings.removeAvatar')}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">{t('settings.avatarHint')}</p>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Shield className="h-4 w-4 text-slate-500" />
+                  {t('settings.accountInfo')}
+                </div>
+                <div className="mt-3 divide-y divide-slate-200 rounded-xl bg-white">
+                  <div className="flex items-center justify-between px-4 py-3 text-sm">
+                    <span className="text-slate-600">{t('auth.username')}</span>
+                    <span className="font-medium text-slate-900">{profileUser.username || cachedUser.username}</span>
+                  </div>
+                  <div className="flex items-center justify-between px-4 py-3 text-sm">
+                    <span className="text-slate-600">{t('auth.email')}</span>
+                    <span className="font-medium text-slate-900">{profileUser.email || cachedUser.email}</span>
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handlePasswordSubmit} className="rounded-xl bg-slate-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <KeyRound className="h-4 w-4 text-slate-500" />
+                  {t('settings.changePassword')}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">{t('settings.currentPassword')}</label>
+                    <input
+                      type="password"
+                      value={passwordForm.current}
+                      onChange={(e) => setPasswordForm((prev) => ({ ...prev, current: e.target.value }))}
+                      className="form-input"
+                      autoComplete="current-password"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">{t('settings.newPassword')}</label>
+                    <input
+                      type="password"
+                      value={passwordForm.next}
+                      onChange={(e) => setPasswordForm((prev) => ({ ...prev, next: e.target.value }))}
+                      className="form-input"
+                      autoComplete="new-password"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">{t('settings.confirmNewPassword')}</label>
+                    <input
+                      type="password"
+                      value={passwordForm.confirm}
+                      onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirm: e.target.value }))}
+                      className="form-input"
+                      autoComplete="new-password"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={passwordBusy}
+                  className="btn-primary mt-4 inline-flex items-center disabled:opacity-60"
+                >
+                  {passwordBusy ? t('common.loading') : t('settings.savePassword')}
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* General Settings */}
           {activeTab === 'general' && (

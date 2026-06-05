@@ -1,4 +1,4 @@
-const CACHE_NAME = "todo-kimi-cache-v4";
+const CACHE_NAME = "todo-kimi-cache-v5";
 const STATIC_ASSETS = [
   "/manifest.webmanifest",
   "/icons/icon-192.svg",
@@ -16,15 +16,21 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key))
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key !== CACHE_NAME)
+            .map((key) => caches.delete(key))
+        )
       )
-    )
+      .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: "window" }))
+      .then((clients) => {
+        clients.forEach((client) => client.postMessage({ type: "CACHE_UPDATED" }));
+      })
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {

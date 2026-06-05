@@ -35,6 +35,7 @@ import {
 } from '../utils/uiPrefs';
 import {
   IconCalendar,
+  IconCheck,
   IconClock,
   IconFlag,
   IconGroup,
@@ -92,6 +93,19 @@ const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
 const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
 const DELETE_DIALOG_KIND_TASK = 'task';
 const DETAIL_PANELS_REQUIRING_CONFIRM = new Set(['time', 'recurrence']);
+const DETAIL_PANEL_FLOATING_WIDTH_REMS = {
+  activity: 30,
+  priority: 12.25,
+  category: 14.75,
+  recurrence: 18.25,
+};
+const TASK_DETAIL_SPLIT_MIN_WIDTH = 800;
+const TASK_SPLIT_STORAGE_KEY = 'todo:taskListDetailSplitRatio';
+const TASK_SPLIT_DEFAULT_RATIO = 0.55;
+const TASK_SPLIT_MIN_LIST_WIDTH = 320;
+const TASK_SPLIT_MIN_DETAIL_WIDTH = 340;
+const TASK_SPLIT_DIVIDER_WIDTH = 8;
+const TASK_SPLIT_KEYBOARD_STEP = 0.03;
 const TIME_PANEL_DRAFT_FIELDS = ['all_day', 'start_time', 'end_time'];
 const RECURRENCE_PANEL_DRAFT_FIELDS = [
   'recurrence_enabled',
@@ -102,6 +116,25 @@ const RECURRENCE_PANEL_DRAFT_FIELDS = [
   'recurrence_lunar_day',
   'recurrence_lunar_is_leap_month',
 ];
+
+function clampNumber(value, min, max) {
+  const safeMin = Number.isFinite(min) ? min : 0;
+  const safeMax = Math.max(safeMin, Number.isFinite(max) ? max : safeMin);
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return safeMin;
+  return Math.min(Math.max(parsed, safeMin), safeMax);
+}
+
+function readTaskSplitRatio() {
+  if (typeof window === 'undefined') return TASK_SPLIT_DEFAULT_RATIO;
+  const stored = window.localStorage?.getItem(TASK_SPLIT_STORAGE_KEY);
+  return clampNumber(stored, 0.25, 0.75) || TASK_SPLIT_DEFAULT_RATIO;
+}
+
+function writeTaskSplitRatio(ratio) {
+  if (typeof window === 'undefined') return;
+  window.localStorage?.setItem(TASK_SPLIT_STORAGE_KEY, String(clampNumber(ratio, 0.25, 0.75).toFixed(4)));
+}
 
 function isDraftSwitchDebugEnabled() {
   if (typeof window === 'undefined') return false;
@@ -171,6 +204,26 @@ function isDetailPanelFloatingLayerTarget(target) {
     || target.closest('.react-datepicker-popper')
     || target.closest('.react-datepicker__portal')
   );
+}
+
+function getDetailPanelFloatingStyle(triggerElement, panelName) {
+  if (typeof window === 'undefined' || !triggerElement) return undefined;
+  const rootFontSize = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
+  const width = (DETAIL_PANEL_FLOATING_WIDTH_REMS[panelName] || 24) * rootFontSize;
+  const rect = triggerElement.getBoundingClientRect();
+  const viewportWidth = window.innerWidth || width;
+  const viewportHeight = window.innerHeight || 0;
+  const margin = 12;
+  const maxLeft = Math.max(margin, viewportWidth - width - margin);
+  const left = Math.min(Math.max(rect.left, margin), maxLeft);
+  const top = Math.min(
+    Math.max(rect.bottom + 8, margin),
+    Math.max(margin, viewportHeight - margin),
+  );
+  return {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+  };
 }
 
 function getDefaultStartTimeParts() {
@@ -1189,13 +1242,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const [deleteDialog, setDeleteDialog] = useState({ open: false, kind: '', context: null });
   const [deleteDialogSubmitting, setDeleteDialogSubmitting] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
-  const [isMobileViewport, setIsMobileViewport] = useState(
-    typeof window !== 'undefined' ? window.innerWidth < 1024 : false
-  );
+  const [isMobileViewport, setIsMobileViewport] = useState(true);
   const [isCompactMobile, setIsCompactMobile] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
+  const [taskSplitRatio, setTaskSplitRatio] = useState(readTaskSplitRatio);
+  const [isTaskSplitDragging, setIsTaskSplitDragging] = useState(false);
   const detailPanelRef = useRef(null);
+  const detailPanelTriggerRefs = useRef({});
+  const taskWorkspaceRef = useRef(null);
+  const taskSplitDragRef = useRef({ startX: 0, startRatio: TASK_SPLIT_DEFAULT_RATIO, workspaceWidth: 0 });
+  const taskSplitRatioRef = useRef(taskSplitRatio);
   const listToolbarPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
   const draftSourceTaskIDRef = useRef(0);
@@ -1525,12 +1582,99 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   useEffect(() => {
     const handleResize = () => {
-      setIsMobileViewport(window.innerWidth < 1024);
       setIsCompactMobile(window.innerWidth < 768);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    taskSplitRatioRef.current = taskSplitRatio;
+  }, [taskSplitRatio]);
+
+  useEffect(() => {
+    const element = taskWorkspaceRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const applyWorkspaceWidth = (width) => {
+      const shouldUseModal = width < TASK_DETAIL_SPLIT_MIN_WIDTH;
+      setIsMobileViewport((prev) => (prev === shouldUseModal ? prev : shouldUseModal));
+    };
+    applyWorkspaceWidth(element.getBoundingClientRect().width || 0);
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect?.width || 0;
+      applyWorkspaceWidth(width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const clampTaskSplitRatio = useCallback((nextRatio, workspaceWidth = 0) => {
+    const width = workspaceWidth || taskWorkspaceRef.current?.getBoundingClientRect().width || 0;
+    if (!width) return clampNumber(nextRatio, 0.25, 0.75);
+    const availableWidth = Math.max(1, width - TASK_SPLIT_DIVIDER_WIDTH);
+    const minListRatio = TASK_SPLIT_MIN_LIST_WIDTH / availableWidth;
+    const maxListRatio = 1 - (TASK_SPLIT_MIN_DETAIL_WIDTH / availableWidth);
+    return clampNumber(nextRatio, minListRatio, maxListRatio);
+  }, []);
+
+  const commitTaskSplitRatio = useCallback((nextRatio, workspaceWidth = 0) => {
+    const clampedRatio = clampTaskSplitRatio(nextRatio, workspaceWidth);
+    taskSplitRatioRef.current = clampedRatio;
+    setTaskSplitRatio(clampedRatio);
+    writeTaskSplitRatio(clampedRatio);
+  }, [clampTaskSplitRatio]);
+
+  const handleTaskSplitPointerDown = useCallback((event) => {
+    if (isMobileViewport || event.button !== 0) return;
+    const rect = taskWorkspaceRef.current?.getBoundingClientRect();
+    if (!rect?.width) return;
+    event.preventDefault();
+    taskSplitDragRef.current = {
+      startX: event.clientX,
+      startRatio: clampTaskSplitRatio(taskSplitRatioRef.current, rect.width),
+      workspaceWidth: rect.width,
+    };
+    setIsTaskSplitDragging(true);
+  }, [clampTaskSplitRatio, isMobileViewport]);
+
+  const handleTaskSplitKeyDown = useCallback((event) => {
+    if (isMobileViewport) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home') return;
+    event.preventDefault();
+    if (event.key === 'Home') {
+      commitTaskSplitRatio(TASK_SPLIT_DEFAULT_RATIO);
+      return;
+    }
+    const direction = event.key === 'ArrowLeft' ? -1 : 1;
+    commitTaskSplitRatio(taskSplitRatio + direction * TASK_SPLIT_KEYBOARD_STEP);
+  }, [commitTaskSplitRatio, isMobileViewport, taskSplitRatio]);
+
+  useEffect(() => {
+    if (!isTaskSplitDragging) return undefined;
+    const handlePointerMove = (event) => {
+      const dragState = taskSplitDragRef.current;
+      if (!dragState.workspaceWidth) return;
+      const nextRatio = dragState.startRatio + ((event.clientX - dragState.startX) / dragState.workspaceWidth);
+      const clampedRatio = clampTaskSplitRatio(nextRatio, dragState.workspaceWidth);
+      taskSplitRatioRef.current = clampedRatio;
+      setTaskSplitRatio(clampedRatio);
+    };
+    const handlePointerUp = () => {
+      const dragState = taskSplitDragRef.current;
+      setIsTaskSplitDragging(false);
+      writeTaskSplitRatio(clampTaskSplitRatio(taskSplitRatioRef.current, dragState.workspaceWidth));
+    };
+    document.body.classList.add('task-split-resizing');
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      document.body.classList.remove('task-split-resizing');
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [clampTaskSplitRatio, isTaskSplitDragging]);
 
   useEffect(() => {
     if (!detailPanel && !showActivityPanel) return undefined;
@@ -1918,6 +2062,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       ? 'text-sky-600 hover:bg-sky-50'
       : 'text-slate-500 hover:bg-slate-100';
   const draftTimeButtonTitle = hasDraftParsedTimeHint ? draftParsePreview : draftTimeSummaryLabel;
+  const activityPanelFloatingStyle = useMemo(
+    () => getDetailPanelFloatingStyle(detailPanelTriggerRefs.current?.activity, 'activity'),
+    [showActivityPanel]
+  );
   const hasDraftCategoryValue = Array.isArray(draft?.category_ids) && draft.category_ids.length > 0;
   const draftCategorySummaryLabel = buildCategorySummaryLabel(
     draft?.category_ids || [],
@@ -1946,6 +2094,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     : draft?.recurrence_enabled
       ? 'text-emerald-600 hover:bg-emerald-50'
       : 'text-slate-500 hover:bg-slate-100';
+  const detailPanelFloatingStyle = useMemo(
+    () => getDetailPanelFloatingStyle(detailPanelTriggerRefs.current?.[detailPanel], detailPanel),
+    [detailPanel]
+  );
   const isDraftCustomRecurrenceType = (draft?.recurrence_type || 'daily') === 'biweekly' || (draft?.recurrence_type || 'daily') === 'lunar';
   const draftStatus = draft?.status || selectedTask?.status || 'pending';
   const draftRecurrenceLunarPickerDate = (
@@ -3664,10 +3816,20 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const showMobileSearchBar = isCompactMobile && view === 'search';
   const showListHeader = !isCompactMobile || showMobileSearchBar;
   const rowTimeMode = view === 'completed' ? 'completed' : view === 'deleted' ? 'deleted' : 'primary';
+  const taskSplitListPercent = clampNumber(taskSplitRatio, 0.25, 0.75) * 100;
+  const taskSplitGridStyle = isMobileViewport
+    ? undefined
+    : {
+        gridTemplateColumns: `clamp(${TASK_SPLIT_MIN_LIST_WIDTH}px, calc((100% - ${TASK_SPLIT_DIVIDER_WIDTH}px) * ${taskSplitRatio.toFixed(4)}), calc(100% - ${TASK_SPLIT_MIN_DETAIL_WIDTH + TASK_SPLIT_DIVIDER_WIDTH}px)) ${TASK_SPLIT_DIVIDER_WIDTH}px minmax(${TASK_SPLIT_MIN_DETAIL_WIDTH}px, 1fr)`,
+      };
 
   return (
     <div className="md-page h-full">
-      <div className="grid h-full grid-cols-1 gap-0 lg:grid-cols-[minmax(520px,1.08fr)_minmax(360px,0.92fr)]">
+      <div
+        ref={taskWorkspaceRef}
+        className="grid h-full grid-cols-1 gap-0"
+        style={taskSplitGridStyle}
+      >
         <section className="md-pane flex h-full min-h-0 flex-col">
           {showListHeader && (
             <div className="bg-white px-5 pb-4 pt-5">
@@ -3928,7 +4090,25 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           )}
         </section>
 
-        <section className="md-pane hidden h-full min-h-0 flex-col lg:flex lg:border-l lg:border-slate-200">
+        {!isMobileViewport && (
+          <button
+            type="button"
+            aria-label={t('task.resizeTaskDetailSplit')}
+            title={t('task.resizeTaskDetailSplit')}
+            aria-valuemin={Math.round((TASK_SPLIT_MIN_LIST_WIDTH / Math.max(TASK_DETAIL_SPLIT_MIN_WIDTH, 1)) * 100)}
+            aria-valuemax={Math.round((1 - TASK_SPLIT_MIN_DETAIL_WIDTH / Math.max(TASK_DETAIL_SPLIT_MIN_WIDTH, 1)) * 100)}
+            aria-valuenow={Math.round(taskSplitListPercent)}
+            className={`task-split-resizer${isTaskSplitDragging ? ' task-split-resizer--dragging' : ''}`}
+            role="separator"
+            onDoubleClick={() => commitTaskSplitRatio(TASK_SPLIT_DEFAULT_RATIO)}
+            onKeyDown={handleTaskSplitKeyDown}
+            onPointerDown={handleTaskSplitPointerDown}
+          >
+            <span className="task-split-resizer-line" />
+          </button>
+        )}
+
+        <section className={`md-pane h-full min-h-0 flex-col ${isMobileViewport ? 'hidden' : 'flex'}`}>
           {!selectedTask || !draft ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-400">
               {t('task.selectTaskHint')}
@@ -3953,20 +4133,229 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       <span className="text-[10px] leading-none">✓</span>
                     </button>
                     <span className="h-4 w-px bg-slate-200" />
-                    <button
-                      type="button"
-                      onClick={() => handleDetailPanelToggle('time')}
-                      className={`relative inline-flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] ${draftTimeButtonClass}`}
-                      title={draftTimeButtonTitle}
-                    >
-                      <IconClock className="h-4 w-4" />
-                      <span className="max-w-[14rem] truncate text-left leading-5">{draftTimeSummaryLabel}</span>
-                      {hasDraftParsedTimeHint && (
-                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                    <div className="relative min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => handleDetailPanelToggle('time')}
+                        className={`relative inline-flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] ${draftTimeButtonClass}`}
+                        title={draftTimeButtonTitle}
+                      >
+                        <IconClock className="h-4 w-4" />
+                        <span className="max-w-[14rem] truncate text-left leading-5">{draftTimeSummaryLabel}</span>
+                        {hasDraftParsedTimeHint && (
+                          <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                        )}
+                      </button>
+                      {detailPanel === 'time' && (
+                        <div className="time-panel-card task-detail-time-panel mobile-scrollbar-hidden md-popover absolute left-0 top-10 z-20 w-[min(22.75rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
+                          <div className="time-panel-toolbar task-detail-time-panel-header">
+                            <div className="time-panel-primary-tabs">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDraftTimeRangeEnabled(false);
+                                  setDraftTimeRangeEditing('start');
+                                  handleDraftFieldChange('end_time', '');
+                                }}
+                                className={`time-panel-primary-tab${!draftTimeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
+                              >
+                                {t('task.timePanelDate')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDraftTimeRangeEnabled(true);
+                                  setDraftTimeRangeEditing('end');
+                                  const timezoneName = getUserTimezone();
+                                  const currentStart = String(draft.start_time || '');
+                                  const currentEnd = String(draft.end_time || '');
+                                  if (draft.all_day) {
+                                    if (!currentStart) {
+                                      const today = dayjs().tz(timezoneName).format('YYYY-MM-DD');
+                                      handleDraftFieldChange('start_time', today);
+                                      handleDraftFieldChange('end_time', today);
+                                    } else if (!currentEnd) {
+                                      handleDraftFieldChange('end_time', currentStart);
+                                    }
+                                    return;
+                                  }
+                                  if (!currentStart && !currentEnd) {
+                                    const range = buildDraftDefaultRangeAroundNow(timezoneName);
+                                    handleDraftFieldChange('start_time', range.start);
+                                    handleDraftFieldChange('end_time', range.end);
+                                    return;
+                                  }
+                                  if (currentStart && !currentEnd) {
+                                    const nextEnd = buildEndFromStartLocal(currentStart, 60) || currentStart;
+                                    handleDraftFieldChange('end_time', nextEnd);
+                                  } else if (!currentStart && currentEnd) {
+                                    const range = buildDraftDefaultRangeAroundNow(timezoneName);
+                                    handleDraftFieldChange('start_time', range.start);
+                                    handleDraftFieldChange('end_time', coerceEndNotBeforeStartLocal(range.start, currentEnd));
+                                  }
+                                }}
+                                className={`time-panel-primary-tab${draftTimeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
+                              >
+                                {t('task.timeRange')}
+                              </button>
+                            </div>
+                            <div className="time-panel-subtools">
+                              <div className="time-panel-soft-toggle">
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftTimeCalendarMode('solar')}
+                                  className={`time-panel-soft-toggle-btn${
+                                    draftTimeCalendarMode === 'solar'
+                                      ? ' time-panel-soft-toggle-btn--active'
+                                      : ''
+                                  }`}
+                                >
+                                  {t('task.calendarSolar')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftTimeCalendarMode('lunar')}
+                                  className={`time-panel-soft-toggle-btn${
+                                    draftTimeCalendarMode === 'lunar'
+                                      ? ' time-panel-soft-toggle-btn--active'
+                                      : ''
+                                  }`}
+                                >
+                                  {t('task.calendarLunar')}
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
+                                className={`time-panel-day-toggle${
+                                  draft.all_day
+                                    ? ' time-panel-day-toggle--active'
+                                    : ''
+                                }`}
+                              >
+                                {t('task.allDay')}
+                              </button>
+                            </div>
+                            <div className="time-quick-actions time-quick-actions--detail">
+                              <button
+                                type="button"
+                                title={t('task.quickToday')}
+                                aria-label={t('task.quickToday')}
+                                onClick={() => applyQuickDatePreset('today')}
+                                className="time-quick-preset"
+                              >
+                                <IconSun className="h-4 w-4" />
+                                <span>{t('task.quickToday')}</span>
+                              </button>
+                              <button
+                                type="button"
+                                title={t('task.quickTomorrow')}
+                                aria-label={t('task.quickTomorrow')}
+                                onClick={() => applyQuickDatePreset('tomorrow')}
+                                className="time-quick-preset"
+                              >
+                                <IconSunrise className="h-4 w-4" />
+                                <span>{t('task.quickTomorrow')}</span>
+                              </button>
+                              <button
+                                type="button"
+                                title={t('task.quickNextWeek')}
+                                aria-label={t('task.quickNextWeek')}
+                                onClick={() => applyQuickDatePreset('next_week')}
+                                className="time-quick-preset"
+                              >
+                                <IconCalendar className="h-4 w-4" />
+                                <span>{t('task.quickNextWeek')}</span>
+                              </button>
+                              <button
+                                type="button"
+                                title={t('task.quickTonight')}
+                                aria-label={t('task.quickTonight')}
+                                onClick={() => applyQuickDatePreset('tonight')}
+                                className="time-quick-preset"
+                              >
+                                <IconMoon className="h-4 w-4" />
+                                <span>{t('task.quickTonight')}</span>
+                              </button>
+                            </div>
+                          </div>
+                          <div className="time-panel-calendar-body">
+                            <div>
+                              {draftTimeRangeEnabled && (
+                                <div className="time-panel-range-switch">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftTimeRangeEditing('start')}
+                                    className={`time-panel-range-switch-btn${draftTimeRangeEditing === 'start' ? ' time-panel-range-switch-btn--active' : ''}`}
+                                  >
+                                    {t('task.startTime')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftTimeRangeEditing('end')}
+                                    className={`time-panel-range-switch-btn${draftTimeRangeEditing === 'end' ? ' time-panel-range-switch-btn--active' : ''}`}
+                                  >
+                                    {t('task.endTime')}
+                                  </button>
+                                </div>
+                              )}
+                              <TaskDatePicker
+                                key={`draft-time-${draftTimeCalendarMode}-${draftTimeRangeEnabled ? draftTimeRangeEditing : 'point'}-${draft.all_day ? 'all' : 'timed'}`}
+                                value={draft.all_day
+                                  ? splitDatePart((draftTimeRangeEnabled && draftTimeRangeEditing === 'end') ? draft.end_time : draft.start_time)
+                                  : ((draftTimeRangeEnabled && draftTimeRangeEditing === 'end') ? (draft.end_time || '') : (draft.start_time || ''))}
+                                allDay={!!draft.all_day}
+                                stepMinutes={30}
+                                inline
+                                lunarOverlay
+                                lunarMode={draftTimeCalendarMode === 'lunar'}
+                                timeSelectVariant="panel-row"
+                                onChange={(nextValue) => {
+                                  if (draftTimeRangeEnabled && draftTimeRangeEditing === 'end') {
+                                    handleDraftEndDateTimeChange(nextValue);
+                                    return;
+                                  }
+                                  handleDraftStartDateTimeChange(nextValue);
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="time-panel-footer">
+                            <button
+                              type="button"
+                              onClick={() => applyQuickDatePreset('clear')}
+                              className="time-panel-clear-btn"
+                            >
+                              {t('task.clearDate')}
+                            </button>
+                            <div className="time-panel-footer-actions">
+                              <button
+                                type="button"
+                                onClick={() => closeDetailPanelWithConfirm('time', false)}
+                                className="time-panel-cancel-btn"
+                              >
+                                {t('common.cancel')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeDetailPanelWithConfirm('time', true);
+                                  submitDraftImmediately('realtime_time');
+                                }}
+                                className="time-panel-confirm-btn"
+                              >
+                                {t('common.confirm')}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       )}
-                    </button>
+                    </div>
                     <button
                       type="button"
+                      ref={(node) => {
+                        detailPanelTriggerRefs.current.activity = node;
+                      }}
                       onClick={() => {
                         if (isDetailPanelRequiringConfirm(detailPanel)) {
                           closeDetailPanelWithConfirm(detailPanel, false);
@@ -3985,12 +4374,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       <IconHistory className="h-4 w-4" />
                     </button>
                     {showActivityPanel && selectedTask && (
-                      <div className="absolute left-0 top-10 z-20 w-[30rem] max-w-[min(30rem,calc(100vw-3rem))]">
+                      <div className="fixed z-20 w-[30rem] max-w-[min(30rem,calc(100vw-3rem))]" style={activityPanelFloatingStyle}>
                         <TaskActivityTimeline taskID={selectedTask.id} />
                       </div>
                     )}
                     <button
                       type="button"
+                      ref={(node) => {
+                        detailPanelTriggerRefs.current.priority = node;
+                      }}
                       onClick={() => handleDetailPanelToggle('priority')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-[13px] ${draftPriorityButtonClass}`}
                       title={draftPriorityTitle}
@@ -3999,6 +4391,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     </button>
                     <button
                       type="button"
+                      ref={(node) => {
+                        detailPanelTriggerRefs.current.category = node;
+                      }}
                       onClick={() => handleDetailPanelToggle('category')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-[13px] ${draftCategoryButtonClass}`}
                       title={draftCategorySummaryLabel}
@@ -4007,6 +4402,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     </button>
                     <button
                       type="button"
+                      ref={(node) => {
+                        detailPanelTriggerRefs.current.recurrence = node;
+                      }}
                       onClick={() => handleDetailPanelToggle('recurrence')}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-[13px] ${draftRecurrenceButtonClass}`}
                       title={draftRecurrenceSummaryLabel}
@@ -4094,246 +4492,42 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 </div>
                 <div className="relative">
                   {detailPanel === 'priority' && (
-                      <div className="md-popover absolute right-0 top-10 z-20 w-[22rem] p-3">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
-                        <div className="flex flex-wrap gap-2">
+                      <div className="task-quick-popover md-popover fixed z-20 w-[12.25rem]" style={detailPanelFloatingStyle}>
+                        <div className="task-quick-menu">
                           {[
-                            { value: '1', label: t('task.priorityHigh') },
-                            { value: '0', label: t('task.priorityMedium') },
-                            { value: '-1', label: t('task.priorityLow') },
-                          ].map((priorityOption) => (
-                            <button
-                              key={priorityOption.value}
-                              type="button"
-                              onClick={() => {
-                                handleDraftFieldChange('priority', priorityOption.value, {
-                                  submitNow: true,
-                                  submitSource: 'realtime_priority',
-                                });
-                                setDetailPanel('');
-                              }}
-                              className={`rounded-full border px-3 py-1 text-sm ${
-                                draft.priority === priorityOption.value
-                                  ? getPriorityBadge(priorityOption.value).className
-                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                              }`}
-                            >
-                              {priorityOption.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                  )}
-
-                  {detailPanel === 'time' && (
-                      <div className="time-panel-card task-detail-time-panel mobile-scrollbar-hidden md-popover absolute right-0 top-10 z-20 w-[min(25.25rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-3">
-                        <div className="time-panel-toolbar task-detail-time-panel-header">
-                          <div className="time-panel-primary-tabs">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDraftTimeRangeEnabled(false);
-                                setDraftTimeRangeEditing('start');
-                                handleDraftFieldChange('end_time', '');
-                              }}
-                              className={`time-panel-primary-tab${!draftTimeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
-                            >
-                              {t('task.timePanelDate')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDraftTimeRangeEnabled(true);
-                                setDraftTimeRangeEditing('end');
-                                const timezoneName = getUserTimezone();
-                                const currentStart = String(draft.start_time || '');
-                                const currentEnd = String(draft.end_time || '');
-                                if (draft.all_day) {
-                                  if (!currentStart) {
-                                    const today = dayjs().tz(timezoneName).format('YYYY-MM-DD');
-                                    handleDraftFieldChange('start_time', today);
-                                    handleDraftFieldChange('end_time', today);
-                                  } else if (!currentEnd) {
-                                    handleDraftFieldChange('end_time', currentStart);
-                                  }
-                                  return;
-                                }
-                                if (!currentStart && !currentEnd) {
-                                  const range = buildDraftDefaultRangeAroundNow(timezoneName);
-                                  handleDraftFieldChange('start_time', range.start);
-                                  handleDraftFieldChange('end_time', range.end);
-                                  return;
-                                }
-                                if (currentStart && !currentEnd) {
-                                  const nextEnd = buildEndFromStartLocal(currentStart, 60) || currentStart;
-                                  handleDraftFieldChange('end_time', nextEnd);
-                                } else if (!currentStart && currentEnd) {
-                                  const range = buildDraftDefaultRangeAroundNow(timezoneName);
-                                  handleDraftFieldChange('start_time', range.start);
-                                  handleDraftFieldChange('end_time', coerceEndNotBeforeStartLocal(range.start, currentEnd));
-                                }
-                              }}
-                              className={`time-panel-primary-tab${draftTimeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
-                            >
-                              {t('task.timeRange')}
-                            </button>
-                          </div>
-                          <div className="time-panel-subtools">
-                            <div className="time-panel-soft-toggle">
+                            { value: '1', label: t('task.priorityHigh'), tone: 'high' },
+                            { value: '0', label: t('task.priorityMedium'), tone: 'medium' },
+                            { value: '-1', label: t('task.priorityLow'), tone: 'low' },
+                          ].map((priorityOption) => {
+                            const active = String(draftPriorityValue) === priorityOption.value;
+                            return (
                               <button
+                                key={priorityOption.value}
                                 type="button"
-                                onClick={() => setDraftTimeCalendarMode('solar')}
-                                className={`time-panel-soft-toggle-btn${
-                                  draftTimeCalendarMode === 'solar'
-                                    ? ' time-panel-soft-toggle-btn--active'
-                                    : ''
-                                }`}
+                                onClick={() => {
+                                  handleDraftFieldChange('priority', priorityOption.value, {
+                                    submitNow: true,
+                                    submitSource: 'realtime_priority',
+                                  });
+                                  setDetailPanel('');
+                                }}
+                                className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                               >
-                                {t('task.calendarSolar')}
+                                <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
+                                  <IconFlag className="h-4 w-4" />
+                                </span>
+                                <span className="task-quick-option-label">{priorityOption.label}</span>
+                                <IconCheck className="task-quick-option-check h-4 w-4" />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => setDraftTimeCalendarMode('lunar')}
-                                className={`time-panel-soft-toggle-btn${
-                                  draftTimeCalendarMode === 'lunar'
-                                    ? ' time-panel-soft-toggle-btn--active'
-                                    : ''
-                                }`}
-                              >
-                                {t('task.calendarLunar')}
-                              </button>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
-                              className={`time-panel-day-toggle${
-                                draft.all_day
-                                  ? ' time-panel-day-toggle--active'
-                                  : ''
-                              }`}
-                            >
-                              {t('task.allDay')}
-                            </button>
-                          </div>
-                          <div className="time-quick-actions time-quick-actions--detail">
-                            <button
-                              type="button"
-                              title={t('task.quickToday')}
-                              aria-label={t('task.quickToday')}
-                              onClick={() => applyQuickDatePreset('today')}
-                              className="time-quick-preset"
-                            >
-                              <IconSun className="h-4 w-4" />
-                              <span>{t('task.quickToday')}</span>
-                            </button>
-                            <button
-                              type="button"
-                              title={t('task.quickTomorrow')}
-                              aria-label={t('task.quickTomorrow')}
-                              onClick={() => applyQuickDatePreset('tomorrow')}
-                              className="time-quick-preset"
-                            >
-                              <IconSunrise className="h-4 w-4" />
-                              <span>{t('task.quickTomorrow')}</span>
-                            </button>
-                            <button
-                              type="button"
-                              title={t('task.quickNextWeek')}
-                              aria-label={t('task.quickNextWeek')}
-                              onClick={() => applyQuickDatePreset('next_week')}
-                              className="time-quick-preset"
-                            >
-                              <IconCalendar className="h-4 w-4" />
-                              <span>{t('task.quickNextWeek')}</span>
-                            </button>
-                            <button
-                              type="button"
-                              title={t('task.quickTonight')}
-                              aria-label={t('task.quickTonight')}
-                              onClick={() => applyQuickDatePreset('tonight')}
-                              className="time-quick-preset"
-                            >
-                              <IconMoon className="h-4 w-4" />
-                              <span>{t('task.quickTonight')}</span>
-                            </button>
-                          </div>
-                        </div>
-                        <div className="time-panel-calendar-body">
-                          <div>
-                            {draftTimeRangeEnabled && (
-                              <div className="time-panel-range-switch">
-                                <button
-                                  type="button"
-                                  onClick={() => setDraftTimeRangeEditing('start')}
-                                  className={`time-panel-range-switch-btn${draftTimeRangeEditing === 'start' ? ' time-panel-range-switch-btn--active' : ''}`}
-                                >
-                                  {t('task.startTime')}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setDraftTimeRangeEditing('end')}
-                                  className={`time-panel-range-switch-btn${draftTimeRangeEditing === 'end' ? ' time-panel-range-switch-btn--active' : ''}`}
-                                >
-                                  {t('task.endTime')}
-                                </button>
-                              </div>
-                            )}
-                            <TaskDatePicker
-                              key={`draft-time-${draftTimeCalendarMode}-${draftTimeRangeEnabled ? draftTimeRangeEditing : 'point'}-${draft.all_day ? 'all' : 'timed'}`}
-                              value={draft.all_day
-                                ? splitDatePart((draftTimeRangeEnabled && draftTimeRangeEditing === 'end') ? draft.end_time : draft.start_time)
-                                : ((draftTimeRangeEnabled && draftTimeRangeEditing === 'end') ? (draft.end_time || '') : (draft.start_time || ''))}
-                              allDay={!!draft.all_day}
-                              stepMinutes={30}
-                              inline
-                              lunarOverlay
-                              lunarMode={draftTimeCalendarMode === 'lunar'}
-                              timeSelectVariant="panel-row"
-                              onChange={(nextValue) => {
-                                if (draftTimeRangeEnabled && draftTimeRangeEditing === 'end') {
-                                  handleDraftEndDateTimeChange(nextValue);
-                                  return;
-                                }
-                                handleDraftStartDateTimeChange(nextValue);
-                              }}
-                            />
-                          </div>
-                        </div>
-                        <div className="time-panel-footer">
-                          <button
-                            type="button"
-                            onClick={() => applyQuickDatePreset('clear')}
-                            className="time-panel-clear-btn"
-                          >
-                            {t('task.clearDate')}
-                          </button>
-                          <div className="time-panel-footer-actions">
-                            <button
-                              type="button"
-                              onClick={() => closeDetailPanelWithConfirm('time', false)}
-                              className="time-panel-cancel-btn"
-                            >
-                              {t('common.cancel')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                closeDetailPanelWithConfirm('time', true);
-                                submitDraftImmediately('realtime_time');
-                              }}
-                              className="time-panel-confirm-btn"
-                            >
-                              {t('common.confirm')}
-                            </button>
-                          </div>
+                            );
+                          })}
                         </div>
                       </div>
                   )}
 
                   {detailPanel === 'category' && (
-                      <div className="md-popover absolute right-0 top-10 z-20 w-[26rem] p-3">
-                        <label className="form-label">{t('task.categories')}</label>
-                        <div className="flex flex-wrap gap-2">
+                      <div className="task-quick-popover task-quick-popover-scroll md-popover fixed z-20 w-[14.75rem]" style={detailPanelFloatingStyle}>
+                        <div className="task-quick-menu">
                           {categories.map((cat) => {
                             const active = draft.category_ids.includes(String(cat.id));
                             return (
@@ -4344,28 +4538,32 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                   toggleDraftCategory(cat.id);
                                   setDetailPanel('');
                                 }}
-                                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
-                                  active ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                }`}
+                                className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                               >
-                                {showCategoryEmoji && cat.emoji ? (
-                                  <span>{cat.emoji}</span>
-                                ) : (
-                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                                )}
-                                <span>{cat.name}</span>
+                                <span className="task-quick-option-icon">
+                                  {showCategoryEmoji && cat.emoji ? (
+                                    <span className="task-quick-category-emoji">{cat.emoji}</span>
+                                  ) : (
+                                    <span className="task-quick-category-swatch" style={{ backgroundColor: cat.color || '#94a3b8' }} />
+                                  )}
+                                </span>
+                                <span className="task-quick-option-label">{cat.name}</span>
+                                <IconCheck className="task-quick-option-check h-4 w-4" />
                               </button>
                             );
                           })}
                         </div>
+                        {categories.length === 0 && (
+                          <p className="task-quick-empty">{t('category.noCategories')}</p>
+                        )}
                       </div>
                   )}
 
                   {detailPanel === 'recurrence' && (
-                      <div className="md-popover absolute right-0 top-10 z-20 w-[24rem] p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <label className="text-sm font-medium text-slate-700">{t('task.repeat')}</label>
-                          <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
+                      <div className="task-quick-popover task-quick-popover-scroll md-popover fixed z-20 w-[18.25rem]" style={detailPanelFloatingStyle}>
+                        <div className="task-quick-header">
+                          <div className="task-quick-title">{t('task.repeat')}</div>
+                          <div className="task-quick-toggle">
                             <button
                               type="button"
                               onClick={() => {
@@ -4374,11 +4572,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                 handleDraftFieldChange('recurrence_days', []);
                                 handleDraftFieldChange('recurrence_date', 1);
                               }}
-                              className={`rounded-full px-2.5 py-1 text-xs ${
-                                !draft.recurrence_enabled
-                                  ? 'bg-slate-100 text-slate-700'
-                                  : 'text-slate-500 hover:bg-slate-50'
-                              }`}
+                              className={`task-quick-toggle-btn${!draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
                             >
                               {t('task.repeatOff')}
                             </button>
@@ -4394,11 +4588,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                   handleDraftFieldChange('recurrence_days', workDayKeys);
                                 }
                               }}
-                              className={`rounded-full px-2.5 py-1 text-xs ${
-                                draft.recurrence_enabled
-                                  ? 'bg-emerald-100 text-emerald-700'
-                                  : 'text-slate-500 hover:bg-slate-50'
-                              }`}
+                              className={`task-quick-toggle-btn${draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
                             >
                               {t('task.repeatOn')}
                             </button>
@@ -4406,58 +4596,61 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         </div>
 
                         {draft.recurrence_enabled && (
-                          <div className="space-y-3">
-                            <div className="flex flex-wrap gap-2">
+                          <div className="space-y-2">
+                            <div className="task-quick-menu">
                               {[
                                 { value: 'daily', label: t('task.daily') },
                                 { value: 'weekly', label: t('task.weekly') },
                                 { value: 'monthly', label: t('task.monthly') },
                                 { value: 'yearly', label: t('task.yearly') },
-                              ].map((option) => (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  onClick={() => {
-                                    handleDraftFieldChange('recurrence_type', option.value);
-                                    setShowDraftCustomRecurrenceMenu(false);
-                                    if ((option.value === 'weekly' || option.value === 'biweekly') && (draft.recurrence_days || []).length === 0) {
-                                      handleDraftFieldChange('recurrence_days', workDayKeys);
-                                    }
-                                    if (option.value !== 'weekly' && option.value !== 'biweekly') {
-                                      handleDraftFieldChange('recurrence_days', []);
-                                    }
-                                    if (option.value === 'monthly') {
-                                      const start = parseLocalInput(draft.start_time || '');
-                                      if (start) {
-                                        handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
+                              ].map((option) => {
+                                const active = (draft.recurrence_type || 'daily') === option.value;
+                                return (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => {
+                                      handleDraftFieldChange('recurrence_type', option.value);
+                                      setShowDraftCustomRecurrenceMenu(false);
+                                      if ((option.value === 'weekly' || option.value === 'biweekly') && (draft.recurrence_days || []).length === 0) {
+                                        handleDraftFieldChange('recurrence_days', workDayKeys);
                                       }
-                                    }
-                                  }}
-                                  className={`rounded-full border px-3 py-1 text-xs ${
-                                    (draft.recurrence_type || 'daily') === option.value
-                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                  }`}
-                                >
-                                  {option.label}
-                                </button>
-                              ))}
+                                      if (option.value !== 'weekly' && option.value !== 'biweekly') {
+                                        handleDraftFieldChange('recurrence_days', []);
+                                      }
+                                      if (option.value === 'monthly') {
+                                        const start = parseLocalInput(draft.start_time || '');
+                                        if (start) {
+                                          handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
+                                        }
+                                      }
+                                    }}
+                                    className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
+                                  >
+                                    <span className="task-quick-option-icon">
+                                      <IconRepeat className="h-4 w-4" />
+                                    </span>
+                                    <span className="task-quick-option-label">{option.label}</span>
+                                    <IconCheck className="task-quick-option-check h-4 w-4" />
+                                  </button>
+                                );
+                              })}
                               <button
                                 type="button"
                                 onClick={() => setShowDraftCustomRecurrenceMenu((prev) => !prev)}
-                                className={`rounded-full border px-3 py-1 text-xs ${
-                                  isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu
-                                    ? 'border-sky-300 bg-sky-50 text-sky-700'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                }`}
+                                className={`task-quick-option${isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu ? ' task-quick-option--active' : ''}`}
                               >
-                                {t('task.customRepeat')}
+                                <span className="task-quick-option-icon">
+                                  <IconRepeat className="h-4 w-4" />
+                                </span>
+                                <span className="task-quick-option-label">{t('task.customRepeat')}</span>
+                                <IconCheck className="task-quick-option-check h-4 w-4" />
                               </button>
                             </div>
                             {(showDraftCustomRecurrenceMenu || isDraftCustomRecurrenceType) && (
-                              <div className="space-y-2 rounded-xl border border-sky-100 bg-sky-50/40 p-2.5">
-                                <div className="text-[11px] font-medium uppercase tracking-wide text-sky-700">{t('task.customRepeat')}</div>
-                                <div className="flex flex-wrap gap-2">
+                              <div className="task-quick-section task-quick-subpanel">
+                                <div className="task-quick-section-title">{t('task.customRepeat')}</div>
+                                <div className="task-quick-chip-row">
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -4466,11 +4659,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                         handleDraftFieldChange('recurrence_days', workDayKeys);
                                       }
                                     }}
-                                    className={`rounded-full border px-3 py-1 text-xs ${
-                                      (draft.recurrence_type || 'daily') === 'biweekly'
-                                        ? 'border-sky-300 bg-sky-100 text-sky-800'
-                                        : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
-                                    }`}
+                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'biweekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.biweekly')}
                                   </button>
@@ -4493,11 +4682,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                       handleDraftFieldChange('recurrence_lunar_day', fallback.day);
                                       handleDraftFieldChange('recurrence_lunar_is_leap_month', fallback.isLeapMonth);
                                     }}
-                                    className={`rounded-full border px-3 py-1 text-xs ${
-                                      (draft.recurrence_type || 'daily') === 'lunar'
-                                        ? 'border-sky-300 bg-sky-100 text-sky-800'
-                                        : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
-                                    }`}
+                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'lunar' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.lunarYearly')}
                                   </button>
@@ -4506,8 +4691,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                             )}
 
                             {(draft.recurrence_type || 'daily') === 'lunar' && (
-                              <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-2.5">
-                                <div className="text-xs font-medium text-slate-700">{t('task.lunarYearly')}</div>
+                              <div className="task-quick-section task-quick-subpanel">
+                                <div className="task-quick-section-title">{t('task.lunarYearly')}</div>
                                 <TaskDatePicker
                                   value={draftRecurrenceLunarPickerDate}
                                   allDay
@@ -4532,49 +4717,45 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                     handleDraftFieldChange('recurrence_lunar_is_leap_month', nextSelection.isLeapMonth);
                                   }}
                                 />
-                                <div className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                                <div className="mt-2 rounded-xl bg-white px-2 py-1.5 text-xs text-slate-600">
                                   {`${t('task.lunarYearly')} ${draft.recurrence_lunar_is_leap_month ? t('task.lunarLeapPrefix') : ''}${Number.parseInt(draft.recurrence_lunar_month, 10) || 1}/${Number.parseInt(draft.recurrence_lunar_day, 10) || 1}`}
                                 </div>
                               </div>
                             )}
 
                             {((draft.recurrence_type || 'daily') === 'weekly' || (draft.recurrence_type || 'daily') === 'biweekly') && (
-                              <div>
-                                <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
-                                <div className="mb-2 flex flex-wrap gap-2">
+                              <div className="task-quick-section">
+                                <p className="task-quick-section-title">{t('task.selectWeekdays')}</p>
+                                <div className="task-quick-chip-row mb-2">
                                   <button
                                     type="button"
                                     onClick={() => handleDraftFieldChange('recurrence_days', workDayKeys)}
-                                    className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                    className="task-quick-chip"
                                   >
                                     {t('task.weekdaysWorkdays')}
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => handleDraftFieldChange('recurrence_days', allDayKeys)}
-                                    className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                    className="task-quick-chip"
                                   >
                                     {t('task.weekdaysAll')}
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => handleDraftFieldChange('recurrence_days', [])}
-                                    className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50"
+                                    className="task-quick-chip"
                                   >
                                     {t('task.weekdaysClear')}
                                   </button>
                                 </div>
-                                <div className="flex flex-wrap gap-2">
+                                <div className="task-quick-weekday-grid">
                                   {weekDays.map((day) => (
                                     <button
                                       key={day.key}
                                       type="button"
                                       onClick={() => toggleDraftRecurrenceDay(day.key)}
-                                      className={`rounded-full px-3 py-1 text-sm ${
-                                        (draft.recurrence_days || []).includes(day.key)
-                                          ? 'bg-blue-600 text-white'
-                                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                      }`}
+                                      className={`task-quick-weekday${(draft.recurrence_days || []).includes(day.key) ? ' task-quick-weekday--active' : ''}`}
                                     >
                                       {day.label}
                                     </button>
@@ -4583,19 +4764,19 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                               </div>
                             )}
                             {(draft.recurrence_type || 'daily') === 'monthly' && (
-                              <div className="space-y-2">
+                              <div className="task-quick-section">
                                 <button
                                   type="button"
                                   onClick={() => setShowDraftMonthlyDatePicker((prev) => !prev)}
-                                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                                  className="task-quick-date-trigger"
                                 >
                                   <span>{t('task.monthlyOnDate')}</span>
-                                  <span className="rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700">
+                                  <span className="task-quick-date-value">
                                     {clampMonthlyDate(draft.recurrence_date, 1)}
                                   </span>
                                 </button>
                                 {showDraftMonthlyDatePicker && (
-                                  <div className="rounded-xl border border-slate-200 bg-white p-2">
+                                  <div className="task-quick-date-grid">
                                     <div className="grid grid-cols-7 gap-1">
                                       {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => {
                                         const active = clampMonthlyDate(draft.recurrence_date, 1) === day;
@@ -4607,11 +4788,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                               handleDraftFieldChange('recurrence_date', day);
                                               setShowDraftMonthlyDatePicker(false);
                                             }}
-                                            className={`h-8 rounded-md text-xs font-medium ${
-                                              active
-                                                ? 'bg-sky-600 text-white'
-                                                : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
-                                            }`}
+                                            className={`task-quick-date-cell${active ? ' task-quick-date-cell--active' : ''}`}
                                           >
                                             {day}
                                           </button>
@@ -4624,11 +4801,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                             )}
                           </div>
                         )}
-                        <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                        <div className="task-quick-footer">
                           <button
                             type="button"
                             onClick={() => closeDetailPanelWithConfirm('recurrence', false)}
-                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                            className="task-quick-action task-quick-action--ghost"
                           >
                             {t('common.cancel')}
                           </button>
@@ -4638,7 +4815,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                               closeDetailPanelWithConfirm('recurrence', true);
                               submitDraftImmediately('realtime_recurrence');
                             }}
-                            className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                            className="task-quick-action task-quick-action--primary"
                           >
                             {t('common.confirm')}
                           </button>

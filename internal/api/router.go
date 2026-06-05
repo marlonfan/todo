@@ -69,6 +69,7 @@ func (r *Router) Setup() *gin.Engine {
 			// Auth
 			protected.GET("/auth/me", r.authHandler.Me)
 			protected.PATCH("/auth/profile", r.authHandler.UpdateProfile)
+			protected.PATCH("/auth/password", r.authHandler.UpdatePassword)
 			protected.POST("/auth/reconcile-reminders", r.authHandler.ReconcileReminders)
 
 			// Tasks

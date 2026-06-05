@@ -6,10 +6,14 @@ import interactionPlugin from '@fullcalendar/interaction';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   ExternalLink,
   FileText,
   MapPin,
+  Plus,
   Repeat2,
   User,
   Users,
@@ -28,6 +32,7 @@ import { buildProjectedEventsFromTasks, buildTaskStatusIndex, mergeCalendarEvent
 import { openSearchDialog } from '../state/searchOverlay';
 import { useCalendarFetch, useEventsForRange } from '../hooks/useCalendarFetch';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
+import { formatCalendarViewTitle, getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -863,7 +868,9 @@ function CalendarView() {
   const handleNavigatePeriod = (direction) => {
     if (!direction) return;
     const step = direction > 0 ? 1 : -1;
-    const base = dayjs(canvasAnchorDate || dayjs().tz(timezone).format('YYYY-MM-DD'));
+    const base = activeCalendarView === 'timeGridDay'
+      ? parseCalendarDate(canvasAnchorDate, timezone)
+      : dayjs(canvasAnchorDate || dayjs().tz(timezone).format('YYYY-MM-DD'));
     let next = base;
     if (activeCalendarView === 'dayGridMonth') {
       next = base.add(step, 'month');
@@ -953,13 +960,35 @@ function CalendarView() {
   }, []);
 
   const handleChangeView = (nextView) => {
+    const normalizedView = isCompactMobile ? normalizeMobileView(nextView) : normalizeCalendarDefaultView(nextView);
+    const base = normalizedView === 'timeGridDay'
+      ? parseCalendarDate(canvasAnchorDate, timezone)
+      : dayjs(canvasAnchorDate || dayjs().tz(timezone).format('YYYY-MM-DD'));
+    const displayStart = normalizedView === 'dayGridMonth' || normalizedView === 'timeGridWeek'
+      ? base.startOf('week')
+      : base.startOf('day');
+    const spanDays = normalizedView === 'dayGridMonth'
+      ? 42
+      : normalizedView === 'timeGridWeek'
+        ? 7
+        : normalizedView === 'timeGridThreeDay'
+          ? 3
+          : 1;
+    const displayEnd = getCalendarDisplayEnd(displayStart, spanDays);
+
     canvasOffsetRef.current = { x: 0, y: 0 };
     applyDesktopMotion(0, 0, 0);
     setCanvasNudgeDirection(0);
+    setCurrentViewTitle(formatCalendarViewTitle(
+      normalizedView,
+      displayStart.toISOString(),
+      displayEnd.toISOString(),
+      timezone,
+    ));
     if (isCompactMobile) {
-      setMobileView(normalizeMobileView(nextView));
+      setMobileView(normalizedView);
     } else {
-      setCalendarDefaultView(normalizeCalendarDefaultView(nextView));
+      setCalendarDefaultView(normalizedView);
     }
   };
 
@@ -1414,19 +1443,14 @@ function CalendarView() {
       if (prev.start === startISO && prev.end === endISO) return prev;
       return { start: startISO, end: endISO };
     });
-    const start = dayjs(meta?.displayStart || startISO);
-    const end = dayjs(meta?.displayEnd || endISO);
-    const mid = start.add(end.diff(start, 'minute') / 2, 'minute');
-    let nextTitle = '';
-    if (activeCalendarView === 'dayGridMonth') {
-      nextTitle = mid.format('YYYY年M月');
-    } else if (activeCalendarView === 'timeGridWeek') {
-      nextTitle = `${start.format('YYYY/M/D')} - ${end.subtract(1, 'day').format('M/D')}`;
-    } else {
-      nextTitle = mid.format('YYYY/M/D');
-    }
+    const nextTitle = formatCalendarViewTitle(
+      activeCalendarView,
+      meta?.displayStart || startISO,
+      meta?.displayEnd || endISO,
+      timezone,
+    );
     setCurrentViewTitle((prev) => (prev === nextTitle ? prev : nextTitle));
-  }, [activeCalendarView]);
+  }, [activeCalendarView, timezone]);
 
   const handleCanvasCenterDateChange = useCallback((dateValue) => {
     if (!dateValue) return;
@@ -1437,25 +1461,25 @@ function CalendarView() {
 
   return (
     <div className="calendar-shell md-page relative flex h-full flex-col [&_button:focus]:outline-none [&_button:focus-visible]:outline-none">
-      <div className="calendar-topbar sticky top-0 z-30 border-b border-border bg-white/95 backdrop-blur">
+      <div className="calendar-topbar sticky top-0 z-30 bg-white/95 backdrop-blur">
         <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
           <div className="inline-flex items-center gap-2">
-            <div className={`inline-flex items-center rounded-md border border-[hsl(var(--blue-border))] bg-white shadow-none ${isCompactMobile ? 'h-9' : 'p-0.5'}`}>
+            <div className="calendar-nav-group h-9">
               <button
                 type="button"
                 onClick={() => handleNavigatePeriod(-1)}
-                className={`md-icon-btn text-slate-600 hover:bg-white hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
-                  isCompactMobile ? 'h-full w-8 text-sm' : 'h-8 w-8'
+                className={`calendar-nav-button focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-full w-8' : 'h-full w-8'
                 }`}
                 aria-label="previous period"
               >
-                ‹
+                <ChevronLeft className="h-4 w-4" strokeWidth={2.1} />
               </button>
               <button
                 type="button"
                 onClick={handleGoToday}
-                className={`inline-flex items-center rounded-md text-xs font-medium text-slate-700 hover:bg-white hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
-                  isCompactMobile ? 'h-full px-3' : 'h-8 px-2.5'
+                className={`calendar-nav-today focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-full px-3' : 'h-full px-3'
                 }`}
               >
                 {t('calendar.today')}
@@ -1463,12 +1487,12 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={() => handleNavigatePeriod(1)}
-                className={`md-icon-btn text-slate-600 hover:bg-white hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
-                  isCompactMobile ? 'h-full w-8 text-sm' : 'h-8 w-8'
+                className={`calendar-nav-button focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-full w-8' : 'h-full w-8'
                 }`}
                 aria-label="next period"
               >
-                ›
+                <ChevronRight className="h-4 w-4" strokeWidth={2.1} />
               </button>
             </div>
             <div ref={viewDropdownRef} className="relative">
@@ -1478,17 +1502,15 @@ function CalendarView() {
                 aria-expanded={viewDropdownOpen}
                 aria-label="calendar view selector"
                 onClick={() => setViewDropdownOpen((prev) => !prev)}
-                className={`inline-flex items-center gap-1 rounded-md border border-[hsl(var(--blue-border))] bg-white text-xs font-medium text-slate-800 shadow-none hover:bg-[hsl(var(--soft-blue))] focus:outline-none focus-visible:outline-none ${
-                  isCompactMobile ? 'h-9 px-3' : 'h-10 px-3'
+                className={`calendar-view-trigger focus:outline-none focus-visible:outline-none ${
+                  isCompactMobile ? 'h-9 px-3' : 'h-9 px-3'
                 }`}
               >
                 <span>{activeViewOption?.label || t('calendar.month')}</span>
-                <svg viewBox="0 0 20 20" className={`h-3.5 w-3.5 transition-transform ${viewDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M5 7l5 6 5-6" />
-                </svg>
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${viewDropdownOpen ? 'rotate-180' : ''}`} strokeWidth={2.1} />
               </button>
               {viewDropdownOpen && (
-                <div className="absolute left-0 top-11 z-40 min-w-[7.5rem] overflow-hidden rounded-md border border-[hsl(var(--blue-border))] bg-white py-1 shadow-lg">
+                <div className="calendar-view-menu absolute left-0 top-10 z-40 min-w-[7.5rem] overflow-hidden py-1">
                   {viewOptions.map((option) => (
                     <button
                       key={option.value}
@@ -1497,10 +1519,10 @@ function CalendarView() {
                         handleChangeView(option.value);
                         setViewDropdownOpen(false);
                       }}
-                      className={`flex w-full items-center px-3 py-2 text-left text-xs font-medium focus:outline-none focus-visible:outline-none ${
+                      className={`calendar-view-menu-item flex w-full items-center px-3 py-2 text-left text-xs font-medium focus:outline-none focus-visible:outline-none ${
                         activeCalendarView === option.value
-                          ? 'bg-[hsl(var(--soft-blue-strong))] text-blue-950'
-                          : 'text-slate-700 hover:bg-[hsl(var(--soft-blue))] hover:text-blue-950'
+                          ? 'calendar-view-menu-item--active'
+                          : ''
                       }`}
                     >
                       {option.label}
@@ -1526,8 +1548,8 @@ function CalendarView() {
             <button
               type="button"
               onClick={() => openSearchDialog()}
-              className={`inline-flex items-center justify-center rounded-md border border-[hsl(var(--blue-border))] bg-white text-slate-600 hover:bg-[hsl(var(--soft-blue))] hover:text-blue-900 focus:outline-none focus-visible:outline-none ${
-                isCompactMobile ? 'h-9 w-9' : 'h-8 w-8'
+              className={`calendar-icon-action focus:outline-none focus-visible:outline-none ${
+                isCompactMobile ? 'h-9 w-9' : 'h-9 w-9'
               }`}
               title={t('common.search')}
             >
@@ -1537,10 +1559,11 @@ function CalendarView() {
               <button
                 type="button"
                 onClick={handleMobileQuickCreate}
-                className="btn-primary inline-flex h-8 items-center rounded-lg px-3 py-0 text-xs font-semibold focus:outline-none focus-visible:outline-none"
+                className="calendar-add-task-button inline-flex h-9 items-center gap-1.5 rounded-lg px-3 py-0 text-xs font-semibold focus:outline-none focus-visible:outline-none"
                 title={t('task.newTask')}
               >
-                + {t('task.newTask')}
+                <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
+                {t('task.newTask')}
               </button>
             )}
           </div>

@@ -26,6 +26,7 @@ import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import { getLunarInfo } from '../utils/holidays';
 import {
   IconCalendar,
+  IconCheck,
   IconClock,
   IconFlag,
   IconHistory,
@@ -35,6 +36,7 @@ import {
   IconSun,
   IconSunrise,
   IconTag,
+  IconX,
 } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDatePicker from './TaskDatePicker';
@@ -1653,7 +1655,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         onClick={e => e.stopPropagation()}
       >
         <div className="task-modal-frame relative flex min-h-0 flex-col">
-          <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4">
+          <div className="task-modal-header sticky top-0 z-20 bg-white/95 px-5 pb-3 pt-4 backdrop-blur md:px-7">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <input
@@ -1664,25 +1666,30 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     setValue('title', e.target.value, { shouldDirty: true });
                   }}
                   onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
-                  className="w-full rounded-md border-none bg-transparent px-1 text-lg font-semibold text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:bg-slate-50 md:text-xl"
+                  className="w-full border-none bg-transparent px-0 text-[1.34rem] font-semibold leading-8 text-slate-950 outline-none placeholder:text-slate-300 md:text-[1.45rem]"
                   placeholder={t('task.title')}
                 />
               </div>
-              <button onClick={requestClose} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700">
-                ✕
+              <button
+                type="button"
+                onClick={requestClose}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                title={t('common.cancel')}
+              >
+                <IconX className="h-4 w-4" />
               </button>
             </div>
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex-1 min-h-0 overflow-hidden bg-white">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
               {error && (
                 <div className="mx-4 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
                   {error}
                 </div>
               )}
 
-              <div className="border-b border-slate-200 px-3 py-2.5 md:px-4 md:py-3">
+              <div className="task-modal-toolbar px-5 py-2 md:px-7">
                 <input type="hidden" {...register('priority')} />
                 {isEditing && <input type="hidden" {...register('status')} />}
                 <input type="hidden" {...register('title', { required: true })} />
@@ -1763,43 +1770,44 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     </button>
                   </div>
                     {basicPanel === 'priority' && (
-                    <div className="absolute left-0 top-10 z-20 w-[min(22rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
-                      <div className="flex flex-wrap gap-2">
+                    <div className="task-quick-popover absolute left-0 top-10 z-20 w-[min(12.25rem,calc(100vw-3.5rem))]">
+                      <div className="task-quick-menu">
                         {[
-                          { value: '1', label: t('task.priorityHigh'), className: 'border-rose-300 bg-rose-50 text-rose-700' },
-                          { value: '0', label: t('task.priorityMedium'), className: 'border-sky-300 bg-sky-50 text-sky-700' },
-                          { value: '-1', label: t('task.priorityLow'), className: 'border-emerald-300 bg-emerald-50 text-emerald-700' },
-                        ].map((priorityOption) => (
-                          <button
-                            key={priorityOption.value}
-                            type="button"
-                            onClick={() => {
-                              setValue('priority', priorityOption.value, { shouldDirty: true });
-                              setBasicPanel('');
-                              detailPanelSnapshotRef.current = null;
-                              if (isEditing) {
-                                triggerRealtimeSave('realtime_priority', { priority: priorityOption.value });
-                              }
-                            }}
-                            className={`rounded-full border px-3 py-1 text-sm ${
-                              priorityValue === priorityOption.value
-                                ? priorityOption.className
-                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                            }`}
-                          >
-                            {priorityOption.label}
-                          </button>
-                        ))}
+                          { value: '1', label: t('task.priorityHigh'), tone: 'high' },
+                          { value: '0', label: t('task.priorityMedium'), tone: 'medium' },
+                          { value: '-1', label: t('task.priorityLow'), tone: 'low' },
+                        ].map((priorityOption) => {
+                          const active = priorityValue === priorityOption.value;
+                          return (
+                            <button
+                              key={priorityOption.value}
+                              type="button"
+                              onClick={() => {
+                                setValue('priority', priorityOption.value, { shouldDirty: true });
+                                setBasicPanel('');
+                                detailPanelSnapshotRef.current = null;
+                                if (isEditing) {
+                                  triggerRealtimeSave('realtime_priority', { priority: priorityOption.value });
+                                }
+                              }}
+                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
+                            >
+                              <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
+                                <IconFlag className="h-4 w-4" />
+                              </span>
+                              <span className="task-quick-option-label">{priorityOption.label}</span>
+                              <IconCheck className="task-quick-option-check h-4 w-4" />
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
 
                   {basicPanel === 'time' && (
-                    <div className="time-panel-card mobile-scrollbar-hidden absolute left-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg">
-                      <div className="time-panel-toolbar mb-2 space-y-1.5 border-b border-slate-100 pb-2">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                    <div className="time-panel-card task-modal-time-panel mobile-scrollbar-hidden absolute left-0 top-10 z-20 w-[min(22.75rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
+                      <div className="time-panel-toolbar task-detail-time-panel-header">
+                        <div className="time-panel-primary-tabs">
                             <button
                               type="button"
                               onClick={() => {
@@ -1808,11 +1816,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 setValue('end_time', '', { shouldDirty: true });
                                 setTimeTouched(true);
                               }}
-                              className={`rounded-full px-2 py-1 text-[11px] ${
-                                !timeRangeEnabled
-                                  ? 'bg-sky-100 text-sky-700'
-                                  : 'text-slate-500 hover:bg-slate-50'
-                              }`}
+                              className={`time-panel-primary-tab${!timeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
                             >
                               {t('task.timePoint')}
                             </button>
@@ -1853,35 +1857,24 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 }
                                 setTimeTouched(true);
                               }}
-                              className={`rounded-full px-2 py-1 text-[11px] ${
-                                timeRangeEnabled
-                                  ? 'bg-sky-100 text-sky-700'
-                                  : 'text-slate-500 hover:bg-slate-50'
-                              }`}
+                              className={`time-panel-primary-tab${timeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
                             >
                               {t('task.timeRange')}
                             </button>
                           </div>
-                          <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                          <div className="time-panel-subtools">
+                          <div className="time-panel-soft-toggle">
                             <button
                               type="button"
                               onClick={() => setTimeCalendarMode('solar')}
-                              className={`rounded-full px-2 py-1 text-[11px] ${
-                                timeCalendarMode === 'solar'
-                                  ? 'bg-sky-100 text-sky-700'
-                                  : 'text-slate-500 hover:bg-slate-50'
-                              }`}
+                              className={`time-panel-soft-toggle-btn${timeCalendarMode === 'solar' ? ' time-panel-soft-toggle-btn--active' : ''}`}
                             >
                               {t('task.calendarSolar')}
                             </button>
                             <button
                               type="button"
                               onClick={() => setTimeCalendarMode('lunar')}
-                              className={`rounded-full px-2 py-1 text-[11px] ${
-                                timeCalendarMode === 'lunar'
-                                  ? 'bg-sky-100 text-sky-700'
-                                  : 'text-slate-500 hover:bg-slate-50'
-                              }`}
+                              className={`time-panel-soft-toggle-btn${timeCalendarMode === 'lunar' ? ' time-panel-soft-toggle-btn--active' : ''}`}
                             >
                               {t('task.calendarLunar')}
                             </button>
@@ -1892,85 +1885,70 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               setValue('all_day', !isAllDay, { shouldDirty: true });
                               setTimeTouched(true);
                             }}
-                            className={`rounded-full border px-2 py-1 text-[11px] ${
-                              isAllDay
-                                ? 'border-blue-300 bg-blue-50 text-blue-700'
-                                : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
-                            }`}
+                            className={`time-panel-day-toggle${isAllDay ? ' time-panel-day-toggle--active' : ''}`}
                           >
                             {t('task.allDay')}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => applyQuickDatePreset('clear')}
-                            className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50"
-                          >
-                            {t('task.clearDate')}
-                          </button>
-                          <div className="time-quick-actions ml-auto">
+                          </div>
+                          <div className="time-quick-actions time-quick-actions--detail">
                             <button
                               type="button"
                               title={t('task.quickToday')}
                               aria-label={t('task.quickToday')}
                               onClick={() => applyQuickDatePreset('today')}
-                              className="time-quick-btn"
+                              className="time-quick-preset"
                             >
-                              <IconSun className="h-5 w-5" />
+                              <IconSun className="h-4 w-4" />
+                              <span>{t('task.quickToday')}</span>
                             </button>
                             <button
                               type="button"
                               title={t('task.quickTomorrow')}
                               aria-label={t('task.quickTomorrow')}
                               onClick={() => applyQuickDatePreset('tomorrow')}
-                              className="time-quick-btn"
+                              className="time-quick-preset"
                             >
-                              <IconSunrise className="h-5 w-5" />
+                              <IconSunrise className="h-4 w-4" />
+                              <span>{t('task.quickTomorrow')}</span>
                             </button>
                             <button
                               type="button"
                               title={t('task.quickNextWeek')}
                               aria-label={t('task.quickNextWeek')}
                               onClick={() => applyQuickDatePreset('next_week')}
-                              className="time-quick-btn"
+                              className="time-quick-preset"
                             >
-                              <IconCalendar className="h-5 w-5" />
+                              <IconCalendar className="h-4 w-4" />
+                              <span>{t('task.quickNextWeek')}</span>
                             </button>
                             <button
                               type="button"
                               title={t('task.quickTonight')}
                               aria-label={t('task.quickTonight')}
                               onClick={() => applyQuickDatePreset('tonight')}
-                              className="time-quick-btn"
+                              className="time-quick-preset"
                             >
-                              <IconMoon className="h-5 w-5" />
+                              <IconMoon className="h-4 w-4" />
+                              <span>{t('task.quickTonight')}</span>
                             </button>
                           </div>
-                        </div>
                       </div>
 
-                      <div className="space-y-2">
+                      <div className="time-panel-calendar-body">
                         <div>
                           {timeRangeEnabled && (
-                            <div className="mb-1 inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                            <div className="time-panel-range-switch">
                               <button
                                 type="button"
                                 onClick={() => setTimeRangeEditing('start')}
-                                className={`rounded-full px-2 py-1 text-[11px] ${
-                                  timeRangeEditing === 'start'
-                                    ? 'bg-sky-100 text-sky-700'
-                                    : 'text-slate-500 hover:bg-slate-50'
-                                }`}
+                                className={`time-panel-range-switch-btn${timeRangeEditing === 'start' ? ' time-panel-range-switch-btn--active' : ''}`}
                               >
                                 {t('task.startTime')}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setTimeRangeEditing('end')}
-                                className={`rounded-full px-2 py-1 text-[11px] ${
-                                  timeRangeEditing === 'end'
-                                    ? 'bg-sky-100 text-sky-700'
-                                    : 'text-slate-500 hover:bg-slate-50'
-                                }`}
+                                className={`time-panel-range-switch-btn${timeRangeEditing === 'end' ? ' time-panel-range-switch-btn--active' : ''}`}
                               >
                                 {t('task.endTime')}
                               </button>
@@ -1986,6 +1964,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             inline
                             lunarOverlay
                             lunarMode={timeCalendarMode === 'lunar'}
+                            timeSelectVariant="panel-row"
                             onChange={(nextValue) => {
                               if (timeRangeEnabled && timeRangeEditing === 'end') {
                                 handleEndDateTimeChange(nextValue);
@@ -1996,34 +1975,42 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                           />
                         </div>
                       </div>
-                      <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                      <div className="time-panel-footer">
                         <button
                           type="button"
-                          onClick={() => closeBasicPanelWithConfirm('time', false)}
-                          className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                          onClick={() => applyQuickDatePreset('clear')}
+                          className="time-panel-clear-btn"
                         >
-                          {t('common.cancel')}
+                          {t('task.clearDate')}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            closeBasicPanelWithConfirm('time', true);
-                            if (isEditing) {
-                              triggerRealtimeSave('realtime_time');
-                            }
-                          }}
-                          className="rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-                        >
-                          {t('common.confirm')}
-                        </button>
+                        <div className="time-panel-footer-actions">
+                          <button
+                            type="button"
+                            onClick={() => closeBasicPanelWithConfirm('time', false)}
+                            className="time-panel-cancel-btn"
+                          >
+                            {t('common.cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              closeBasicPanelWithConfirm('time', true);
+                              if (isEditing) {
+                                triggerRealtimeSave('realtime_time');
+                              }
+                            }}
+                            className="time-panel-confirm-btn"
+                          >
+                            {t('common.confirm')}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {basicPanel === 'category' && (
-                    <div className="absolute left-0 top-10 z-20 w-[min(26rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <label className="form-label">{t('task.categories')}</label>
-                      <div className="flex flex-wrap gap-2">
+                    <div className="task-quick-popover task-quick-popover-scroll absolute left-0 top-10 z-20 w-[min(14.75rem,calc(100vw-3.5rem))]">
+                      <div className="task-quick-menu">
                         {categories.map(cat => {
                           const active = selectedCategoryValues.includes(String(cat.id));
                           return (
@@ -2043,32 +2030,32 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   triggerRealtimeSave('realtime_category', { category_ids: next });
                                 }
                               }}
-                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
-                                active
-                                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
-                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                              }`}
+                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                             >
-                              {showCategoryEmoji && cat.emoji ? (
-                                <span>{cat.emoji}</span>
-                              ) : null}
-                              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: cat.color }} />
-                              <span>{cat.name}</span>
+                              <span className="task-quick-option-icon">
+                                {showCategoryEmoji && cat.emoji ? (
+                                  <span className="task-quick-category-emoji">{cat.emoji}</span>
+                                ) : (
+                                  <span className="task-quick-category-swatch" style={{ backgroundColor: cat.color || '#94a3b8' }} />
+                                )}
+                              </span>
+                              <span className="task-quick-option-label">{cat.name}</span>
+                              <IconCheck className="task-quick-option-check h-4 w-4" />
                             </button>
                           );
                         })}
                       </div>
                       {categories.length === 0 && (
-                        <p className="text-xs text-slate-500">{t('category.noCategories')}</p>
+                        <p className="task-quick-empty">{t('category.noCategories')}</p>
                       )}
                     </div>
                   )}
 
                   {basicPanel === 'recurrence' && (
-                    <div className="absolute left-0 top-10 z-20 w-[min(24rem,calc(100vw-3.5rem))] rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
-                      <div className="mb-2 flex items-center justify-between">
-                        <label className="text-sm font-medium text-slate-700">{t('task.repeat')}</label>
-                        <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
+                    <div className="task-quick-popover task-quick-popover-scroll absolute left-0 top-10 z-20 w-[min(18.25rem,calc(100vw-3.5rem))]">
+                      <div className="task-quick-header">
+                        <div className="task-quick-title">{t('task.repeat')}</div>
+                        <div className="task-quick-toggle">
                           <button
                             type="button"
                             onClick={() => {
@@ -2076,11 +2063,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               setSelectedDays([]);
                               setRecurrenceType('daily');
                             }}
-                            className={`rounded-full px-2.5 py-1 text-xs ${
-                              !showRecurrence
-                                ? 'bg-slate-100 text-slate-700'
-                                : 'text-slate-500 hover:bg-slate-50'
-                            }`}
+                            className={`task-quick-toggle-btn${!showRecurrence ? ' task-quick-toggle-btn--active' : ''}`}
                           >
                             {t('task.repeatOff')}
                           </button>
@@ -2092,11 +2075,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 setSelectedDays(workDayKeys);
                               }
                             }}
-                            className={`rounded-full px-2.5 py-1 text-xs ${
-                              showRecurrence
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : 'text-slate-500 hover:bg-slate-50'
-                            }`}
+                            className={`task-quick-toggle-btn${showRecurrence ? ' task-quick-toggle-btn--active' : ''}`}
                           >
                             {t('task.repeatOn')}
                           </button>
@@ -2104,56 +2083,59 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       </div>
 
                       {showRecurrence && (
-                        <div className="space-y-3">
-                          <div className="flex flex-wrap gap-2">
+                        <div className="space-y-2">
+                          <div className="task-quick-menu">
                             {[
                               { value: 'daily', label: t('task.daily') },
                               { value: 'weekly', label: t('task.weekly') },
                               { value: 'monthly', label: t('task.monthly') },
                               { value: 'yearly', label: t('task.yearly') },
-                            ].map((option) => (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => {
-                                  setRecurrenceType(option.value);
-                                  setShowCustomRecurrenceMenu(false);
-                                  if ((option.value === 'weekly' || option.value === 'biweekly') && selectedDays.length === 0) {
-                                    setSelectedDays(workDayKeys);
-                                  }
-                                  if (option.value !== 'weekly' && option.value !== 'biweekly') {
-                                    setSelectedDays([]);
-                                  }
-                                  if (option.value === 'monthly') {
-                                    const start = parseLocalInput(startInputValue || getValues('start_time') || '');
-                                    if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
-                                  }
-                                }}
-                                className={`rounded-full border px-3 py-1 text-xs ${
-                                  recurrenceType === option.value
-                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                }`}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
+                            ].map((option) => {
+                              const active = recurrenceType === option.value;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setRecurrenceType(option.value);
+                                    setShowCustomRecurrenceMenu(false);
+                                    if ((option.value === 'weekly' || option.value === 'biweekly') && selectedDays.length === 0) {
+                                      setSelectedDays(workDayKeys);
+                                    }
+                                    if (option.value !== 'weekly' && option.value !== 'biweekly') {
+                                      setSelectedDays([]);
+                                    }
+                                    if (option.value === 'monthly') {
+                                      const start = parseLocalInput(startInputValue || getValues('start_time') || '');
+                                      if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
+                                    }
+                                  }}
+                                  className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
+                                >
+                                  <span className="task-quick-option-icon">
+                                    <IconRepeat className="h-4 w-4" />
+                                  </span>
+                                  <span className="task-quick-option-label">{option.label}</span>
+                                  <IconCheck className="task-quick-option-check h-4 w-4" />
+                                </button>
+                              );
+                            })}
                             <button
                               type="button"
                               onClick={() => setShowCustomRecurrenceMenu((prev) => !prev)}
-                              className={`rounded-full border px-3 py-1 text-xs ${
-                                isCustomRecurrenceType || showCustomRecurrenceMenu
-                                  ? 'border-sky-300 bg-sky-50 text-sky-700'
-                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                              }`}
+                              className={`task-quick-option${isCustomRecurrenceType || showCustomRecurrenceMenu ? ' task-quick-option--active' : ''}`}
                             >
-                              {t('task.customRepeat')}
+                              <span className="task-quick-option-icon">
+                                <IconRepeat className="h-4 w-4" />
+                              </span>
+                              <span className="task-quick-option-label">{t('task.customRepeat')}</span>
+                              <IconCheck className="task-quick-option-check h-4 w-4" />
                             </button>
                           </div>
                           {(showCustomRecurrenceMenu || isCustomRecurrenceType) && (
-                            <div className="space-y-2 rounded-xl border border-sky-100 bg-sky-50/40 p-2.5">
-                              <div className="text-[11px] font-medium uppercase tracking-wide text-sky-700">{t('task.customRepeat')}</div>
-                              <div className="flex flex-wrap gap-2">
+                            <div className="task-quick-section task-quick-subpanel">
+                              <div className="task-quick-section-title">{t('task.customRepeat')}</div>
+                              <div className="task-quick-chip-row">
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -2162,11 +2144,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       setSelectedDays(workDayKeys);
                                     }
                                   }}
-                                  className={`rounded-full border px-3 py-1 text-xs ${
-                                    recurrenceType === 'biweekly'
-                                      ? 'border-sky-300 bg-sky-100 text-sky-800'
-                                      : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
-                                  }`}
+                                  className={`task-quick-chip${recurrenceType === 'biweekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.biweekly')}
                                   </button>
@@ -2189,11 +2167,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       setRecurrenceLunarDay(fallback.day);
                                       setRecurrenceLunarIsLeapMonth(fallback.isLeapMonth);
                                     }}
-                                    className={`rounded-full border px-3 py-1 text-xs ${
-                                      recurrenceType === 'lunar'
-                                        ? 'border-sky-300 bg-sky-100 text-sky-800'
-                                        : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-100/60'
-                                    }`}
+                                    className={`task-quick-chip${recurrenceType === 'lunar' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.lunarYearly')}
                                   </button>
@@ -2202,8 +2176,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                           )}
 
                           {recurrenceType === 'lunar' && (
-                            <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-2.5">
-                              <div className="text-xs font-medium text-slate-700">{t('task.lunarYearly')}</div>
+                            <div className="task-quick-section task-quick-subpanel">
+                              <div className="task-quick-section-title">{t('task.lunarYearly')}</div>
                               <TaskDatePicker
                                 value={recurrenceLunarPickerDate}
                                 allDay
@@ -2228,49 +2202,45 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   setRecurrenceLunarIsLeapMonth(nextSelection.isLeapMonth);
                                 }}
                               />
-                              <div className="rounded-md bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                              <div className="mt-2 rounded-xl bg-white px-2 py-1.5 text-xs text-slate-600">
                                 {`${t('task.lunarYearly')} ${recurrenceLunarIsLeapMonth ? t('task.lunarLeapPrefix') : ''}${recurrenceLunarMonth}/${recurrenceLunarDay}`}
                               </div>
                             </div>
                           )}
 
                           {(recurrenceType === 'weekly' || recurrenceType === 'biweekly') && (
-                            <div>
-                              <p className="mb-2 text-sm text-slate-600">{t('task.selectWeekdays')}</p>
-                              <div className="mb-2 flex flex-wrap gap-2">
+                            <div className="task-quick-section">
+                              <p className="task-quick-section-title">{t('task.selectWeekdays')}</p>
+                              <div className="task-quick-chip-row mb-2">
                                 <button
                                   type="button"
                                   onClick={() => setSelectedDays(workDayKeys)}
-                                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                  className="task-quick-chip"
                                 >
                                   {t('task.weekdaysWorkdays')}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setSelectedDays(allDayKeys)}
-                                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                                  className="task-quick-chip"
                                 >
                                   {t('task.weekdaysAll')}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setSelectedDays([])}
-                                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50"
+                                  className="task-quick-chip"
                                 >
                                   {t('task.weekdaysClear')}
                                 </button>
                               </div>
-                              <div className="flex flex-wrap gap-2">
+                              <div className="task-quick-weekday-grid">
                                 {weekDays.map(day => (
                                   <button
                                     key={day.key}
                                     type="button"
                                     onClick={() => toggleDay(day.key)}
-                                    className={`rounded-full px-3 py-1 text-sm ${
-                                      selectedDays.includes(day.key)
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                    }`}
+                                    className={`task-quick-weekday${selectedDays.includes(day.key) ? ' task-quick-weekday--active' : ''}`}
                                   >
                                     {day.label}
                                   </button>
@@ -2279,17 +2249,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             </div>
                           )}
                           {recurrenceType === 'monthly' && (
-                            <div className="space-y-2">
+                            <div className="task-quick-section">
                               <button
                                 type="button"
                                 onClick={() => setShowMonthlyDatePicker((prev) => !prev)}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                                className="task-quick-date-trigger"
                               >
                                 <span>{t('task.monthlyOnDate')}</span>
-                                <span className="rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700">{clampMonthlyDate(monthlyDate)}</span>
+                                <span className="task-quick-date-value">{clampMonthlyDate(monthlyDate)}</span>
                               </button>
                               {showMonthlyDatePicker && (
-                                <div className="rounded-xl border border-slate-200 bg-white p-2">
+                                <div className="task-quick-date-grid">
                                   <div className="grid grid-cols-7 gap-1">
                                     {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => {
                                       const active = clampMonthlyDate(monthlyDate) === day;
@@ -2301,11 +2271,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                             setMonthlyDate(day);
                                             setShowMonthlyDatePicker(false);
                                           }}
-                                          className={`h-8 rounded-md text-xs font-medium ${
-                                            active
-                                              ? 'bg-sky-600 text-white'
-                                              : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
-                                          }`}
+                                          className={`task-quick-date-cell${active ? ' task-quick-date-cell--active' : ''}`}
                                         >
                                           {day}
                                         </button>
@@ -2318,11 +2284,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                           )}
                         </div>
                       )}
-                      <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                      <div className="task-quick-footer">
                         <button
                           type="button"
                           onClick={() => closeBasicPanelWithConfirm('recurrence', false)}
-                          className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                          className="task-quick-action task-quick-action--ghost"
                         >
                           {t('common.cancel')}
                         </button>
@@ -2334,7 +2300,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               triggerRealtimeSave('realtime_recurrence');
                             }
                           }}
-                          className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                          className="task-quick-action task-quick-action--primary"
                         >
                           {t('common.confirm')}
                         </button>
@@ -2344,12 +2310,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 </div>
               </div>
 
-              <div className="mobile-scrollbar-hidden flex min-h-0 h-full flex-1 flex-col gap-2.5 overflow-auto p-3 md:p-4">
+              <div className="task-modal-body task-detail-body-scroll mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-auto px-5 py-4 md:px-7 md:py-5">
                 <div
-                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2.5 transition-colors focus-within:border-blue-200 focus-within:bg-blue-50/20"
+                  className="task-modal-description-editor flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
                   onClick={() => descriptionEditorRef.current?.focus()}
                 >
-                  <label className="mb-1 block cursor-text text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
                     ref={descriptionEditorRef}
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
@@ -2359,13 +2324,13 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     placeholder={t('task.description')}
                     className="min-h-0 min-w-0 flex-1 overflow-hidden"
                     fill
-                    minHeight={320}
+                    minHeight={280}
                   />
                 </div>
               </div>
             </div>
 
-            <div className="sticky bottom-0 z-20 flex items-center justify-between border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">
+            <div className="task-modal-footer sticky bottom-0 z-20 flex items-center justify-between bg-white/95 px-5 py-2.5 backdrop-blur md:px-7">
               <div>
                 {isEditing && (
                   <div className="flex items-center gap-2">
