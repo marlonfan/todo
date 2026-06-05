@@ -168,7 +168,7 @@ function buildProjectedEvent(task, {
   };
 }
 
-function buildRecurringProjectedEvents(task, options) {
+export function buildRecurringProjectedEvents(task, options) {
   const {
     rangeStart,
     rangeEnd,

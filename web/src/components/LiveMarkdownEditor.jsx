@@ -40,6 +40,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 }, ref) {
   const mountRef = useRef(null);
   const editorRef = useRef(null);
+  const initializingRef = useRef(true);
   const readyRef = useRef(false);
   const syncingRef = useRef(false);
   const lastInternalValueRef = useRef(String(value || ''));
@@ -157,6 +158,13 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         },
       },
       input: (currentValue) => {
+        if (initializingRef.current) {
+          logEditorDebug('editor.inputSkipInitializing', {
+            current_value: summarizeDebugText(currentValue),
+            pending_external: summarizeDebugText(pendingExternalValueRef.current),
+          });
+          return;
+        }
         lastInternalValueRef.current = String(currentValue || '');
         markdownInputVersionRef.current = fastInputVersionRef.current;
         logEditorDebug('editor.markdownInput', {
@@ -198,6 +206,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
             }
           }
         }
+        initializingRef.current = false;
       },
     });
     window.setTimeout(() => {
@@ -262,6 +271,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         unbindFastInput = null;
       }
       readyRef.current = false;
+      initializingRef.current = true;
       safeDestroy(instance);
       editorRef.current = null;
     };

@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
-import { Plus } from 'lucide-react';
+import { MoreHorizontal, Plus, Trash2 } from 'lucide-react';
 import TaskModal from './TaskModal';
 import {
   formatDateTime,
@@ -52,6 +52,10 @@ import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import { isTaskUnsyncedLocally } from './taskListRecurringVisibility';
+import {
+  buildNextPendingFromProjectedTask,
+  hasOptimisticOccurrenceStatusForTask,
+} from './taskListRecurringProjection';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import { tasksAPI } from '../api/client';
@@ -68,9 +72,11 @@ import { Button } from './ui/Button';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/DropdownMenu';
 
@@ -160,7 +166,8 @@ function normalizeDraftForCompare(draft) {
 function isDetailPanelFloatingLayerTarget(target) {
   if (!(target instanceof Element)) return false;
   return !!(
-    target.closest('.task-time-selectbox-menu--floating')
+    target.closest('.md-popover')
+    || target.closest('.task-time-selectbox-menu--floating')
     || target.closest('.react-datepicker-popper')
     || target.closest('.react-datepicker__portal')
   );
@@ -801,10 +808,10 @@ const TaskRow = React.memo(function TaskRow({
         });
         onSelectTask(task);
       }}
-      className={`group relative cursor-pointer border-b border-[hsl(var(--blue-border))] px-3 py-2.5 transition-colors last:border-b-0 ${
+      className={`group relative cursor-pointer border-b border-slate-100 px-3.5 py-2.5 transition-colors duration-150 last:border-b-0 md:px-4 md:py-3 ${
         selected
-          ? 'bg-[hsl(var(--soft-blue-strong))] before:absolute before:bottom-2 before:left-0 before:top-2 before:w-0.5 before:rounded-r-full before:bg-[hsl(var(--neutral-blue))]'
-          : 'bg-white hover:bg-[hsl(var(--soft-blue))]'
+          ? 'bg-slate-100/70 md:rounded-md'
+          : 'bg-white hover:bg-slate-50/80'
       }`}
     >
       <div className="flex items-center gap-2.5">
@@ -825,7 +832,7 @@ const TaskRow = React.memo(function TaskRow({
         >
           <span className="text-[10px] leading-none">✓</span>
         </button>
-        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] leading-5 ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] leading-5 ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
           {task.title}
         </h3>
         <div className="hidden shrink-0 items-center gap-2 text-xs sm:flex">
@@ -897,11 +904,11 @@ const TaskRow = React.memo(function TaskRow({
   prev.timeMode === next.timeMode
 ));
 
-function TaskList({ forcedView = '' }) {
+export const TaskListView = React.memo(function TaskListView({ forcedView = '', routeLocation }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const location = useLocation();
+  const location = routeLocation;
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
   const { data: tasksRaw = [], isLoading: tasksLoading } = useTasksQuery();
@@ -1012,6 +1019,29 @@ function TaskList({ forcedView = '' }) {
     });
     return pool;
   }, [occurrenceStatusOptimisticMap, recurringNextOccurrences, timezone]);
+  const recurringServerStatusMap = useMemo(() => {
+    const statusMap = new Map();
+    const ingest = (item) => {
+      const taskID = Number(item?.task_id || item?.taskID || 0);
+      if (!taskID) return;
+      const startLocal = dayjs(item?.start_time || item?.startTime || '').tz(timezone);
+      const fallbackStart = startLocal.isValid() ? startLocal.toISOString() : '';
+      const occurrenceDate = normalizeOccurrenceDate(
+        item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || fallbackStart,
+        timezone,
+      );
+      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
+      const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
+      const status = String(item?.status || 'pending');
+      keys.forEach((key) => {
+        if (!key || statusMap.has(key)) return;
+        statusMap.set(key, status);
+      });
+    };
+    (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach(ingest);
+    (Array.isArray(recurringHistoryItems) ? recurringHistoryItems : []).forEach(ingest);
+    return statusMap;
+  }, [recurringHistoryItems, recurringNextOccurrences, timezone]);
   const recurringInstanceTasks = useMemo(() => {
     return buildRecurringInstanceTasksFromOccurrences(
       recurringHistoryItems,
@@ -1035,7 +1065,15 @@ function TaskList({ forcedView = '' }) {
       const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
       if (!recurrenceRule) return [task];
       const taskID = Number(task?.id || 0);
-      const nextPending = recurringNextPendingMap.get(taskID);
+      let nextPending = recurringNextPendingMap.get(taskID);
+      if (!nextPending && hasOptimisticOccurrenceStatusForTask(occurrenceStatusOptimisticMap, taskID)) {
+        nextPending = buildNextPendingFromProjectedTask({
+          task,
+          optimisticStatusMap: occurrenceStatusOptimisticMap,
+          serverStatusMap: recurringServerStatusMap,
+          timezone,
+        });
+      }
       if (!nextPending) {
         // Recurring base tasks are hidden from normal task details. Keep only local
         // unsynced series anchors until the server can generate occurrence rows.
@@ -1066,31 +1104,7 @@ function TaskList({ forcedView = '' }) {
         deleted_at: nextPending.deletedAt,
       }];
     });
-  }, [recurringNextPendingMap, tasksRaw]);
-
-  const recurringServerStatusMap = useMemo(() => {
-    const statusMap = new Map();
-    const ingest = (item) => {
-      const taskID = Number(item?.task_id || item?.taskID || 0);
-      if (!taskID) return;
-      const startLocal = dayjs(item?.start_time || item?.startTime || '').tz(timezone);
-      const fallbackStart = startLocal.isValid() ? startLocal.toISOString() : '';
-      const occurrenceDate = normalizeOccurrenceDate(
-        item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || fallbackStart,
-        timezone,
-      );
-      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
-      const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
-      const status = String(item?.status || 'pending');
-      keys.forEach((key) => {
-        if (!key || statusMap.has(key)) return;
-        statusMap.set(key, status);
-      });
-    };
-    (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach(ingest);
-    (Array.isArray(recurringHistoryItems) ? recurringHistoryItems : []).forEach(ingest);
-    return statusMap;
-  }, [recurringHistoryItems, recurringNextOccurrences, timezone]);
+  }, [occurrenceStatusOptimisticMap, recurringNextPendingMap, recurringServerStatusMap, tasksRaw, timezone]);
 
   useEffect(() => {
     if (recurringServerStatusMap.size === 0) return;
@@ -1933,6 +1947,7 @@ function TaskList({ forcedView = '' }) {
       ? 'text-emerald-600 hover:bg-emerald-50'
       : 'text-slate-500 hover:bg-slate-100';
   const isDraftCustomRecurrenceType = (draft?.recurrence_type || 'daily') === 'biweekly' || (draft?.recurrence_type || 'daily') === 'lunar';
+  const draftStatus = draft?.status || selectedTask?.status || 'pending';
   const draftRecurrenceLunarPickerDate = (
     solarDateFromLunarSelection({
       year: draftRecurrenceLunarYear,
@@ -3652,46 +3667,18 @@ function TaskList({ forcedView = '' }) {
 
   return (
     <div className="md-page h-full">
-      <div className="grid h-full grid-cols-1 gap-0 lg:grid-cols-[minmax(460px,0.95fr)_minmax(360px,1.05fr)]">
+      <div className="grid h-full grid-cols-1 gap-0 lg:grid-cols-[minmax(520px,1.08fr)_minmax(360px,0.92fr)]">
         <section className="md-pane flex h-full min-h-0 flex-col">
           {showListHeader && (
-            <div className="border-b border-border bg-white px-3 py-2.5">
-              <div className="flex min-h-[36px] items-center justify-end gap-2 md:gap-3">
-                <div className="hidden min-w-0 md:block md:flex-none">
-                  <h2 className="truncate text-sm font-semibold text-slate-900 md:text-base">{viewTitle}</h2>
-                  <p className="text-xs text-slate-500">{t('task.taskCount', { count: filteredTasks.length })}</p>
+            <div className="bg-white px-5 pb-4 pt-5">
+              <div className="flex min-h-[40px] items-center justify-between gap-3">
+                <div className="hidden min-w-0 md:block">
+                  <h2 className="truncate text-xl font-semibold text-slate-950">{viewTitle}</h2>
+                  <p className="mt-0.5 text-xs text-slate-400">{t('task.taskCount', { count: filteredTasks.length })}</p>
                 </div>
-                <div className="flex min-w-0 items-center gap-2 md:flex-1">
-                  {view === 'search' && (
-                    <div className="md-input-row flex-1">
-                      <IconSearch className="h-4 w-4 text-slate-400" />
-                      <input
-                        value={searchKeyword}
-                        onChange={(event) => setSearchKeyword(event.target.value)}
-                        placeholder={t('task.searchPlaceholder')}
-                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
-                      />
-                    </div>
-                  )}
-                  {canQuickCreate && (
-                    <div className="md-input-row hidden flex-1 md:flex">
-                      <IconSearch className="h-4 w-4 text-slate-400" />
-                      <input
-                        value={quickTitle}
-                        onChange={(event) => setQuickTitle(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            handleQuickCreate();
-                          }
-                        }}
-                        placeholder={t('task.quickAddPlaceholder')}
-                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
-                      />
-                    </div>
-                  )}
+                <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   {canShowSortGroup && !isCompactMobile && (
-                    <div className="flex items-center gap-1">
+                    <>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
@@ -3699,7 +3686,7 @@ function TaskList({ forcedView = '' }) {
                             variant="ghost"
                             size="icon"
                             data-testid="task-sort-toggle-button"
-                            className="text-slate-500 hover:text-slate-950 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950"
+                            className="text-slate-500 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950"
                             title={t('common.filter')}
                           >
                             <IconSort className="h-4 w-4" />
@@ -3731,7 +3718,7 @@ function TaskList({ forcedView = '' }) {
                               effectiveGroupBy !== 'none'
                                 ? 'bg-slate-100 text-slate-950'
                                 : 'text-slate-500 hover:text-slate-950'
-                            } focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950`}
+                            } hover:bg-slate-100 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950`}
                             title={t('task.groupNone')}
                           >
                             <IconGroup className="h-4 w-4" />
@@ -3748,7 +3735,7 @@ function TaskList({ forcedView = '' }) {
                           </DropdownMenuRadioGroup>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    </div>
+                    </>
                   )}
                   <Button
                     type="button"
@@ -3768,10 +3755,42 @@ function TaskList({ forcedView = '' }) {
                   </Button>
                 </div>
               </div>
+              {(view === 'search' || canQuickCreate) && (
+                <div className="mt-4">
+                  {view === 'search' && (
+                    <div className="md-input-row min-h-[42px]">
+                      <IconSearch className="h-4 w-4 text-slate-400" />
+                      <input
+                        value={searchKeyword}
+                        onChange={(event) => setSearchKeyword(event.target.value)}
+                        placeholder={t('task.searchPlaceholder')}
+                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                      />
+                    </div>
+                  )}
+                  {canQuickCreate && (
+                    <div className="md-input-row hidden min-h-[42px] md:flex">
+                      <Plus className="h-4 w-4 text-slate-300" />
+                      <input
+                        value={quickTitle}
+                        onChange={(event) => setQuickTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            handleQuickCreate();
+                          }
+                        }}
+                        placeholder={t('task.quickAddPlaceholder')}
+                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          <div className="mobile-scrollbar-hidden flex-1 overflow-auto bg-white md:bg-white md:p-2">
+          <div className="mobile-scrollbar-hidden flex-1 overflow-auto bg-white md:bg-white">
             {loading ? (
               <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
             ) : filteredTasks.length === 0 ? (
@@ -3780,15 +3799,16 @@ function TaskList({ forcedView = '' }) {
                 <p className="mt-2 text-sm">{view === 'search' ? t('task.searchHint') : t('task.createFirst')}</p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-5 px-0 py-1 md:px-5">
                 {taskGroups.map((group) => (
                   <div key={group.key} className="space-y-1">
                     {group.title ? (
-                      <div className="sticky top-0 z-[1] bg-white/95 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700/60 backdrop-blur md:bg-white/95">
-                        {group.title} · {group.tasks.length}
+                      <div className="sticky top-0 z-[2] flex items-center gap-2 bg-white/95 px-4 py-2 text-base font-semibold text-slate-900 backdrop-blur md:px-5 md:bg-white/95">
+                        <span>{group.title}</span>
+                        <span className="text-sm font-normal text-slate-400">{group.tasks.length}</span>
                       </div>
                     ) : null}
-                    <div className="overflow-hidden border-y border-[hsl(var(--blue-border))] bg-white md:rounded-md md:border">
+                    <div className="bg-white">
                       {group.tasks.map((task) => (
                         <TaskRow
                           key={task.id}
@@ -3908,15 +3928,125 @@ function TaskList({ forcedView = '' }) {
           )}
         </section>
 
-        <section className="md-pane hidden h-full min-h-0 flex-col lg:flex lg:border-l lg:border-blue-100">
+        <section className="md-pane hidden h-full min-h-0 flex-col lg:flex lg:border-l lg:border-slate-200">
           {!selectedTask || !draft ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-400">
               {t('task.selectTaskHint')}
             </div>
           ) : (
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-blue-100 px-3 py-2.5">
-                <div className="px-1 py-0.5">
+            <div className="flex h-full min-h-0 flex-col bg-white">
+              <div className="border-b border-slate-100 px-8 pb-5 pt-5">
+                <div className="flex min-h-9 items-center justify-between gap-4">
+                  <div ref={detailPanelRef} className="relative flex min-w-0 flex-wrap items-center gap-1.5 text-slate-500">
+                    <button
+                      type="button"
+                      aria-pressed={draftStatus === 'completed'}
+                      disabled={selectedTask.read_only || draftStatus === 'cancelled' || draftStatus === 'skipped'}
+                      onClick={() => handleStatusChange(selectedTask, draftStatus === 'completed' ? 'pending' : 'completed')}
+                      className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] border transition-colors ${
+                        draftStatus === 'completed'
+                          ? 'border-blue-600 bg-blue-600 text-white'
+                          : 'border-slate-300 bg-white text-transparent hover:border-blue-500 hover:bg-blue-50'
+                      } disabled:cursor-not-allowed disabled:opacity-45`}
+                      title={draftStatus === 'completed' ? t('task.statusPending') : t('task.statusCompleted')}
+                    >
+                      <span className="text-[10px] leading-none">✓</span>
+                    </button>
+                    <span className="h-4 w-px bg-slate-200" />
+                    <button
+                      type="button"
+                      onClick={() => handleDetailPanelToggle('time')}
+                      className={`relative inline-flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] ${draftTimeButtonClass}`}
+                      title={draftTimeButtonTitle}
+                    >
+                      <IconClock className="h-4 w-4" />
+                      <span className="max-w-[14rem] truncate text-left leading-5">{draftTimeSummaryLabel}</span>
+                      {hasDraftParsedTimeHint && (
+                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isDetailPanelRequiringConfirm(detailPanel)) {
+                          closeDetailPanelWithConfirm(detailPanel, false);
+                        } else {
+                          setDetailPanel('');
+                        }
+                        setShowActivityPanel((prev) => !prev);
+                      }}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                        showActivityPanel
+                          ? 'bg-slate-100 text-slate-700'
+                          : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                      title={t('task.activityTitle')}
+                    >
+                      <IconHistory className="h-4 w-4" />
+                    </button>
+                    {showActivityPanel && selectedTask && (
+                      <div className="absolute left-0 top-10 z-20 w-[30rem] max-w-[min(30rem,calc(100vw-3rem))]">
+                        <TaskActivityTimeline taskID={selectedTask.id} />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDetailPanelToggle('priority')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-[13px] ${draftPriorityButtonClass}`}
+                      title={draftPriorityTitle}
+                    >
+                      <IconFlag className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDetailPanelToggle('category')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-[13px] ${draftCategoryButtonClass}`}
+                      title={draftCategorySummaryLabel}
+                    >
+                      <IconTag className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDetailPanelToggle('recurrence')}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-[13px] ${draftRecurrenceButtonClass}`}
+                      title={draftRecurrenceSummaryLabel}
+                    >
+                      {(draft.recurrence_enabled || detailPanel === 'recurrence')
+                        ? <IconRepeat className="h-4 w-4" />
+                        : <IconRepeatOff className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-xs">
+                    {selectedTask.read_only && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">CalDAV Read-only</span>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700"
+                          title={t('common.more')}
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-44">
+                        <DropdownMenuLabel>{t('common.more')}</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="gap-2 text-rose-600 focus:bg-rose-50 focus:text-rose-700"
+                          onSelect={handleDeleteSelected}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          {t('common.delete')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+                <div className="mt-6 py-0.5">
                   <input
                     ref={draftTitleInputRef}
                     data-testid="task-detail-title-input"
@@ -3958,80 +4088,12 @@ function TaskList({ forcedView = '' }) {
                       }
                       setDraftParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
                     }}
-                    className="w-full rounded-md border-none bg-transparent px-1 text-lg font-semibold text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:bg-slate-50 sm:text-xl"
+                    className="w-full border-none bg-transparent px-0 text-[1.55rem] font-semibold leading-9 text-slate-950 outline-none placeholder:text-slate-300 sm:text-[1.65rem]"
                     placeholder={t('task.title')}
                   />
                 </div>
-                <div className="mt-2 flex min-h-[36px] items-center justify-between gap-3">
-                  <div className="order-2 flex items-center justify-end gap-2 text-xs">
-                    {selectedTask.read_only && (
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">CalDAV Read-only</span>
-                    )}
-                  </div>
-                  <div ref={detailPanelRef} className="order-1 relative flex min-w-0 items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isDetailPanelRequiringConfirm(detailPanel)) {
-                          closeDetailPanelWithConfirm(detailPanel, false);
-                        } else {
-                          setDetailPanel('');
-                        }
-                        setShowActivityPanel((prev) => !prev);
-                      }}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
-                        showActivityPanel
-                          ? 'bg-slate-100 text-slate-700'
-                          : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      title={t('task.activityTitle')}
-                    >
-                      <IconHistory className="h-4 w-4" />
-                    </button>
-                    {showActivityPanel && selectedTask && (
-                      <div className="absolute left-0 top-10 z-20 w-[30rem] max-w-[min(30rem,calc(100vw-3rem))]">
-                        <TaskActivityTimeline taskID={selectedTask.id} />
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDetailPanelToggle('priority')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftPriorityButtonClass}`}
-                      title={draftPriorityTitle}
-                    >
-                      <IconFlag className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDetailPanelToggle('category')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftCategoryButtonClass}`}
-                      title={draftCategorySummaryLabel}
-                    >
-                      <IconTag className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDetailPanelToggle('recurrence')}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${draftRecurrenceButtonClass}`}
-                      title={draftRecurrenceSummaryLabel}
-                    >
-                      {(draft.recurrence_enabled || detailPanel === 'recurrence')
-                        ? <IconRepeat className="h-4 w-4" />
-                        : <IconRepeatOff className="h-4 w-4" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDetailPanelToggle('time')}
-                      className={`relative inline-flex h-8 min-w-0 items-center gap-1 rounded-md px-2 text-sm ${draftTimeButtonClass}`}
-                      title={draftTimeButtonTitle}
-                    >
-                      <IconClock className="h-4 w-4" />
-                      <span className="max-w-[11.5rem] truncate text-left text-[11px] leading-4">{draftTimeSummaryLabel}</span>
-                      {hasDraftParsedTimeHint && (
-                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
-                      )}
-                    </button>
-                    {detailPanel === 'priority' && (
+                <div className="relative">
+                  {detailPanel === 'priority' && (
                       <div className="md-popover absolute right-0 top-10 z-20 w-[22rem] p-3">
                         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.priority')}</div>
                         <div className="flex flex-wrap gap-2">
@@ -4061,78 +4123,70 @@ function TaskList({ forcedView = '' }) {
                           ))}
                         </div>
                       </div>
-                    )}
+                  )}
 
-                    {detailPanel === 'time' && (
-                      <div className="time-panel-card mobile-scrollbar-hidden md-popover absolute right-0 top-10 z-20 w-[min(24.5rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
-                        <div className="time-panel-toolbar mb-2 space-y-1.5 border-b border-slate-100 pb-2">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setDraftTimeRangeEnabled(false);
-                                  setDraftTimeRangeEditing('start');
-                                  handleDraftFieldChange('end_time', '');
-                                }}
-                                className={`rounded-full px-2 py-1 text-[11px] ${
-                                  !draftTimeRangeEnabled
-                                    ? 'bg-sky-100 text-sky-700'
-                                    : 'text-slate-500 hover:bg-slate-50'
-                                }`}
-                              >
-                                {t('task.timePoint')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setDraftTimeRangeEnabled(true);
-                                  setDraftTimeRangeEditing('end');
-                                  const timezoneName = getUserTimezone();
-                                  const currentStart = String(draft.start_time || '');
-                                  const currentEnd = String(draft.end_time || '');
-                                  if (draft.all_day) {
-                                    if (!currentStart) {
-                                      const today = dayjs().tz(timezoneName).format('YYYY-MM-DD');
-                                      handleDraftFieldChange('start_time', today);
-                                      handleDraftFieldChange('end_time', today);
-                                    } else if (!currentEnd) {
-                                      handleDraftFieldChange('end_time', currentStart);
-                                    }
-                                    return;
+                  {detailPanel === 'time' && (
+                      <div className="time-panel-card task-detail-time-panel mobile-scrollbar-hidden md-popover absolute right-0 top-10 z-20 w-[min(25.25rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-3">
+                        <div className="time-panel-toolbar task-detail-time-panel-header">
+                          <div className="time-panel-primary-tabs">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDraftTimeRangeEnabled(false);
+                                setDraftTimeRangeEditing('start');
+                                handleDraftFieldChange('end_time', '');
+                              }}
+                              className={`time-panel-primary-tab${!draftTimeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
+                            >
+                              {t('task.timePanelDate')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDraftTimeRangeEnabled(true);
+                                setDraftTimeRangeEditing('end');
+                                const timezoneName = getUserTimezone();
+                                const currentStart = String(draft.start_time || '');
+                                const currentEnd = String(draft.end_time || '');
+                                if (draft.all_day) {
+                                  if (!currentStart) {
+                                    const today = dayjs().tz(timezoneName).format('YYYY-MM-DD');
+                                    handleDraftFieldChange('start_time', today);
+                                    handleDraftFieldChange('end_time', today);
+                                  } else if (!currentEnd) {
+                                    handleDraftFieldChange('end_time', currentStart);
                                   }
-                                  if (!currentStart && !currentEnd) {
-                                    const range = buildDraftDefaultRangeAroundNow(timezoneName);
-                                    handleDraftFieldChange('start_time', range.start);
-                                    handleDraftFieldChange('end_time', range.end);
-                                    return;
-                                  }
-                                  if (currentStart && !currentEnd) {
-                                    const nextEnd = buildEndFromStartLocal(currentStart, 60) || currentStart;
-                                    handleDraftFieldChange('end_time', nextEnd);
-                                  } else if (!currentStart && currentEnd) {
-                                    const range = buildDraftDefaultRangeAroundNow(timezoneName);
-                                    handleDraftFieldChange('start_time', range.start);
-                                    handleDraftFieldChange('end_time', coerceEndNotBeforeStartLocal(range.start, currentEnd));
-                                  }
-                                }}
-                                className={`rounded-full px-2 py-1 text-[11px] ${
-                                  draftTimeRangeEnabled
-                                    ? 'bg-sky-100 text-sky-700'
-                                    : 'text-slate-500 hover:bg-slate-50'
-                                }`}
-                              >
-                                {t('task.timeRange')}
-                              </button>
-                            </div>
-                            <div className="inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                                  return;
+                                }
+                                if (!currentStart && !currentEnd) {
+                                  const range = buildDraftDefaultRangeAroundNow(timezoneName);
+                                  handleDraftFieldChange('start_time', range.start);
+                                  handleDraftFieldChange('end_time', range.end);
+                                  return;
+                                }
+                                if (currentStart && !currentEnd) {
+                                  const nextEnd = buildEndFromStartLocal(currentStart, 60) || currentStart;
+                                  handleDraftFieldChange('end_time', nextEnd);
+                                } else if (!currentStart && currentEnd) {
+                                  const range = buildDraftDefaultRangeAroundNow(timezoneName);
+                                  handleDraftFieldChange('start_time', range.start);
+                                  handleDraftFieldChange('end_time', coerceEndNotBeforeStartLocal(range.start, currentEnd));
+                                }
+                              }}
+                              className={`time-panel-primary-tab${draftTimeRangeEnabled ? ' time-panel-primary-tab--active' : ''}`}
+                            >
+                              {t('task.timeRange')}
+                            </button>
+                          </div>
+                          <div className="time-panel-subtools">
+                            <div className="time-panel-soft-toggle">
                               <button
                                 type="button"
                                 onClick={() => setDraftTimeCalendarMode('solar')}
-                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                className={`time-panel-soft-toggle-btn${
                                   draftTimeCalendarMode === 'solar'
-                                    ? 'bg-sky-100 text-sky-700'
-                                    : 'text-slate-500 hover:bg-slate-50'
+                                    ? ' time-panel-soft-toggle-btn--active'
+                                    : ''
                                 }`}
                               >
                                 {t('task.calendarSolar')}
@@ -4140,10 +4194,10 @@ function TaskList({ forcedView = '' }) {
                               <button
                                 type="button"
                                 onClick={() => setDraftTimeCalendarMode('lunar')}
-                                className={`rounded-full px-2 py-1 text-[11px] ${
+                                className={`time-panel-soft-toggle-btn${
                                   draftTimeCalendarMode === 'lunar'
-                                    ? 'bg-sky-100 text-sky-700'
-                                    : 'text-slate-500 hover:bg-slate-50'
+                                    ? ' time-panel-soft-toggle-btn--active'
+                                    : ''
                                 }`}
                               >
                                 {t('task.calendarLunar')}
@@ -4152,84 +4206,73 @@ function TaskList({ forcedView = '' }) {
                             <button
                               type="button"
                               onClick={() => handleDraftFieldChange('all_day', !draft.all_day)}
-                              className={`rounded-full border px-2 py-1 text-[11px] ${
+                              className={`time-panel-day-toggle${
                                 draft.all_day
-                                  ? 'border-blue-300 bg-blue-50 text-blue-700'
-                                  : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                                  ? ' time-panel-day-toggle--active'
+                                  : ''
                               }`}
                             >
                               {t('task.allDay')}
                             </button>
+                          </div>
+                          <div className="time-quick-actions time-quick-actions--detail">
                             <button
                               type="button"
-                              onClick={() => applyQuickDatePreset('clear')}
-                              className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50"
+                              title={t('task.quickToday')}
+                              aria-label={t('task.quickToday')}
+                              onClick={() => applyQuickDatePreset('today')}
+                              className="time-quick-preset"
                             >
-                              {t('task.clearDate')}
+                              <IconSun className="h-4 w-4" />
+                              <span>{t('task.quickToday')}</span>
                             </button>
-                            <div className="time-quick-actions ml-auto">
-                              <button
-                                type="button"
-                                title={t('task.quickToday')}
-                                aria-label={t('task.quickToday')}
-                                onClick={() => applyQuickDatePreset('today')}
-                                className="time-quick-btn"
-                              >
-                                <IconSun className="h-5 w-5" />
-                              </button>
-                              <button
-                                type="button"
-                                title={t('task.quickTomorrow')}
-                                aria-label={t('task.quickTomorrow')}
-                                onClick={() => applyQuickDatePreset('tomorrow')}
-                                className="time-quick-btn"
-                              >
-                                <IconSunrise className="h-5 w-5" />
-                              </button>
-                              <button
-                                type="button"
-                                title={t('task.quickNextWeek')}
-                                aria-label={t('task.quickNextWeek')}
-                                onClick={() => applyQuickDatePreset('next_week')}
-                                className="time-quick-btn"
-                              >
-                                <IconCalendar className="h-5 w-5" />
-                              </button>
-                              <button
-                                type="button"
-                                title={t('task.quickTonight')}
-                                aria-label={t('task.quickTonight')}
-                                onClick={() => applyQuickDatePreset('tonight')}
-                                className="time-quick-btn"
-                              >
-                                <IconMoon className="h-5 w-5" />
-                              </button>
-                            </div>
+                            <button
+                              type="button"
+                              title={t('task.quickTomorrow')}
+                              aria-label={t('task.quickTomorrow')}
+                              onClick={() => applyQuickDatePreset('tomorrow')}
+                              className="time-quick-preset"
+                            >
+                              <IconSunrise className="h-4 w-4" />
+                              <span>{t('task.quickTomorrow')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              title={t('task.quickNextWeek')}
+                              aria-label={t('task.quickNextWeek')}
+                              onClick={() => applyQuickDatePreset('next_week')}
+                              className="time-quick-preset"
+                            >
+                              <IconCalendar className="h-4 w-4" />
+                              <span>{t('task.quickNextWeek')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              title={t('task.quickTonight')}
+                              aria-label={t('task.quickTonight')}
+                              onClick={() => applyQuickDatePreset('tonight')}
+                              className="time-quick-preset"
+                            >
+                              <IconMoon className="h-4 w-4" />
+                              <span>{t('task.quickTonight')}</span>
+                            </button>
                           </div>
                         </div>
-                        <div className="space-y-2">
+                        <div className="time-panel-calendar-body">
                           <div>
                             {draftTimeRangeEnabled && (
-                              <div className="mb-1 inline-flex items-center rounded-full border border-slate-200 bg-white p-0.5">
+                              <div className="time-panel-range-switch">
                                 <button
                                   type="button"
                                   onClick={() => setDraftTimeRangeEditing('start')}
-                                  className={`rounded-full px-2 py-1 text-[11px] ${
-                                    draftTimeRangeEditing === 'start'
-                                      ? 'bg-sky-100 text-sky-700'
-                                      : 'text-slate-500 hover:bg-slate-50'
-                                  }`}
+                                  className={`time-panel-range-switch-btn${draftTimeRangeEditing === 'start' ? ' time-panel-range-switch-btn--active' : ''}`}
                                 >
                                   {t('task.startTime')}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setDraftTimeRangeEditing('end')}
-                                  className={`rounded-full px-2 py-1 text-[11px] ${
-                                    draftTimeRangeEditing === 'end'
-                                      ? 'bg-sky-100 text-sky-700'
-                                      : 'text-slate-500 hover:bg-slate-50'
-                                  }`}
+                                  className={`time-panel-range-switch-btn${draftTimeRangeEditing === 'end' ? ' time-panel-range-switch-btn--active' : ''}`}
                                 >
                                   {t('task.endTime')}
                                 </button>
@@ -4245,6 +4288,7 @@ function TaskList({ forcedView = '' }) {
                               inline
                               lunarOverlay
                               lunarMode={draftTimeCalendarMode === 'lunar'}
+                              timeSelectVariant="panel-row"
                               onChange={(nextValue) => {
                                 if (draftTimeRangeEnabled && draftTimeRangeEditing === 'end') {
                                   handleDraftEndDateTimeChange(nextValue);
@@ -4255,29 +4299,38 @@ function TaskList({ forcedView = '' }) {
                             />
                           </div>
                         </div>
-                        <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2">
+                        <div className="time-panel-footer">
                           <button
                             type="button"
-                            onClick={() => closeDetailPanelWithConfirm('time', false)}
-                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                            onClick={() => applyQuickDatePreset('clear')}
+                            className="time-panel-clear-btn"
                           >
-                            {t('common.cancel')}
+                            {t('task.clearDate')}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              closeDetailPanelWithConfirm('time', true);
-                              submitDraftImmediately('realtime_time');
-                            }}
-                            className="rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-                          >
-                            {t('common.confirm')}
-                          </button>
+                          <div className="time-panel-footer-actions">
+                            <button
+                              type="button"
+                              onClick={() => closeDetailPanelWithConfirm('time', false)}
+                              className="time-panel-cancel-btn"
+                            >
+                              {t('common.cancel')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                closeDetailPanelWithConfirm('time', true);
+                                submitDraftImmediately('realtime_time');
+                              }}
+                              className="time-panel-confirm-btn"
+                            >
+                              {t('common.confirm')}
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    )}
+                  )}
 
-                    {detailPanel === 'category' && (
+                  {detailPanel === 'category' && (
                       <div className="md-popover absolute right-0 top-10 z-20 w-[26rem] p-3">
                         <label className="form-label">{t('task.categories')}</label>
                         <div className="flex flex-wrap gap-2">
@@ -4306,9 +4359,9 @@ function TaskList({ forcedView = '' }) {
                           })}
                         </div>
                       </div>
-                    )}
+                  )}
 
-                    {detailPanel === 'recurrence' && (
+                  {detailPanel === 'recurrence' && (
                       <div className="md-popover absolute right-0 top-10 z-20 w-[24rem] p-3">
                         <div className="mb-2 flex items-center justify-between">
                           <label className="text-sm font-medium text-slate-700">{t('task.repeat')}</label>
@@ -4591,17 +4644,15 @@ function TaskList({ forcedView = '' }) {
                           </button>
                         </div>
                       </div>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
 
-              <div className="mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto p-3">
+              <div className="task-detail-body-scroll mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-auto px-8 py-6">
                 <div
-                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden rounded-lg bg-white px-3 py-2.5"
+                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
                   onClick={() => draftDescriptionEditorRef.current?.focus()}
                 >
-                  <label className="mb-1 block cursor-text text-xs font-medium text-slate-500">{t('task.description')}</label>
                   <LiveMarkdownEditor
                     ref={draftDescriptionEditorRef}
                     key={`task-editor-${selectedTask.id}`}
@@ -4619,12 +4670,6 @@ function TaskList({ forcedView = '' }) {
                     minHeight={280}
                   />
                 </div>
-              </div>
-
-              <div className="flex items-center justify-start border-t border-blue-100 px-4 py-3">
-                <button onClick={handleDeleteSelected} className="btn-danger text-sm">
-                  {t('common.delete')}
-                </button>
               </div>
             </div>
           )}
@@ -4724,6 +4769,11 @@ function TaskList({ forcedView = '' }) {
       {modalOpen && <TaskModal task={modalTask} onClose={handleModalClose} onSaved={handleTaskSaved} />}
     </div>
   );
+});
+
+function TaskList({ forcedView = '' }) {
+  const location = useLocation();
+  return <TaskListView forcedView={forcedView} routeLocation={location} />;
 }
 
 export default TaskList;

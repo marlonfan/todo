@@ -5,6 +5,16 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import {
+  Clock,
+  ExternalLink,
+  FileText,
+  MapPin,
+  Repeat2,
+  User,
+  Users,
+  X,
+} from 'lucide-react';
 import TaskModal from './TaskModal';
 import InfiniteCalendarCanvas from './InfiniteCalendarCanvas';
 import dayjs from 'dayjs';
@@ -163,6 +173,33 @@ function buildOccurrenceInstanceKey(taskID, instanceID, occurrenceDate) {
   const normalizedTaskID = Number(taskID || 0);
   if (!normalizedDate || !normalizedTaskID) return '';
   return `${normalizedTaskID}_${normalizedDate.replace(/-/g, '')}`;
+}
+
+function normalizeReadonlyText(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value).trim();
+  }
+  if (typeof value !== 'object') return '';
+  const preferredKeys = ['displayName', 'display_name', 'name', 'summary', 'title', 'email', 'text', 'value', 'url'];
+  for (const key of preferredKeys) {
+    const next = normalizeReadonlyText(value[key]);
+    if (next) return next;
+  }
+  return '';
+}
+
+function normalizeReadonlyPeople(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const people = [];
+  list.forEach((item) => {
+    const name = normalizeReadonlyText(item);
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    people.push(name);
+  });
+  return people;
 }
 
 function CalendarView() {
@@ -926,32 +963,55 @@ function CalendarView() {
     }
   };
 
-  const formatReadonlyEventDateTime = useCallback((value, allDay = false) => {
-    if (!value) return '';
-    const parsed = dayjs(value).tz(timezone);
-    if (!parsed.isValid()) return '';
-    if (allDay) return parsed.format('YYYY-MM-DD');
-    return parsed.format('YYYY-MM-DD HH:mm');
-  }, [timezone]);
+  const formatReadonlyEventSchedule = useCallback((startValue, endValue, allDay = false) => {
+    if (!startValue) return '';
+    const start = dayjs(startValue).tz(timezone);
+    if (!start.isValid()) return '';
+    const end = endValue ? dayjs(endValue).tz(timezone) : null;
+    const endValid = !!end && end.isValid();
+    const isZh = String(i18n.language || '').toLowerCase().startsWith('zh');
+    const today = dayjs().tz(timezone);
+    const datePart = isZh ? start.format('M月D日') : start.format('MMM D');
+    const relativePart = start.isSame(today, 'day') ? t('calendar.today') : '';
+    const datePrefix = [datePart, relativePart].filter(Boolean).join(isZh ? '，' : ', ');
+    if (allDay) {
+      if (endValid && !end.isSame(start, 'day')) {
+        const endDatePart = isZh ? end.format('M月D日') : end.format('MMM D');
+        return `${datePrefix} - ${endDatePart}, ${t('task.allDay')}`;
+      }
+      return `${datePrefix}, ${t('task.allDay')}`;
+    }
+    const startClock = start.format('HH:mm');
+    if (!endValid) return `${datePrefix}, ${startClock}`;
+    const endClock = end.format('HH:mm');
+    if (end.isSame(start, 'day')) {
+      return `${datePrefix}, ${startClock} - ${endClock}`;
+    }
+    const endDatePart = isZh ? end.format('M月D日') : end.format('MMM D');
+    return `${datePrefix}, ${startClock} - ${endDatePart}, ${endClock}`;
+  }, [i18n.language, t, timezone]);
 
   const buildReadonlyEventDetail = useCallback((eventLike) => {
     const ext = eventLike?.extendedProps || {};
     const allDay = !!eventLike?.allDay;
+    const source = String(ext?.source || 'caldav');
+    const provider = String(ext?.provider || 'caldav');
     return {
       title: String(eventLike?.title || ''),
       allDay,
-      startText: formatReadonlyEventDateTime(eventLike?.start, allDay),
-      endText: formatReadonlyEventDateTime(eventLike?.end, allDay),
-      description: String(ext?.description || '').trim(),
-      source: String(ext?.source || 'caldav'),
-      provider: String(ext?.provider || 'caldav'),
-      location: String(ext?.location || '').trim(),
-      organizer: String(ext?.organizer || '').trim(),
-      attendees: Array.isArray(ext?.attendees) ? ext.attendees.filter(Boolean) : [],
-      meetingLink: String(ext?.meetingLink || '').trim(),
+      scheduleText: formatReadonlyEventSchedule(eventLike?.start, eventLike?.end, allDay),
+      recurrenceText: normalizeReadonlyText(ext?.recurrenceText || ext?.recurrence || ext?.rrule || ext?.recurrenceRule || ext?.repeatRule),
+      description: normalizeReadonlyText(ext?.description),
+      source,
+      provider,
+      sourceLabel: provider === 'feishu' ? t('calendar.eventSourceFeishu') : t('calendar.externalSubscription'),
+      location: normalizeReadonlyText(ext?.location),
+      organizer: normalizeReadonlyText(ext?.organizer),
+      attendees: normalizeReadonlyPeople(ext?.attendees),
+      meetingLink: normalizeReadonlyText(ext?.meetingLink || ext?.url || ext?.htmlLink),
       taskId: Number(ext?.taskId || 0),
     };
-  }, [formatReadonlyEventDateTime]);
+  }, [formatReadonlyEventSchedule, t]);
 
   const openReadonlyEventModal = useCallback((eventLike) => {
     readonlyModalOpenedAtRef.current = Date.now();
@@ -1548,83 +1608,98 @@ function CalendarView() {
       )}
 
       {readonlyEventOpen && readonlyEventDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={handleReadonlyBackdropClick}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-[1px]" onClick={handleReadonlyBackdropClick}>
           <div
-            className="md-card w-full max-w-lg shadow-lg"
+            className="readonly-event-card mobile-scrollbar-hidden w-full max-w-[42rem] overflow-hidden"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-              <h3 className="flex min-w-0 items-center gap-1.5 pr-2 text-sm font-semibold text-slate-800">
-                <span className="truncate">{readonlyEventDetail.title || 'Untitled event'}</span>
-                {readonlyEventDetail.allDay && (
-                  <span
-                    className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-100 text-[10px] text-slate-500"
-                    title="All day"
-                    aria-label="All day"
-                  >
-                    ☀
-                  </span>
-                )}
-              </h3>
+            <div className="readonly-event-header">
+              <div className="min-w-0 flex-1">
+                <div className="readonly-event-source-pill">{readonlyEventDetail.sourceLabel}</div>
+                <h3 className="readonly-event-title">
+                  {readonlyEventDetail.title || t('calendar.untitledEvent')}
+                </h3>
+              </div>
               <button
                 type="button"
-                className="md-icon-btn h-7 w-7"
+                className="readonly-event-close"
                 onClick={requestCloseReadonlyEventModal}
+                aria-label={t('common.close')}
               >
-                ✕
+                <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="mobile-scrollbar-hidden max-h-[65vh] space-y-1.5 overflow-y-auto px-3 py-2.5 text-sm text-slate-700">
-              <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                <span className="font-medium text-slate-500">Source</span>
-                <span className="font-medium text-slate-800">{readonlyEventDetail.source || 'caldav'}</span>
-              </div>
-              <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                <span className="font-medium text-slate-500">Time</span>
-                <span className="font-medium text-slate-800">
-                  {(readonlyEventDetail.startText || '-') + ' - ' + (readonlyEventDetail.endText || '-')}
-                </span>
-              </div>
-              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.location && (
-                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                  <span className="font-medium text-slate-500">Location</span>
-                  <p className="break-words text-slate-700">{readonlyEventDetail.location}</p>
-                </div>
-              )}
-              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.organizer && (
-                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                  <span className="font-medium text-slate-500">Organizer</span>
-                  <p className="break-words text-slate-700">{readonlyEventDetail.organizer}</p>
-                </div>
-              )}
-              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.attendees.length > 0 && (
-                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                  <span className="font-medium text-slate-500">Attendees</span>
-                  <div className="mobile-scrollbar-hidden max-h-20 space-y-0.5 overflow-y-auto pr-1">
-                    {readonlyEventDetail.attendees.map((item) => (
-                      <p key={item} className="break-words text-slate-700">{item}</p>
-                    ))}
+
+            <div className="readonly-event-body mobile-scrollbar-hidden">
+              <div className="readonly-event-main-section">
+                {readonlyEventDetail.scheduleText && (
+                  <div className="readonly-event-info-row readonly-event-info-row--primary">
+                    <Clock className="readonly-event-info-icon" />
+                    <span>{readonlyEventDetail.scheduleText}</span>
                   </div>
-                </div>
+                )}
+                {readonlyEventDetail.recurrenceText && (
+                  <div className="readonly-event-info-row">
+                    <Repeat2 className="readonly-event-info-icon" />
+                    <span>{readonlyEventDetail.recurrenceText}</span>
+                  </div>
+                )}
+              </div>
+
+              {(readonlyEventDetail.organizer || readonlyEventDetail.attendees.length > 0) && (
+                <section className="readonly-event-section">
+                  <h4 className="readonly-event-section-title">
+                    {t('calendar.invitees', { count: readonlyEventDetail.attendees.length || 1 })}
+                  </h4>
+                  {readonlyEventDetail.organizer && (
+                    <div className="readonly-event-person-row">
+                      <User className="readonly-event-info-icon" />
+                      <span>{readonlyEventDetail.organizer}</span>
+                      <span className="readonly-event-muted-chip">{t('calendar.organizer')}</span>
+                    </div>
+                  )}
+                  {readonlyEventDetail.attendees.length > 0 && (
+                    <div className="readonly-event-person-list">
+                      <Users className="readonly-event-info-icon readonly-event-person-list-icon" />
+                      <div className="mobile-scrollbar-hidden max-h-[15rem] min-w-0 overflow-y-auto pr-1">
+                        {readonlyEventDetail.attendees.map((item) => (
+                          <p key={item} className="readonly-event-person-name">{item}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </section>
               )}
-              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.meetingLink && isHttpLink(readonlyEventDetail.meetingLink) && (
-                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                  <span className="font-medium text-slate-500">Meeting</span>
-                  <a
-                    href={readonlyEventDetail.meetingLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block break-all text-sky-700 hover:underline"
-                  >
-                    {readonlyEventDetail.meetingLink}
-                  </a>
-                </div>
+
+              {(readonlyEventDetail.location || (readonlyEventDetail.meetingLink && isHttpLink(readonlyEventDetail.meetingLink))) && (
+                <section className="readonly-event-section">
+                  {readonlyEventDetail.location && (
+                    <div className="readonly-event-info-row">
+                      <MapPin className="readonly-event-info-icon" />
+                      <span>{readonlyEventDetail.location}</span>
+                    </div>
+                  )}
+                  {readonlyEventDetail.meetingLink && isHttpLink(readonlyEventDetail.meetingLink) && (
+                    <a
+                      href={readonlyEventDetail.meetingLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="readonly-event-link-row"
+                    >
+                      <ExternalLink className="readonly-event-info-icon" />
+                      <span>{readonlyEventDetail.meetingLink}</span>
+                    </a>
+                  )}
+                </section>
               )}
-              {readonlyEventDetail.provider === 'feishu' && readonlyEventDetail.description && (
-                <div className="grid grid-cols-[58px_1fr] items-start gap-2 px-1 py-0.5 text-xs">
-                  <span className="font-medium text-slate-500">Description</span>
-                  <p className="whitespace-pre-wrap break-words text-slate-700">{readonlyEventDetail.description}</p>
-                </div>
+
+              {readonlyEventDetail.description && (
+                <section className="readonly-event-section">
+                  <div className="readonly-event-info-row readonly-event-info-row--top">
+                    <FileText className="readonly-event-info-icon" />
+                    <p className="whitespace-pre-wrap break-words">{readonlyEventDetail.description}</p>
+                  </div>
+                </section>
               )}
             </div>
           </div>
@@ -1697,4 +1772,4 @@ function CalendarView() {
   );
 }
 
-export default CalendarView;
+export default React.memo(CalendarView);

@@ -3,7 +3,7 @@ import { Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-r
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import CalendarView from './CalendarView';
-import TaskList from './TaskList';
+import TaskList, { TaskListView } from './TaskList';
 import CategoryManager from './CategoryManager';
 import Settings from './Settings';
 import SearchDialog from './SearchDialog';
@@ -211,7 +211,6 @@ function MainLayout({ user, setUser }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const [activeTab, setActiveTab] = useState('calendar');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [dragOverCategoryID, setDragOverCategoryID] = useState(0);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
@@ -222,6 +221,10 @@ function MainLayout({ user, setUser }) {
   const [resolveSelections, setResolveSelections] = useState({});
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [resolveConflictError, setResolveConflictError] = useState('');
+  const [workspaceVisited, setWorkspaceVisited] = useState(() => ({
+    calendar: location.pathname === '/',
+    tasks: location.pathname === '/tasks',
+  }));
   const initialLocationRef = useRef({
     pathname: location.pathname,
     search: location.search,
@@ -240,15 +243,14 @@ function MainLayout({ user, setUser }) {
   }), []);
 
   useEffect(() => {
-    // 根据当前路径设置活动标签
-    const path = location.pathname;
-    if (path === '/') setActiveTab('calendar');
-    else if (path === '/tasks') setActiveTab('tasks');
-    else if (path === '/search') setActiveTab('tasks');
-    else if (path === '/categories') setActiveTab('categories');
-    else if (path === '/settings') setActiveTab('settings');
     setMobileMenuOpen(false);
-  }, [location]);
+    if (location.pathname === '/' || location.pathname === '/tasks') {
+      setWorkspaceVisited((prev) => {
+        const key = location.pathname === '/' ? 'calendar' : 'tasks';
+        return prev[key] ? prev : { ...prev, [key]: true };
+      });
+    }
+  }, [location.pathname, location.search]);
 
   useEffect(() => onUIPrefsChanged(() => setShowCategoryEmoji(getShowCategoryEmoji())), []);
 
@@ -401,7 +403,29 @@ function MainLayout({ user, setUser }) {
   }, [location.pathname, location.search, t]);
 
   const navItemClass = (active) => `md-nav-item ${active ? 'md-nav-item-active' : 'md-nav-item-idle'}`;
+  const appInitial = String(t('app.name') || 'T').trim().slice(0, 1).toUpperCase();
   const hideMobileHeader = location.pathname === '/';
+  const taskPanelLocationRef = useRef(
+    location.pathname === '/tasks'
+      ? location
+      : { pathname: '/tasks', search: '?view=all', hash: '', state: null, key: 'tasks-default' }
+  );
+  if (location.pathname === '/tasks') {
+    taskPanelLocationRef.current = location;
+  }
+  const activeTab = location.pathname === '/'
+    ? 'calendar'
+    : (location.pathname === '/tasks' || location.pathname === '/search')
+      ? 'tasks'
+      : location.pathname === '/categories'
+        ? 'categories'
+        : location.pathname === '/settings'
+          ? 'settings'
+          : '';
+  const showCalendarWorkspace = location.pathname === '/';
+  const showTaskWorkspace = location.pathname === '/tasks';
+  const shouldRenderCalendarWorkspace = workspaceVisited.calendar || showCalendarWorkspace;
+  const shouldRenderTaskWorkspace = workspaceVisited.tasks || showTaskWorkspace;
   const activeSyncConflict = syncConflicts[0] || null;
   const syncConflictMoreCount = Math.max(0, syncConflicts.length - 1);
   const resolvingConflictItem = syncConflicts.find(
@@ -638,23 +662,28 @@ function MainLayout({ user, setUser }) {
         className={`sidebar flex flex-col fixed md:static inset-y-0 left-0 z-40 transform transition-transform duration-200
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
-        <div className="m-3 rounded-md border border-border bg-white px-3 py-3 shadow-sm">
-          <h1 className="text-base font-semibold text-slate-950">{t('app.name')}</h1>
-          <p className="truncate text-xs text-slate-500">{user.username}</p>
+        <div className="mx-5 mb-5 mt-6 flex h-12 items-center gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-blue-600 text-sm font-semibold text-white shadow-sm">
+            {appInitial}
+          </div>
+          <div className="flex min-w-0 flex-col justify-center">
+            <h1 className="truncate text-lg font-semibold leading-6 text-slate-950">{t('app.name')}</h1>
+            <p className="-mt-0.5 truncate text-sm leading-5 text-slate-500">{user.username}</p>
+          </div>
         </div>
 
-        <nav className="flex-1 space-y-1 p-3">
+        <nav className="flex-1 space-y-1.5 px-5 pb-4">
           <Link
             to="/"
             className={navItemClass(activeTab === 'calendar')}
           >
             <span className="inline-flex min-w-0 items-center gap-2">
-              <IconCalendar className="h-4 w-4 shrink-0" />
+              <IconCalendar className="h-[18px] w-[18px] shrink-0" />
               <span className="truncate">{t('nav.calendar')}</span>
             </span>
           </Link>
 
-          <div className="mt-4 px-3 text-[11px] font-semibold uppercase tracking-wide text-blue-700/65">
+          <div className="mt-5 px-3 pb-1 text-xs font-semibold text-slate-400">
             {t('task.listView')}
           </div>
           {taskNavItems.map((item) => {
@@ -668,7 +697,7 @@ function MainLayout({ user, setUser }) {
                   className={`${navItemClass(location.pathname === '/search')} w-full text-left`}
                 >
                   <span className="inline-flex min-w-0 items-center gap-2">
-                    <ItemIcon className="h-4 w-4 shrink-0" />
+                    <ItemIcon className="h-[18px] w-[18px] shrink-0" />
                     <span className="truncate">{item.label}</span>
                   </span>
                 </button>
@@ -681,51 +710,53 @@ function MainLayout({ user, setUser }) {
                 className={navItemClass(isTaskNavActive(item.to))}
               >
                 <span className="inline-flex min-w-0 items-center gap-2">
-                  <ItemIcon className="h-4 w-4 shrink-0" />
+                  <ItemIcon className="h-[18px] w-[18px] shrink-0" />
                   <span className="truncate">{item.label}</span>
                 </span>
               </Link>
             );
           })}
 
-          <div className="mt-4 space-y-1">
-            {categories.map((cat) => (
-              <Link
-                key={cat.id}
-                to={`/tasks?category_id=${cat.id}`}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setDragOverCategoryID(cat.id);
-                }}
-                onDragLeave={() => setDragOverCategoryID(0)}
-                onDrop={(event) => handleDropToCategory(event, cat.id)}
-                className={`md-nav-item ${
-                  isTaskNavActive(`/tasks?category_id=${cat.id}`)
-                    ? 'md-nav-item-active'
-                    : dragOverCategoryID === cat.id
-                      ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-300'
-                      : 'md-nav-item-idle'
-                }`}
-              >
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  {showCategoryEmoji && cat.emoji ? (
-                    <span className="shrink-0">{cat.emoji}</span>
-                  ) : (
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                  )}
-                  <span className="truncate">{cat.name}</span>
-                </span>
-              </Link>
-            ))}
-          </div>
+          {categories.length > 0 && (
+            <div className="mt-4 space-y-1.5 border-t border-slate-200 pt-3">
+              {categories.map((cat) => (
+                <Link
+                  key={cat.id}
+                  to={`/tasks?category_id=${cat.id}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDragOverCategoryID(cat.id);
+                  }}
+                  onDragLeave={() => setDragOverCategoryID(0)}
+                  onDrop={(event) => handleDropToCategory(event, cat.id)}
+                  className={`md-nav-item ${
+                    isTaskNavActive(`/tasks?category_id=${cat.id}`)
+                      ? 'md-nav-item-active'
+                      : dragOverCategoryID === cat.id
+                        ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-300'
+                        : 'md-nav-item-idle'
+                  }`}
+                >
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    {showCategoryEmoji && cat.emoji ? (
+                      <span className="shrink-0">{cat.emoji}</span>
+                    ) : (
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
+                    )}
+                    <span className="truncate">{cat.name}</span>
+                  </span>
+                </Link>
+              ))}
+            </div>
+          )}
 
-          <div className="mt-4 border-t border-border pt-3">
+          <div className={`${categories.length > 0 ? 'mt-4' : 'mt-5'} border-t border-slate-200 pt-3`}>
             <Link
               to="/tasks?view=completed"
               className={navItemClass(isTaskNavActive('/tasks?view=completed'))}
             >
               <span className="inline-flex min-w-0 items-center gap-2">
-                <IconStatus className="h-4 w-4 shrink-0" />
+                <IconStatus className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">{t('task.completedTasks')}</span>
               </span>
             </Link>
@@ -734,7 +765,7 @@ function MainLayout({ user, setUser }) {
               className={navItemClass(isTaskNavActive('/tasks?view=deleted'))}
             >
               <span className="inline-flex min-w-0 items-center gap-2">
-                <IconTrash className="h-4 w-4 shrink-0" />
+                <IconTrash className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">{t('task.deletedTasks')}</span>
               </span>
             </Link>
@@ -743,7 +774,7 @@ function MainLayout({ user, setUser }) {
               className={navItemClass(activeTab === 'categories')}
             >
               <span className="inline-flex min-w-0 items-center gap-2">
-                <IconTag className="h-4 w-4 shrink-0" />
+                <IconTag className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">{t('category.manageCategories')}</span>
               </span>
             </Link>
@@ -754,19 +785,19 @@ function MainLayout({ user, setUser }) {
             className={navItemClass(activeTab === 'settings')}
           >
             <span className="inline-flex min-w-0 items-center gap-2">
-              <IconSettings className="h-4 w-4 shrink-0" />
+              <IconSettings className="h-[18px] w-[18px] shrink-0" />
               <span className="truncate">{t('nav.settings')}</span>
             </span>
           </Link>
         </nav>
 
-        <div className="border-t border-border p-3">
+        <div className="border-t border-slate-200 p-5">
           <button
             onClick={handleLogout}
             className="md-nav-item md-nav-item-idle w-full text-left"
           >
             <span className="inline-flex min-w-0 items-center gap-2">
-              <IconLogout className="h-4 w-4 shrink-0" />
+              <IconLogout className="h-[18px] w-[18px] shrink-0" />
               <span className="truncate">{t('nav.logout')}</span>
             </span>
           </button>
@@ -775,13 +806,16 @@ function MainLayout({ user, setUser }) {
 
       {/* Main Content */}
       <div className="relative flex-1 overflow-hidden pb-14 md:pb-0">
-        {/* CalendarView 和 TaskList 常驻，用 opacity-0 切换（而非 visibility:hidden），避免 GPU 合成层泄漏导致 backdrop-blur 闪烁 */}
-        <div className={`absolute inset-0 ${location.pathname === '/' ? 'z-10' : 'opacity-0 pointer-events-none'}`}>
-          <CalendarView />
-        </div>
-        <div className={`absolute inset-0 ${location.pathname === '/tasks' ? 'z-10' : 'opacity-0 pointer-events-none'}`}>
-          <TaskList />
-        </div>
+        {shouldRenderCalendarWorkspace && (
+          <div className={`absolute inset-0 ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
+            <CalendarView />
+          </div>
+        )}
+        {shouldRenderTaskWorkspace && (
+          <div className={`absolute inset-0 ${showTaskWorkspace ? 'z-10' : 'hidden'}`}>
+            <TaskListView routeLocation={taskPanelLocationRef.current} />
+          </div>
+        )}
 
         <Routes>
           <Route path="/search" element={<TaskList forcedView="search" />} />

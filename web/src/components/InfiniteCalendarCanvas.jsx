@@ -1501,7 +1501,7 @@ export default function InfiniteCalendarCanvas({
         },
         className: `canvas-event absolute overflow-hidden rounded-md border border-l-[3px] px-1.5 py-0.5 text-[11px] shadow-sm ring-2 ring-white ${
           readonly
-            ? 'border-[hsl(var(--blue-border))] border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue))] text-slate-700'
+            ? 'border-slate-300 border-l-slate-400 bg-slate-100 text-slate-700'
             : status === 'completed'
               ? 'border-emerald-200 border-l-emerald-600 bg-emerald-100 text-emerald-900 line-through'
               : 'border-[hsl(var(--blue-border))] border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue))] text-slate-900'
@@ -1688,7 +1688,7 @@ export default function InfiniteCalendarCanvas({
             data-event-id={item.event.id}
             className={`canvas-event absolute z-30 overflow-hidden rounded-sm border px-1 text-[10px] leading-tight shadow-sm ${
               readonly
-                ? 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-700'
+                ? 'border-slate-300 bg-slate-100 text-slate-700'
                 : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
             } ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
             style={{
@@ -1898,7 +1898,7 @@ export default function InfiniteCalendarCanvas({
             data-event-key={item.eventKey}
             data-event-id={item.event.id}
             className={`canvas-event absolute h-5 overflow-hidden rounded-sm border px-1 text-left text-[10px] shadow-sm focus:outline-none focus-visible:outline-none ${
-              readonly ? 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-700' : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
+              readonly ? 'border-slate-300 bg-slate-100 text-slate-700' : 'border-[hsl(var(--blue-border))] bg-[hsl(var(--soft-blue))] text-slate-900'
             }`}
             style={{
               left: x,

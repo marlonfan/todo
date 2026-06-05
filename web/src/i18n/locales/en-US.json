@@ -24,6 +24,7 @@
     "back": "Back",
     "search": "Search",
     "filter": "Filter",
+    "more": "More",
     "all": "All"
   },
   "auth": {
@@ -99,6 +100,7 @@
     "calendarSolar": "Solar",
     "calendarLunar": "Lunar",
     "timePoint": "Single time",
+    "timePanelDate": "Date",
     "timeRange": "Time range",
     "timeField": "Time",
     "lunarYearly": "Lunar yearly",
@@ -331,6 +333,11 @@
     "recurringMoveConfirm": "This is a recurring task. The change affects the whole series. Continue?",
     "recurringResizeConfirm": "This is a recurring task. The change affects the whole series. Continue?",
     "loadTaskFailed": "Failed to load task details",
+    "untitledEvent": "Untitled event",
+    "externalSubscription": "External subscription",
+    "eventSourceFeishu": "Feishu calendar",
+    "invitees": "{{count}} invitees",
+    "organizer": "Organizer",
     "weekday": {
       "mo": "Mon",
       "tu": "Tue",

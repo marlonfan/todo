@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
@@ -156,39 +156,48 @@ function getNearestHalfHourOption() {
   return normalizeHalfHourValue(now.format('HH:mm'), '09:00');
 }
 
-function HalfHourTimeSelect({ value = '', onChange }) {
+function getTimeSelectMenuStyle(triggerElement) {
+  if (typeof window === 'undefined' || !triggerElement) return null;
+  const rect = triggerElement.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || 0;
+  const viewportWidth = window.innerWidth || 0;
+  const spaceBelow = Math.max(0, viewportHeight - rect.bottom - 8);
+  const spaceAbove = Math.max(0, rect.top - 8);
+  const preferUpward = spaceBelow < 200 && spaceAbove > spaceBelow;
+  const availableHeight = preferUpward ? spaceAbove : spaceBelow;
+  const maxHeight = Math.max(110, Math.min(260, availableHeight));
+  const width = Math.max(120, rect.width);
+  let left = rect.left;
+  if (left + width > viewportWidth - 8) {
+    left = Math.max(8, viewportWidth - width - 8);
+  }
+  const top = preferUpward
+    ? Math.max(8, rect.top - maxHeight - 4)
+    : Math.max(8, rect.bottom + 4);
+  return {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    width: `${Math.round(width)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+  };
+}
+
+function HalfHourTimeSelect({ value = '', onChange, variant = '' }) {
   const normalized = useMemo(() => normalizeHalfHourValue(value), [value]);
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [menuStyle, setMenuStyle] = useState(null);
+  const variantClass = variant ? ` task-time-selectbox--${variant}` : '';
+  const menuVariantClass = variant ? ` task-time-selectbox-menu--${variant}` : '';
 
-  const refreshMenuPosition = useMemo(() => () => {
-    if (typeof window === 'undefined') return;
+  const refreshMenuPosition = useCallback(() => {
     if (!open || !triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const viewportHeight = window.innerHeight || 0;
-    const viewportWidth = window.innerWidth || 0;
-    const spaceBelow = Math.max(0, viewportHeight - rect.bottom - 8);
-    const spaceAbove = Math.max(0, rect.top - 8);
-    const preferUpward = spaceBelow < 200 && spaceAbove > spaceBelow;
-    const availableHeight = preferUpward ? spaceAbove : spaceBelow;
-    const maxHeight = Math.max(110, Math.min(260, availableHeight));
-    const width = Math.max(120, rect.width);
-    let left = rect.left;
-    if (left + width > viewportWidth - 8) {
-      left = Math.max(8, viewportWidth - width - 8);
+    const nextStyle = getTimeSelectMenuStyle(triggerRef.current);
+    if (nextStyle) {
+      setMenuStyle(nextStyle);
     }
-    const top = preferUpward
-      ? Math.max(8, rect.top - maxHeight - 4)
-      : Math.max(8, rect.bottom + 4);
-    setMenuStyle({
-      left: `${Math.round(left)}px`,
-      top: `${Math.round(top)}px`,
-      width: `${Math.round(width)}px`,
-      maxHeight: `${Math.round(maxHeight)}px`,
-    });
   }, [open]);
 
   useEffect(() => {
@@ -241,13 +250,23 @@ function HalfHourTimeSelect({ value = '', onChange }) {
     setOpen(false);
   };
 
+  const handleTriggerClick = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setMenuStyle(getTimeSelectMenuStyle(triggerRef.current));
+    setOpen(true);
+  };
+
   return (
-    <div className="task-time-selectbox" ref={rootRef}>
+    <div className={`task-time-selectbox${variantClass}`} ref={rootRef}>
       <button
         type="button"
         ref={triggerRef}
         className="task-time-selectbox-trigger"
-        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        onClick={handleTriggerClick}
       >
         <span className="task-time-selectbox-value">
           <IconClock className="task-time-selectbox-icon h-4 w-4" />
@@ -255,12 +274,12 @@ function HalfHourTimeSelect({ value = '', onChange }) {
         </span>
         <span className={`task-time-selectbox-chevron${open ? ' task-time-selectbox-chevron--open' : ''}`}>▾</span>
       </button>
-      {open && typeof document !== 'undefined' && createPortal(
+      {open && menuStyle && typeof document !== 'undefined' && createPortal(
         <div
-          className="task-time-selectbox-menu task-time-selectbox-menu--floating"
+          className={`task-time-selectbox-menu task-time-selectbox-menu--floating${menuVariantClass}`}
           role="listbox"
           ref={menuRef}
-          style={menuStyle || undefined}
+          style={menuStyle}
         >
           {HALF_HOUR_TIME_OPTIONS.map((option) => (
             <button
@@ -343,6 +362,7 @@ function TaskDatePicker({
   lunarOverlay = false,
   lunarMode = false,
   onDateSelected,
+  timeSelectVariant = '',
 }) {
   const { i18n, t } = useTranslation();
   const selected = useMemo(() => parsePickerValue(value, allDay), [allDay, value]);
@@ -636,6 +656,7 @@ function TaskDatePicker({
               <HalfHourTimeSelect
                 value={resolvedTimeValue}
                 onChange={handleLunarTimeChange}
+                variant={timeSelectVariant}
               />
             </div>
           )}
@@ -708,6 +729,7 @@ function TaskDatePicker({
               <HalfHourTimeSelect
                 value={resolvedTimeValue}
                 onChange={handleSolarTimeChange}
+                variant={timeSelectVariant}
               />
             </div>
           )}

@@ -24,6 +24,7 @@
     "back": "返回",
     "search": "搜索",
     "filter": "筛选",
+    "more": "更多",
     "all": "全部"
   },
   "auth": {
@@ -99,6 +100,7 @@
     "calendarSolar": "公历",
     "calendarLunar": "农历",
     "timePoint": "时间点",
+    "timePanelDate": "日期",
     "timeRange": "时间段",
     "timeField": "时间",
     "lunarYearly": "每年农历",
@@ -331,6 +333,11 @@
     "recurringMoveConfirm": "这是重复任务，修改将影响整个系列。确定继续吗？",
     "recurringResizeConfirm": "这是重复任务，修改将影响整个系列。确定继续吗？",
     "loadTaskFailed": "加载任务详情失败",
+    "untitledEvent": "未命名日程",
+    "externalSubscription": "外部订阅",
+    "eventSourceFeishu": "飞书日程",
+    "invitees": "{{count}} 个邀请对象",
+    "organizer": "组织者",
     "weekday": {
       "mo": "一",
       "tu": "二",
