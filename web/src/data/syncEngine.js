@@ -311,7 +311,7 @@ async function runTaskReconcileIfNeeded(outboxOps = [], options = {}) {
   const res = await tasksAPI.list();
   const serverTasks = Array.isArray(res?.data) ? res.data : [];
   const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
-  const reconciledTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs });
+  const reconciledTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs, outboxOps });
 
   queryClientRef.setQueryData(queryKeys.tasks.all, reconciledTasks);
   await clearTasksAndSet(reconciledTasks);
@@ -593,6 +593,12 @@ async function pullServerData() {
   let nextCursor = String(lastCursor || '');
   const categories = Array.isArray(categoriesRes?.data) ? categoriesRes.data : [];
   const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
+  const outboxTaskIDs = new Set(
+    (Array.isArray(outboxOps) ? outboxOps : [])
+      .filter((op) => op?.entity_type === 'task')
+      .map((op) => Number(op?.entity_id || 0))
+      .filter((id) => Number.isFinite(id) && id !== 0)
+  );
   const changedTaskIDs = new Set();
   const deletedTaskIDs = new Set();
 
@@ -638,7 +644,8 @@ async function pullServerData() {
       const state = String(local.sync_state || '');
       const localTs = getTaskTimestamp(local);
       const serverTs = getTaskTimestamp(task);
-      if (state === 'pending' || state === 'syncing' || (state === 'error' && localTs > serverTs)) {
+      const hasQueuedMutation = outboxTaskIDs.has(taskID);
+      if (hasQueuedMutation && (state === 'pending' || state === 'syncing' || (state === 'error' && localTs > serverTs))) {
         byID.set(taskID, {
           ...local,
           updated_at: task?.updated_at || local.updated_at,

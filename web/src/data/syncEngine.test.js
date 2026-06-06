@@ -3,14 +3,40 @@ import assert from 'node:assert/strict';
 import { mergeServerAndLocalTasks } from './taskMerge.js';
 import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
 
-test('mergeServerAndLocalTasks keeps unsynced local task when server does not have it', () => {
+test('mergeServerAndLocalTasks keeps unsynced local task when server does not have it and outbox has mutation', () => {
   const merged = mergeServerAndLocalTasks(
     [],
-    [{ id: 10, title: 'local', sync_state: 'pending', client_updated_at: '2026-03-02T08:00:00.000Z' }]
+    [{ id: 10, title: 'local', sync_state: 'pending', client_updated_at: '2026-03-02T08:00:00.000Z' }],
+    {
+      outboxOps: [{ entity_type: 'task', entity_id: 10, op_type: 'update' }],
+    }
   );
 
   assert.equal(merged.length, 1);
   assert.equal(merged[0].id, 10);
+});
+
+test('mergeServerAndLocalTasks discards orphan pending local draft without outbox mutation', () => {
+  const merged = mergeServerAndLocalTasks(
+    [{ id: 12, title: 'server', revision: 3, updated_at: '2026-03-02T09:00:00.000Z' }],
+    [{ id: 12, title: 'discarded local draft', sync_state: 'pending', client_updated_at: '2026-03-02T10:00:00.000Z' }],
+    { outboxOps: [] }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 12);
+  assert.equal(merged[0].title, 'server');
+  assert.equal(merged[0].sync_state, 'synced');
+});
+
+test('mergeServerAndLocalTasks drops orphan pending local task missing on server', () => {
+  const merged = mergeServerAndLocalTasks(
+    [],
+    [{ id: 13, title: 'orphan local draft', sync_state: 'pending', client_updated_at: '2026-03-02T10:00:00.000Z' }],
+    { outboxOps: [] }
+  );
+
+  assert.equal(merged.length, 0);
 });
 
 test('mergeServerAndLocalTasks filters server task that is pending delete in outbox', () => {

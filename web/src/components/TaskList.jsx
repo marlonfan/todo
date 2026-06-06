@@ -216,6 +216,14 @@ function isDetailPanelFloatingLayerTarget(target) {
   );
 }
 
+function shouldFocusDescriptionEditorFromShellClick(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return true;
+  return !target.closest(
+    'button, input, textarea, select, a, [contenteditable="true"], [role="button"], [role="menuitem"], .task-ai-description'
+  );
+}
+
 function getDetailPanelFloatingStyle(triggerElement, panelName) {
   if (typeof window === 'undefined' || !triggerElement) return undefined;
   const rootFontSize = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
@@ -1288,6 +1296,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const isSubmittingDraftRef = useRef(false);
   const flushDraftQueueRef = useRef(Promise.resolve());
   const flushDraftOnLeaveRef = useRef(null);
+  const discardDraftOnUnloadUntilRef = useRef(0);
+  const discardDraftOnUnloadTimerRef = useRef(0);
   const detailPanelSnapshotRef = useRef(null);
   const switchTaskRequestRef = useRef(0);
   const activeRenderTaskIDRef = useRef(0);
@@ -1308,6 +1318,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   useEffect(() => () => {
     detailBodyScrollCleanupRef.current?.();
     detailBodyScrollCleanupRef.current = null;
+    if (discardDraftOnUnloadTimerRef.current) {
+      window.clearTimeout(discardDraftOnUnloadTimerRef.current);
+      discardDraftOnUnloadTimerRef.current = 0;
+    }
   }, []);
 
   useEffect(() => {
@@ -3407,6 +3421,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   const flushDraftOnLeave = useCallback((submitSource = 'leave', options = {}) => {
     const runFlush = async () => {
+      if (Date.now() < Number(discardDraftOnUnloadUntilRef.current || 0)) {
+        pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+        setPendingSubmitTaskID(0);
+        logDraftSwitchDebug('draft.flush.skipDiscardOnUnload', {
+          submit_source: submitSource,
+        });
+        return;
+      }
       const pending = pendingDraftSubmitRef.current;
       const pendingTaskID = Number(pending?.taskID || 0);
       const pendingPayload = pending?.payload && typeof pending.payload === 'object' ? pending.payload : null;
@@ -3595,6 +3617,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         || isSubmittingDraftRef.current
       );
       if (!hasUnsyncedChanges) return;
+      discardDraftOnUnloadUntilRef.current = Date.now() + 10000;
+      if (discardDraftOnUnloadTimerRef.current) {
+        window.clearTimeout(discardDraftOnUnloadTimerRef.current);
+      }
+      discardDraftOnUnloadTimerRef.current = window.setTimeout(() => {
+        discardDraftOnUnloadUntilRef.current = 0;
+        discardDraftOnUnloadTimerRef.current = 0;
+      }, 10000);
       event.preventDefault();
       event.returnValue = '';
     };
@@ -4935,7 +4965,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
               <div ref={bindDetailBodyScroll} className="task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-8 py-6">
                 <div
                   className="task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
-                  onClick={() => draftDescriptionEditorRef.current?.focus()}
+                  onClick={(event) => {
+                    if (shouldFocusDescriptionEditorFromShellClick(event)) {
+                      draftDescriptionEditorRef.current?.focus();
+                    }
+                  }}
                 >
                   <TaskDescriptionAI
                     task={selectedTaskDraftForAI}

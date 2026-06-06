@@ -50,6 +50,72 @@ function logEditorDebug(scope, payload = {}) {
   console.info('[todo-draft-debug]', JSON.stringify(entry));
 }
 
+function isVditorTaskCheckbox(target) {
+  if (!(target instanceof Element)) return false;
+  return !!target.matches('input[type="checkbox"]') && !!target.closest('.vditor-task');
+}
+
+function isScrollableElement(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  if (
+    element.classList.contains('task-detail-body-scroll')
+    || element.classList.contains('vditor-content')
+    || element.classList.contains('vditor-ir')
+  ) {
+    return true;
+  }
+  const style = window.getComputedStyle(element);
+  const scrollableY = /(auto|scroll|overlay)/.test(style.overflowY) && element.scrollHeight > element.clientHeight;
+  const scrollableX = /(auto|scroll|overlay)/.test(style.overflowX) && element.scrollWidth > element.clientWidth;
+  return scrollableY || scrollableX;
+}
+
+function captureScrollSnapshot(target) {
+  if (typeof document === 'undefined') return [];
+  const snapshot = [];
+  const seen = new Set();
+  const add = (element) => {
+    if (!(element instanceof HTMLElement) || seen.has(element)) return;
+    if (!isScrollableElement(element) && !element.scrollTop && !element.scrollLeft) return;
+    seen.add(element);
+    snapshot.push({
+      element,
+      left: element.scrollLeft,
+      top: element.scrollTop,
+    });
+  };
+
+  let node = target instanceof Element ? target : null;
+  while (node) {
+    add(node);
+    node = node.parentElement;
+  }
+  add(document.scrollingElement);
+  return snapshot;
+}
+
+function restoreScrollSnapshot(snapshot) {
+  (Array.isArray(snapshot) ? snapshot : []).forEach((item) => {
+    const element = item?.element;
+    if (!(element instanceof HTMLElement)) return;
+    element.scrollLeft = Number(item.left || 0);
+    element.scrollTop = Number(item.top || 0);
+  });
+}
+
+function scheduleScrollSnapshotRestore(snapshot) {
+  if (typeof window === 'undefined' || !Array.isArray(snapshot) || snapshot.length === 0) return;
+  const restore = () => restoreScrollSnapshot(snapshot);
+  restore();
+  window.setTimeout(restore, 0);
+  window.setTimeout(restore, 60);
+  window.setTimeout(restore, 160);
+  window.requestAnimationFrame?.(() => {
+    restore();
+    window.requestAnimationFrame?.(restore);
+  });
+}
+
 const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   value,
   onChange,
@@ -76,6 +142,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   const appliedExternalVersionRef = useRef(0);
   const onChangeRef = useRef(onChange);
   const onSaveShortcutRef = useRef(onSaveShortcut);
+  const taskCheckboxScrollSnapshotRef = useRef(null);
   const mountIDRef = useRef(`vditor-${Math.random().toString(36).slice(2, 11)}`);
 
   useEffect(() => {
@@ -142,6 +209,33 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     );
     const handleFastInput = (event) => {
       captureFastInputValue(event?.type || '');
+      const taskSnapshot = taskCheckboxScrollSnapshotRef.current;
+      if (taskSnapshot && Date.now() - Number(taskSnapshot.at || 0) < 1000) {
+        scheduleScrollSnapshotRestore(taskSnapshot.snapshot);
+      }
+    };
+    const preserveTaskCheckboxScroll = (event, options = {}) => {
+      if (!isVditorTaskCheckbox(event.target)) return;
+      const snapshot = captureScrollSnapshot(event.target);
+      taskCheckboxScrollSnapshotRef.current = {
+        at: Date.now(),
+        snapshot,
+      };
+      if (options.preventFocus && event.cancelable) {
+        event.preventDefault();
+      }
+      scheduleScrollSnapshotRestore(snapshot);
+      logEditorDebug('editor.taskCheckbox.scrollPreserve', {
+        event_type: event.type,
+        snapshot_count: snapshot.length,
+        prevent_focus: !!options.preventFocus,
+      });
+    };
+    const handleTaskCheckboxMouseDown = (event) => {
+      preserveTaskCheckboxScroll(event, { preventFocus: true });
+    };
+    const handleTaskCheckboxClick = (event) => {
+      preserveTaskCheckboxScroll(event);
     };
     const bindFastInput = () => {
       if (unbindFastInput) return;
@@ -151,11 +245,15 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       editable.addEventListener('input', handleFastInput, true);
       editable.addEventListener('keyup', handleFastInput, true);
       editable.addEventListener('compositionend', handleFastInput, true);
+      mountRef.current?.addEventListener('mousedown', handleTaskCheckboxMouseDown, true);
+      mountRef.current?.addEventListener('click', handleTaskCheckboxClick, true);
       unbindFastInput = () => {
         editable.removeEventListener('beforeinput', handleFastInput, true);
         editable.removeEventListener('input', handleFastInput, true);
         editable.removeEventListener('keyup', handleFastInput, true);
         editable.removeEventListener('compositionend', handleFastInput, true);
+        mountRef.current?.removeEventListener('mousedown', handleTaskCheckboxMouseDown, true);
+        mountRef.current?.removeEventListener('click', handleTaskCheckboxClick, true);
       };
     };
     const initEditor = async () => {

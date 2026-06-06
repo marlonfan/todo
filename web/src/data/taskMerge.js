@@ -32,8 +32,19 @@ export function collectPendingDeleteTaskIDs(outboxOps) {
   return pending;
 }
 
+function hasPendingOutboxForTask(outboxOps, taskID) {
+  const numericID = Number(taskID || 0);
+  if (!numericID) return false;
+  return (Array.isArray(outboxOps) ? outboxOps : []).some((op) => (
+    op
+    && op.entity_type === 'task'
+    && Number(op.entity_id || 0) === numericID
+  ));
+}
+
 export function mergeServerAndLocalTasks(serverTasks, localTasks, options = {}) {
   const pendingDeleteIDs = options.pendingDeleteIDs instanceof Set ? options.pendingDeleteIDs : new Set();
+  const outboxOps = Array.isArray(options.outboxOps) ? options.outboxOps : [];
   const serverList = (Array.isArray(serverTasks) ? serverTasks : [])
     .filter((task) => !pendingDeleteIDs.has(Number(task?.id)));
   const localList = Array.isArray(localTasks) ? localTasks : [];
@@ -46,7 +57,8 @@ export function mergeServerAndLocalTasks(serverTasks, localTasks, options = {}) 
 
   const merged = serverList.map((task) => {
     const localTask = localByID.get(task.id);
-    if (localTask && (localTask.sync_state === 'pending' || localTask.sync_state === 'syncing')) {
+    const hasQueuedMutation = hasPendingOutboxForTask(outboxOps, task.id);
+    if (localTask && hasQueuedMutation && (localTask.sync_state === 'pending' || localTask.sync_state === 'syncing')) {
       return {
         ...localTask,
         updated_at: task.updated_at,
@@ -71,7 +83,7 @@ export function mergeServerAndLocalTasks(serverTasks, localTasks, options = {}) 
     if (pendingDeleteIDs.has(Number(task.id))) return;
     const state = String(task.sync_state || '');
     const isUnsyncedLocal = state === 'pending' || state === 'syncing' || state === 'error';
-    if (isUnsyncedLocal && !serverIDSet.has(task.id)) {
+    if (isUnsyncedLocal && !serverIDSet.has(task.id) && hasPendingOutboxForTask(outboxOps, task.id)) {
       merged.push(task);
     }
   });

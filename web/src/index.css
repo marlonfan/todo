@@ -1189,8 +1189,8 @@ body {
 
 .task-modal-description-editor .live-md-toast .vditor-ir pre.vditor-reset {
   color: #334155;
-  font-size: 0.92rem;
-  line-height: 1.58;
+  font-size: 14px;
+  line-height: 1.56;
 }
 
 .task-modal-description-editor:focus-within {
@@ -1600,6 +1600,17 @@ body {
   @apply h-full rounded-none border-0 bg-transparent;
   min-width: 0;
   max-width: 100%;
+  --task-md-text: #334155;
+  --task-md-muted: #64748b;
+  --task-md-heading: #0f172a;
+  --task-md-line: #e6edf5;
+  --task-md-soft-line: #edf2f7;
+  --task-md-surface: #f8fafc;
+  --task-md-surface-blue: #f5f9ff;
+  --task-md-blue: #2563eb;
+  --task-md-blue-soft: #dbeafe;
+  --task-md-code-text: #245586;
+  --task-md-quote-line: #c8d9ee;
 }
 
 .live-md-toast:focus-within {
@@ -1628,8 +1639,9 @@ body {
 }
 
 .live-md-toast .vditor-ir {
-  @apply text-sm text-slate-700;
-  line-height: 1.56;
+  @apply text-sm;
+  color: var(--task-md-text);
+  line-height: 1.58;
   height: 100%;
   background: transparent !important;
   padding: 0 !important;
@@ -1671,8 +1683,9 @@ body {
 }
 
 .live-md-toast .vditor-ir pre.vditor-reset {
-  @apply text-sm text-slate-700;
-  line-height: 1.56;
+  @apply text-sm;
+  color: var(--task-md-text);
+  line-height: 1.58;
   font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", "Arial", sans-serif;
   padding: 0 !important;
   margin: 0 !important;
@@ -1697,65 +1710,238 @@ body {
   max-width: 100%;
   word-break: break-word;
   overflow-wrap: anywhere;
-  font-size: 15px;
+  font-size: 14px;
 }
 
-.live-md-toast .vditor-ir .vditor-reset > h1,
-.live-md-toast .vditor-ir .vditor-reset > h2,
-.live-md-toast .vditor-ir .vditor-reset > h3,
-.live-md-toast .vditor-ir .vditor-reset > h4,
-.live-md-toast .vditor-ir .vditor-reset > h5,
-.live-md-toast .vditor-ir .vditor-reset > h6 {
-  margin: 0.78rem 0 0.34rem !important;
+.live-md-toast .vditor-reset h1,
+.live-md-toast .vditor-reset h2,
+.live-md-toast .vditor-reset h3,
+.live-md-toast .vditor-reset h4,
+.live-md-toast .vditor-reset h5,
+.live-md-toast .vditor-reset h6 {
+  border-bottom: 0 !important;
+  color: var(--task-md-heading);
+  font-weight: 700;
+  letter-spacing: 0;
   line-height: 1.36;
-  color: #0f172a;
+}
+
+.live-md-toast .vditor-reset h1 {
+  margin: 1.2rem 0 0.5rem !important;
+  padding-bottom: 0.3rem !important;
+  border-bottom: 1px solid var(--task-md-soft-line) !important;
+  font-size: 17px !important;
+}
+
+.live-md-toast .vditor-reset h2 {
+  margin: 1.05rem 0 0.46rem !important;
+  padding: 0 0 0.2rem !important;
+  border-bottom: 1px solid #e6edf5 !important;
+  border-left: 0 !important;
+  color: #1e293b;
+  font-size: 15px !important;
+  font-weight: 680;
+}
+
+.live-md-toast .vditor-reset h3 {
+  margin: 0.9rem 0 0.36rem !important;
+  color: #334155;
+  font-size: 14px !important;
+  font-weight: 670;
+}
+
+.live-md-toast .vditor-reset h4,
+.live-md-toast .vditor-reset h5,
+.live-md-toast .vditor-reset h6 {
+  margin: 0.78rem 0 0.3rem !important;
+  color: #475569;
+  font-size: 13px !important;
   font-weight: 650;
 }
 
-.live-md-toast .vditor-ir .vditor-reset > h1 { font-size: 1.5rem; }
-.live-md-toast .vditor-ir .vditor-reset > h2 { font-size: 1.35rem; }
-.live-md-toast .vditor-ir .vditor-reset > h3 { font-size: 1.2rem; }
-.live-md-toast .vditor-ir .vditor-reset > h4 { font-size: 1.1rem; }
-.live-md-toast .vditor-ir .vditor-reset > h5 { font-size: 1.05rem; }
-.live-md-toast .vditor-ir .vditor-reset > h6 { font-size: 1rem; color: #475569; }
+.live-md-toast .vditor-reset h1 + h1,
+.live-md-toast .vditor-reset h1 + h2,
+.live-md-toast .vditor-reset h1 + h3,
+.live-md-toast .vditor-reset h1 + h4,
+.live-md-toast .vditor-reset h1 + h5,
+.live-md-toast .vditor-reset h1 + h6,
+.live-md-toast .vditor-reset h2 + h1,
+.live-md-toast .vditor-reset h2 + h2,
+.live-md-toast .vditor-reset h2 + h3,
+.live-md-toast .vditor-reset h2 + h4,
+.live-md-toast .vditor-reset h2 + h5,
+.live-md-toast .vditor-reset h2 + h6,
+.live-md-toast .vditor-reset h3 + h1,
+.live-md-toast .vditor-reset h3 + h2,
+.live-md-toast .vditor-reset h3 + h3,
+.live-md-toast .vditor-reset h3 + h4,
+.live-md-toast .vditor-reset h3 + h5,
+.live-md-toast .vditor-reset h3 + h6,
+.live-md-toast .vditor-reset h4 + h1,
+.live-md-toast .vditor-reset h4 + h2,
+.live-md-toast .vditor-reset h4 + h3,
+.live-md-toast .vditor-reset h4 + h4,
+.live-md-toast .vditor-reset h4 + h5,
+.live-md-toast .vditor-reset h4 + h6,
+.live-md-toast .vditor-reset h5 + h1,
+.live-md-toast .vditor-reset h5 + h2,
+.live-md-toast .vditor-reset h5 + h3,
+.live-md-toast .vditor-reset h5 + h4,
+.live-md-toast .vditor-reset h5 + h5,
+.live-md-toast .vditor-reset h5 + h6,
+.live-md-toast .vditor-reset h6 + h1,
+.live-md-toast .vditor-reset h6 + h2,
+.live-md-toast .vditor-reset h6 + h3,
+.live-md-toast .vditor-reset h6 + h4,
+.live-md-toast .vditor-reset h6 + h5,
+.live-md-toast .vditor-reset h6 + h6 {
+  margin-top: 0.9rem !important;
+}
+
+.live-md-toast .vditor-reset p + h1,
+.live-md-toast .vditor-reset ul + h1,
+.live-md-toast .vditor-reset ol + h1,
+.live-md-toast .vditor-reset blockquote + h1,
+.live-md-toast .vditor-reset pre + h1,
+.live-md-toast .vditor-reset table + h1 {
+  margin-top: 1.28rem !important;
+}
+
+.live-md-toast .vditor-reset p + h2,
+.live-md-toast .vditor-reset ul + h2,
+.live-md-toast .vditor-reset ol + h2,
+.live-md-toast .vditor-reset blockquote + h2,
+.live-md-toast .vditor-reset pre + h2,
+.live-md-toast .vditor-reset table + h2 {
+  margin-top: 1.12rem !important;
+}
+
+.live-md-toast .vditor-reset p + h3,
+.live-md-toast .vditor-reset ul + h3,
+.live-md-toast .vditor-reset ol + h3,
+.live-md-toast .vditor-reset blockquote + h3,
+.live-md-toast .vditor-reset pre + h3,
+.live-md-toast .vditor-reset table + h3,
+.live-md-toast .vditor-reset p + h4,
+.live-md-toast .vditor-reset ul + h4,
+.live-md-toast .vditor-reset ol + h4,
+.live-md-toast .vditor-reset blockquote + h4,
+.live-md-toast .vditor-reset pre + h4,
+.live-md-toast .vditor-reset table + h4,
+.live-md-toast .vditor-reset p + h5,
+.live-md-toast .vditor-reset ul + h5,
+.live-md-toast .vditor-reset ol + h5,
+.live-md-toast .vditor-reset blockquote + h5,
+.live-md-toast .vditor-reset pre + h5,
+.live-md-toast .vditor-reset table + h5,
+.live-md-toast .vditor-reset p + h6,
+.live-md-toast .vditor-reset ul + h6,
+.live-md-toast .vditor-reset ol + h6,
+.live-md-toast .vditor-reset blockquote + h6,
+.live-md-toast .vditor-reset pre + h6,
+.live-md-toast .vditor-reset table + h6 {
+  margin-top: 0.96rem !important;
+}
+
+.live-md-toast .vditor-reset > :first-child {
+  margin-top: 0 !important;
+}
 
 .live-md-toast .vditor-ir .vditor-reset p {
-  margin: 0.32rem 0;
+  margin: 0.34rem 0;
 }
 
 .live-md-toast .vditor-reset ul,
 .live-md-toast .vditor-reset ol {
-  margin: 0.28rem 0;
-  padding-left: 1.32rem;
+  margin: 0.34rem 0;
+  padding-left: 1.18rem;
+}
+
+.live-md-toast .vditor-reset ul ul,
+.live-md-toast .vditor-reset ul ol,
+.live-md-toast .vditor-reset ol ul,
+.live-md-toast .vditor-reset ol ol {
+  margin: 0.18rem 0;
 }
 
 .live-md-toast .vditor-reset li {
-  margin: 0.12rem 0;
+  margin: 0.14rem 0;
+  padding-left: 0.1rem;
+}
+
+.live-md-toast .vditor-reset li::marker {
+  color: #8ea0b8;
+  font-weight: 620;
 }
 
 .live-md-toast .vditor-reset li p {
-  margin: 0.18rem 0;
+  margin: 0.16rem 0;
 }
 
 .live-md-toast .vditor-reset li.vditor-task {
   list-style: none !important;
+  margin-left: -1.08rem;
+  padding-left: 1.1rem;
+  position: relative;
 }
 
 .live-md-toast .vditor-reset li.vditor-task input {
-  margin: 0 0.42em 0 0 !important;
-  width: 0.86rem;
-  height: 0.86rem;
-  vertical-align: -0.08em;
-  accent-color: #2563eb;
+  appearance: none;
+  width: 0.92rem;
+  height: 0.92rem;
+  margin: 0 0.48rem 0 -1.1rem !important;
+  border: 1.5px solid #c7d2e1;
+  border-radius: 0.28rem;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+  vertical-align: -0.12em;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.live-md-toast .vditor-reset li.vditor-task input:checked {
+  border-color: #6aa5f8;
+  background-color: #4b93f7;
+  background-image: url("data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3.2 7.15L5.75 9.55L10.9 4.45' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 0.8rem 0.8rem;
+  box-shadow: 0 4px 12px -8px rgba(37, 99, 235, 0.8);
 }
 
 .live-md-toast .vditor-reset blockquote {
-  margin: 0.45rem 0;
-  padding: 0.3rem 0.55rem;
-  border-left: 2px solid #bfdbfe;
-  border-radius: 0.35rem;
-  background: #f8fbff;
+  margin: 0.46rem 0;
+  padding: 0.46rem 0.62rem;
+  border: 1px solid var(--task-md-soft-line);
+  border-left: 3px solid var(--task-md-quote-line);
+  border-radius: 0.5rem;
+  background: #f7fbff;
   color: #475569;
+}
+
+.live-md-toast .vditor-reset strong {
+  color: #172033;
+  font-weight: 700;
+}
+
+.live-md-toast .vditor-reset a {
+  color: #2563eb;
+  font-weight: 560;
+  text-decoration: none;
+}
+
+.live-md-toast .vditor-reset a:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
+.live-md-toast .vditor-reset del {
+  color: var(--task-md-muted);
+  text-decoration-color: #b6c4d5;
 }
 
 .live-md-toast .vditor-reset p > code,
@@ -1769,42 +1955,94 @@ body {
 .live-md-toast .vditor-reset h4 > code,
 .live-md-toast .vditor-reset h5 > code,
 .live-md-toast .vditor-reset h6 > code {
-  font-size: 0.92em;
-  border-radius: 0.28rem;
-  background: #f1f5f9;
-  padding: 0.04em 0.3em;
+  border: 1px solid #dbe7f3;
+  border-radius: 0.38rem;
+  background: #f6f9fc;
+  color: var(--task-md-code-text);
+  padding: 0.06em 0.34em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86em;
+  font-weight: 560;
 }
 
 .live-md-toast .vditor-ir pre.vditor-reset pre,
 .live-md-toast .vditor-ir .vditor-ir__preview pre {
-  margin: 0.52rem 0;
+  margin: 0.64rem 0;
 }
 
 .live-md-toast .vditor-ir pre.vditor-reset pre > code,
 .live-md-toast .vditor-ir .vditor-ir__preview pre > code {
   display: block;
-  font-size: 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.45rem;
+  overflow-x: auto;
+  border: 1px solid #dfe8f3;
+  border-radius: 0.5rem;
   background: #f8fafc;
-  padding: 0.52rem 0.56rem 0.38rem 0.78rem;
+  color: #25364d;
+  padding: 0.58rem 0.68rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.56;
+  box-shadow: inset 3px 0 0 #dbeafe;
+}
+
+.live-md-toast .vditor-ir pre.vditor-reset pre > code::-webkit-scrollbar,
+.live-md-toast .vditor-ir .vditor-ir__preview pre > code::-webkit-scrollbar,
+.live-md-toast .vditor-reset table::-webkit-scrollbar {
+  height: 9px;
+}
+
+.live-md-toast .vditor-ir pre.vditor-reset pre > code::-webkit-scrollbar-track,
+.live-md-toast .vditor-ir .vditor-ir__preview pre > code::-webkit-scrollbar-track,
+.live-md-toast .vditor-reset table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.live-md-toast .vditor-ir pre.vditor-reset pre > code::-webkit-scrollbar-thumb,
+.live-md-toast .vditor-ir .vditor-ir__preview pre > code::-webkit-scrollbar-thumb,
+.live-md-toast .vditor-reset table::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: rgba(148, 174, 198, 0.42);
+  background-clip: content-box;
 }
 
 .live-md-toast .vditor-reset hr {
-  margin: 0.7rem 0;
-  border-color: #e2e8f0;
+  margin: 0.9rem 0;
+  border: 0;
+  border-top: 1px solid var(--task-md-soft-line);
 }
 
 .live-md-toast .vditor-reset table {
   display: block;
   width: 100%;
   overflow-x: auto;
-  margin: 0.55rem 0;
+  margin: 0.72rem 0;
+  border-spacing: 0;
+  border-collapse: separate;
 }
 
 .live-md-toast .vditor-reset th,
 .live-md-toast .vditor-reset td {
+  border: 1px solid #e5edf6;
+  border-right-width: 0;
+  border-bottom-width: 0;
+  padding: 0.46rem 0.58rem;
   white-space: nowrap;
+}
+
+.live-md-toast .vditor-reset th {
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 680;
+}
+
+.live-md-toast .vditor-reset tr:last-child td {
+  border-bottom-width: 1px;
+}
+
+.live-md-toast .vditor-reset th:last-child,
+.live-md-toast .vditor-reset td:last-child {
+  border-right-width: 1px;
 }
 
 .live-md-toast .vditor-ir pre.vditor-reset:empty::before {

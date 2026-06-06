@@ -98,6 +98,14 @@ function isBasicPanelFloatingLayerTarget(target) {
   );
 }
 
+function shouldFocusDescriptionEditorFromShellClick(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return true;
+  return !target.closest(
+    'button, input, textarea, select, a, [contenteditable="true"], [role="button"], [role="menuitem"], .task-ai-description'
+  );
+}
+
 function getDefaultStartParts() {
   const start = normalizeTaskStartTime(getStoredUser().default_task_start_time);
   const [hour, minute] = start.split(':').map((v) => Number.parseInt(v, 10));
@@ -2338,7 +2346,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               <div ref={bindModalBodyScroll} className="task-modal-body task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-5 py-4 md:px-7 md:py-5">
                 <div
                   className="task-modal-description-editor task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
-                  onClick={() => descriptionEditorRef.current?.focus()}
+                  onClick={(event) => {
+                    if (shouldFocusDescriptionEditorFromShellClick(event)) {
+                      descriptionEditorRef.current?.focus();
+                    }
+                  }}
                 >
                   <TaskDescriptionAI
                     task={{
