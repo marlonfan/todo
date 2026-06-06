@@ -578,6 +578,10 @@ body {
 }
 
 .settings-page .settings-tab-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   min-height: 2.52rem;
   border-radius: 0.78rem;
   padding: 0 1.08rem;
@@ -585,6 +589,8 @@ body {
   font-size: 0.92rem;
   font-weight: 650;
   line-height: 1;
+  white-space: nowrap;
+  word-break: keep-all;
   transition:
     background-color 0.16s ease,
     color 0.16s ease,
@@ -2169,8 +2175,45 @@ body {
   margin-top: 0.18rem;
 }
 
+.readonly-event-person-list-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: min(15rem, 34vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.72rem;
+  scrollbar-color: rgba(148, 163, 184, 0.44) rgba(241, 245, 249, 0.68);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.readonly-event-person-list-scroll::-webkit-scrollbar {
+  width: 0.58rem;
+}
+
+.readonly-event-person-list-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.72);
+}
+
+.readonly-event-person-list-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(241, 245, 249, 0.72);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.46);
+  background-clip: padding-box;
+}
+
+.readonly-event-person-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.56);
+  background-clip: padding-box;
+}
+
+.readonly-event-person-list-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .readonly-event-person-name {
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.28rem;
   min-width: 0;
   overflow-wrap: anywhere;
   color: #8b95a1;
@@ -3173,6 +3216,34 @@ body {
 
 .time-panel-card .task-datepicker-inline.task-datepicker-lunar-mode .task-lunar-panel {
   padding: 0.14rem 0 0.2rem;
+}
+
+@media (max-width: 767px) {
+  .settings-page .settings-tabs {
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    gap: 0.32rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.28rem;
+    white-space: nowrap;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-page .settings-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-page .settings-tab-btn {
+    min-width: max-content;
+    min-height: 2.38rem;
+    padding: 0 0.86rem;
+    font-size: 0.88rem;
+    scroll-snap-align: start;
+  }
 }
 
 @media (max-width: 640px) {

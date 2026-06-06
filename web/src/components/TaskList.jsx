@@ -63,6 +63,7 @@ import { isTaskUnsyncedLocally } from './taskListRecurringVisibility';
 import {
   buildNextPendingFromProjectedTask,
   hasOptimisticOccurrenceStatusForTask,
+  upsertProjectedNextOccurrence,
 } from './taskListRecurringProjection';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
@@ -979,6 +980,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const { data: tasksRaw = [], isLoading: tasksLoading } = useTasksQuery();
   const { data: categories = [] } = useCategoriesQuery();
   const [occurrenceStatusOptimisticMap, setOccurrenceStatusOptimisticMap] = useState({});
+  const occurrenceStatusOptimisticMapRef = useRef(occurrenceStatusOptimisticMap);
+  useEffect(() => {
+    occurrenceStatusOptimisticMapRef.current = occurrenceStatusOptimisticMap;
+  }, [occurrenceStatusOptimisticMap]);
   const searchModeActive = useMemo(() => {
     if (forcedView) return forcedView === 'search';
     if (location.pathname === '/search') return true;
@@ -2316,7 +2321,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (task.read_only) return;
     const taskID = Number(task?.source_task_id || task?.task_id || task?.id || 0);
     if (!taskID) return;
-    let optimisticOccurrenceKeys = [];
     try {
       const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
       if (recurrenceRule) {
@@ -2369,8 +2373,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           ]);
           return;
         }
+        const shouldInstantProjectNextOccurrence = (
+          hasOccurrenceContext
+          && ['completed', 'cancelled', 'skipped'].includes(String(newStatus || ''))
+        );
         if (hasOccurrenceContext) {
-          optimisticOccurrenceKeys = buildOccurrenceStatusKeys(
+          const optimisticOccurrenceKeys = buildOccurrenceStatusKeys(
             taskID,
             payload.instance_id || instanceID,
             payload.occurrence_date || occurrenceDate,
@@ -2378,14 +2386,68 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           );
           if (optimisticOccurrenceKeys.length > 0) {
             const now = Date.now();
-            setOccurrenceStatusOptimisticMap((prev) => {
-              const next = { ...(prev || {}) };
-              optimisticOccurrenceKeys.forEach((key) => {
-                if (!key) return;
-                next[key] = { status: newStatus, updatedAt: now };
-              });
-              return next;
+            const nextOptimisticMap = { ...(occurrenceStatusOptimisticMapRef.current || {}) };
+            optimisticOccurrenceKeys.forEach((key) => {
+              if (!key) return;
+              nextOptimisticMap[key] = { status: newStatus, updatedAt: now };
             });
+            occurrenceStatusOptimisticMapRef.current = nextOptimisticMap;
+            setOccurrenceStatusOptimisticMap(nextOptimisticMap);
+
+            if (shouldInstantProjectNextOccurrence) {
+              const sourceTask = (Array.isArray(tasksRaw) ? tasksRaw : [])
+                .find((item) => Number(item?.id || 0) === taskID) || task;
+              const projectedNext = buildNextPendingFromProjectedTask({
+                task: sourceTask,
+                optimisticStatusMap: nextOptimisticMap,
+                serverStatusMap: recurringServerStatusMap,
+                timezone,
+              });
+              if (projectedNext) {
+                queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
+                  upsertProjectedNextOccurrence(prev, taskID, projectedNext, timezone)
+                ));
+                if (String(selectedTaskSnapshotRef.current?.id || '') === String(task?.id || '')) {
+                  setSelectedTaskID(`occ_${projectedNext.instanceId}`);
+                }
+              }
+            }
+
+            void (async () => {
+              try {
+                await updateTaskStatusLocal(queryClient, taskID, payload, {
+                  submitMeta: {
+                    submittedAt: new Date().toISOString(),
+                    submitSource: 'manual',
+                  },
+                  awaitPersist: true,
+                });
+                await Promise.all([
+                  queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+                  queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+                ]);
+              } catch (err) {
+                setOccurrenceStatusOptimisticMap((prev) => {
+                  const next = { ...(prev || {}) };
+                  let changed = false;
+                  optimisticOccurrenceKeys.forEach((key) => {
+                    if (!Object.prototype.hasOwnProperty.call(next, key)) return;
+                    delete next[key];
+                    changed = true;
+                  });
+                  if (changed) {
+                    occurrenceStatusOptimisticMapRef.current = next;
+                  }
+                  return changed ? next : prev;
+                });
+                await Promise.all([
+                  queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+                  queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+                ]);
+                console.error('Failed to update recurring occurrence status:', err);
+              }
+            })();
+            return;
           }
         }
         await updateTaskStatusLocal(queryClient, taskID, hasOccurrenceContext ? payload : newStatus, {
@@ -2409,21 +2471,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         });
       }
     } catch (err) {
-      if (optimisticOccurrenceKeys.length > 0) {
-        setOccurrenceStatusOptimisticMap((prev) => {
-          const next = { ...(prev || {}) };
-          let changed = false;
-          optimisticOccurrenceKeys.forEach((key) => {
-            if (!Object.prototype.hasOwnProperty.call(next, key)) return;
-            delete next[key];
-            changed = true;
-          });
-          return changed ? next : prev;
-        });
-      }
       console.error('Failed to update task status:', err);
     }
-  }, [queryClient, timezone]);
+  }, [queryClient, recurringServerStatusMap, tasksRaw, timezone]);
 
   const handleQuickCreate = async () => {
     const title = quickTitle.trim();

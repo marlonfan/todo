@@ -1684,7 +1684,7 @@ function CalendarView() {
                   {readonlyEventDetail.attendees.length > 0 && (
                     <div className="readonly-event-person-list">
                       <Users className="readonly-event-info-icon readonly-event-person-list-icon" />
-                      <div className="mobile-scrollbar-hidden max-h-[15rem] min-w-0 overflow-y-auto pr-1">
+                      <div className="readonly-event-person-list-scroll mobile-scrollbar-hidden">
                         {readonlyEventDetail.attendees.map((item) => (
                           <p key={item} className="readonly-event-person-name">{item}</p>
                         ))}

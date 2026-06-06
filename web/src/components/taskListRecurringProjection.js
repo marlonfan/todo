@@ -178,3 +178,72 @@ export function buildNextPendingFromProjectedTask({
 
   return candidates[0] || null;
 }
+
+function readOccurrenceTaskID(item) {
+  return Number(item?.task_id || item?.taskID || item?.source_task_id || item?.sourceTaskID || 0);
+}
+
+function readOccurrenceInstanceID(item) {
+  return String(item?.instance_id || item?.instanceId || '').trim();
+}
+
+function readOccurrenceDate(item, timezone) {
+  return normalizeOccurrenceDate(
+    item?.occurrence_date
+      || item?.occurrenceDate
+      || item?.original_date
+      || item?.originalDate
+      || item?.start_time
+      || item?.startTime
+      || '',
+    timezone,
+  );
+}
+
+function buildProjectedOccurrenceItem(taskID, nextPending) {
+  const numericTaskID = Number(taskID || 0);
+  if (!numericTaskID || !nextPending?.instanceId || !nextPending?.occurrenceDate) return null;
+  return {
+    task_id: numericTaskID,
+    taskID: numericTaskID,
+    instance_id: nextPending.instanceId,
+    instanceId: nextPending.instanceId,
+    occurrence_date: nextPending.occurrenceDate,
+    occurrenceDate: nextPending.occurrenceDate,
+    start_time: nextPending.startISO,
+    startTime: nextPending.startISO,
+    end_time: nextPending.endISO,
+    endTime: nextPending.endISO,
+    title: nextPending.title,
+    description: nextPending.description,
+    priority: nextPending.priority,
+    created_at: nextPending.createdAt,
+    createdAt: nextPending.createdAt,
+    completed_at: nextPending.completedAt,
+    completedAt: nextPending.completedAt,
+    deleted_at: nextPending.deletedAt,
+    deletedAt: nextPending.deletedAt,
+    status: nextPending.status || 'pending',
+    optimistic_projected: true,
+  };
+}
+
+export function upsertProjectedNextOccurrence(currentOccurrences, taskID, nextPending, timezone = 'UTC') {
+  const projected = buildProjectedOccurrenceItem(taskID, nextPending);
+  if (!projected) return Array.isArray(currentOccurrences) ? currentOccurrences : [];
+
+  const numericTaskID = Number(taskID || 0);
+  const projectedInstanceID = readOccurrenceInstanceID(projected);
+  const projectedDate = readOccurrenceDate(projected, timezone);
+  const existing = Array.isArray(currentOccurrences) ? currentOccurrences : [];
+  const filtered = existing.filter((item) => {
+    if (readOccurrenceTaskID(item) !== numericTaskID) return true;
+    const itemInstanceID = readOccurrenceInstanceID(item);
+    if (projectedInstanceID && itemInstanceID && itemInstanceID === projectedInstanceID) return false;
+    const itemDate = readOccurrenceDate(item, timezone);
+    if (projectedDate && itemDate && itemDate === projectedDate) return false;
+    return true;
+  });
+
+  return [projected, ...filtered];
+}
