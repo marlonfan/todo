@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
+  Bot,
   CalendarClock,
   Cloud,
   Eye,
@@ -21,6 +22,14 @@ import {
   normalizeTimeGranularity,
   setUserTimezone,
 } from '../utils/time';
+import {
+  AI_PROTOCOL_ANTHROPIC,
+  AI_PROTOCOL_OPENAI,
+  DEFAULT_AI_SYSTEM_PROMPT,
+  getDefaultBaseURLForProtocol,
+  readAIConfig,
+  saveAIConfig,
+} from '../utils/aiConfig';
 import { getShowCategoryEmoji, setShowCategoryEmoji, getShowChineseHolidays, setShowChineseHolidays } from '../utils/uiPrefs';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
@@ -159,6 +168,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '' });
   const [syncIntervalSeconds, setSyncIntervalSeconds] = useState(getConfiguredSyncIntervalSeconds());
+  const [aiConfig, setAIConfig] = useState(() => readAIConfig());
+  const [showAIKey, setShowAIKey] = useState(false);
   const [caldavForm, setCaldavForm] = useState({ name: '', baseURL: '', username: '', password: '' });
   const [caldavCalendars, setCaldavCalendars] = useState([]);
   const [caldavEditingSourceID, setCaldavEditingSourceID] = useState(null);
@@ -552,6 +563,30 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     showToast('success', `Auto sync interval set to ${applied}s`);
   };
 
+  const updateAIConfigDraft = (patch) => {
+    setAIConfig((prev) => ({ ...prev, ...patch }));
+  };
+
+  const handleAIProtocolChange = (protocol) => {
+    setAIConfig((prev) => ({
+      ...prev,
+      protocol,
+      baseURL: prev.baseURL && prev.baseURL !== getDefaultBaseURLForProtocol(prev.protocol)
+        ? prev.baseURL
+        : getDefaultBaseURLForProtocol(protocol),
+    }));
+  };
+
+  const handleSaveAIConfig = () => {
+    const saved = saveAIConfig(aiConfig);
+    setAIConfig(saved);
+    showToast('success', t('settings.aiSaved'));
+  };
+
+  const handleResetAISystemPrompt = () => {
+    updateAIConfigDraft({ systemPrompt: DEFAULT_AI_SYSTEM_PROMPT });
+  };
+
   const resetCaldavDraft = () => {
     setCaldavForm({ name: '', baseURL: '', username: '', password: '' });
     setCaldavCalendars([]);
@@ -738,6 +773,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const settingsNavItems = [
     { key: 'account', label: t('settings.accountSecurity'), icon: UserCircle },
     { key: 'general', label: t('settings.preferences'), icon: MonitorCog },
+    { key: 'ai', label: t('settings.aiSettings'), icon: Bot },
     { key: 'notifications', label: t('settings.notifications'), icon: Bell },
     { key: 'sync', label: t('settings.syncSettings'), icon: Cloud },
     { key: 'caldav', label: t('settings.caldav.tab'), icon: CalendarClock },
@@ -828,6 +864,16 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
               }`}
             >
               {t('settings.title')}
+            </button>
+            <button
+              onClick={() => setActiveTab('ai')}
+              className={`settings-tab-btn ${
+                activeTab === 'ai'
+                  ? 'settings-tab-btn-active'
+                  : 'settings-tab-btn-idle'
+              }`}
+            >
+              {t('settings.aiSettings')}
             </button>
             <button
               onClick={() => setActiveTab('notifications')}
@@ -1227,6 +1273,130 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'ai' && (
+            <div className="space-y-5 p-6">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">{t('settings.aiSettings')}</h3>
+                <p className="mt-1 text-sm text-gray-500">{t('settings.aiSettingsHint')}</p>
+              </div>
+
+              <div className="settings-ai-card">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="form-label">{t('settings.aiProtocol')}</label>
+                    <Select
+                      value={aiConfig.protocol}
+                      onChange={(e) => handleAIProtocolChange(e.target.value)}
+                      className="form-select"
+                    >
+                      <option value={AI_PROTOCOL_OPENAI}>{t('settings.aiProtocolOpenAI')}</option>
+                      <option value={AI_PROTOCOL_ANTHROPIC}>{t('settings.aiProtocolAnthropic')}</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="form-label">{t('settings.aiModelID')}</label>
+                    <input
+                      value={aiConfig.modelID}
+                      onChange={(e) => updateAIConfigDraft({ modelID: e.target.value })}
+                      placeholder={t('settings.aiModelIDPlaceholder')}
+                      className="form-input"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="form-label">{t('settings.aiBaseURL')}</label>
+                    <input
+                      value={aiConfig.baseURL}
+                      onChange={(e) => updateAIConfigDraft({ baseURL: e.target.value })}
+                      placeholder={getDefaultBaseURLForProtocol(aiConfig.protocol)}
+                      className="form-input"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="form-label">{t('settings.aiAPIKey')}</label>
+                    <div className="settings-ai-key-row">
+                      <input
+                        type={showAIKey ? 'text' : 'password'}
+                        value={aiConfig.apiKey}
+                        onChange={(e) => updateAIConfigDraft({ apiKey: e.target.value })}
+                        placeholder={t('settings.aiAPIKeyPlaceholder')}
+                        className="form-input"
+                        autoComplete="off"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowAIKey((prev) => !prev)}
+                        className="settings-password-visibility-btn"
+                        aria-label={showAIKey ? t('settings.hidePassword') : t('settings.showPassword')}
+                        title={showAIKey ? t('settings.hidePassword') : t('settings.showPassword')}
+                      >
+                        {showAIKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">{t('settings.aiLocalStorageHint')}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-ai-card">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900">{t('settings.aiPromptTitle')}</h4>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{t('settings.aiPromptHint')}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetAISystemPrompt}
+                    className="btn-secondary shrink-0"
+                  >
+                    {t('settings.aiResetPrompt')}
+                  </button>
+                </div>
+                <textarea
+                  value={aiConfig.systemPrompt}
+                  onChange={(e) => updateAIConfigDraft({ systemPrompt: e.target.value })}
+                  className="settings-ai-textarea"
+                  rows={6}
+                />
+              </div>
+
+              <div className="settings-ai-card">
+                <h4 className="text-sm font-semibold text-slate-900">{t('settings.aiUserProfileTitle')}</h4>
+                <p className="mt-1 text-xs leading-5 text-slate-500">{t('settings.aiUserProfileHint')}</p>
+                <textarea
+                  value={aiConfig.userProfile}
+                  onChange={(e) => updateAIConfigDraft({ userProfile: e.target.value })}
+                  className="settings-ai-textarea mt-3"
+                  rows={5}
+                  placeholder={t('settings.aiUserProfilePlaceholder')}
+                />
+                <label className="mt-4 flex items-start gap-2 text-sm font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={aiConfig.allowTaskContext}
+                    onChange={(e) => updateAIConfigDraft({ allowTaskContext: e.target.checked })}
+                    className="mt-1"
+                  />
+                  <span>
+                    {t('settings.aiAllowTaskContext')}
+                    <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
+                      {t('settings.aiAllowTaskContextHint')}
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleSaveAIConfig}
+                  className="btn-primary"
+                >
+                  {t('settings.aiSave')}
+                </button>
               </div>
             </div>
           )}

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import Vditor from 'vditor';
 import 'vditor/dist/index.css';
 import vditorLuteUrl from 'vditor/dist/js/lute/lute.min.js?url';
+import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 
 async function loadVditorI18n(language) {
   if (String(language || '').toLowerCase().startsWith('zh')) {
@@ -60,6 +61,8 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 }, ref) {
   const { i18n } = useTranslation();
   const mountRef = useRef(null);
+  const editorScrollRef = useRef(null);
+  const editorScrollCleanupRef = useRef(null);
   const editorRef = useRef(null);
   const initializingRef = useRef(true);
   const readyRef = useRef(false);
@@ -222,6 +225,10 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
           }
           readyRef.current = true;
           editorRef.current = instance;
+          const scrollNode = mountRef.current?.querySelector('.vditor-content, .vditor-ir') || null;
+          editorScrollCleanupRef.current?.();
+          editorScrollRef.current = scrollNode;
+          editorScrollCleanupRef.current = scrollNode ? attachTransientScrollbar(scrollNode) : null;
           bindFastInput();
           const pendingValue = String(pendingExternalValueRef.current || '');
           if (typeof instance?.getValue === 'function' && typeof instance?.setValue === 'function') {
@@ -313,6 +320,9 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       initializingRef.current = true;
       safeDestroy(instance);
       editorRef.current = null;
+      editorScrollCleanupRef.current?.();
+      editorScrollCleanupRef.current = null;
+      editorScrollRef.current = null;
     };
   }, []);
 

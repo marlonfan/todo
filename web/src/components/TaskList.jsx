@@ -50,8 +50,10 @@ import {
   IconTag,
 } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
+import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import {
   getTaskPrimaryLocalTime,
   getTaskPrimaryTime,
@@ -1289,6 +1291,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const detailPanelSnapshotRef = useRef(null);
   const switchTaskRequestRef = useRef(0);
   const activeRenderTaskIDRef = useRef(0);
+  const detailBodyScrollCleanupRef = useRef(null);
   const draftDescriptionEditorRef = useRef(null);
   const draftTitleInputRef = useRef(null);
   const activeDescriptionSessionRef = useRef(0);
@@ -1296,6 +1299,16 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const descriptionSessionTaskIDRef = useRef(0);
   const latestDescriptionSessionByTaskRef = useRef(new Map());
   const latestEditedDescriptionSessionByTaskRef = useRef(new Map());
+
+  const bindDetailBodyScroll = useCallback((node) => {
+    detailBodyScrollCleanupRef.current?.();
+    detailBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
+  }, []);
+
+  useEffect(() => () => {
+    detailBodyScrollCleanupRef.current?.();
+    detailBodyScrollCleanupRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!selectedTaskID) return;
@@ -2116,6 +2129,21 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   );
   const isDraftCustomRecurrenceType = (draft?.recurrence_type || 'daily') === 'biweekly' || (draft?.recurrence_type || 'daily') === 'lunar';
   const draftStatus = draft?.status || selectedTask?.status || 'pending';
+  const selectedTaskDraftForAI = useMemo(() => {
+    if (!selectedTask || !draft) return selectedTask;
+    return {
+      ...selectedTask,
+      title: draft.title || selectedTask.title || '',
+      description: draft.description ?? selectedTask.description ?? '',
+      priority: draftPriorityValue,
+      status: draftStatus,
+      all_day: !!draft.all_day,
+      start_time: draft.start_time || '',
+      end_time: draft.end_time || '',
+      category_ids: draft.category_ids || [],
+      categories: categories.filter((cat) => (draft.category_ids || []).map(String).includes(String(cat.id))),
+    };
+  }, [categories, draft, draftPriorityValue, draftStatus, selectedTask]);
   const draftRecurrenceLunarPickerDate = (
     solarDateFromLunarSelection({
       year: draftRecurrenceLunarYear,
@@ -3017,6 +3045,24 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     setDraftDescriptionSnapshot,
     shouldAcceptDescriptionSessionInput,
   ]);
+
+  const getCurrentDraftDescriptionValue = useCallback(() => (
+    draftDescriptionEditorRef.current?.getValue?.()
+    ?? draftDescriptionEditorRef.current?.getCachedValue?.()
+    ?? draftSnapshotRef.current?.description
+    ?? draft?.description
+    ?? ''
+  ), [draft?.description]);
+
+  const handleApplyAIDraftDescription = useCallback((nextValue) => {
+    if (!selectedTaskSnapshotRef.current) return;
+    handleDraftDescriptionChange(nextValue, {
+      taskID: getEffectiveTaskID(selectedTaskSnapshotRef.current),
+      sessionID: activeDescriptionSessionRef.current,
+      taskValue: selectedTaskSnapshotRef.current,
+      draftValue: draftSnapshotRef.current || draft,
+    });
+  }, [draft, getEffectiveTaskID, handleDraftDescriptionChange]);
 
   const captureCurrentDescriptionDraft = useCallback(() => {
     const taskValue = selectedTaskSnapshotRef.current;
@@ -4886,11 +4932,19 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 </div>
               </div>
 
-              <div className="task-detail-body-scroll mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-auto px-8 py-6">
+              <div ref={bindDetailBodyScroll} className="task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-8 py-6">
                 <div
-                  className="flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
+                  className="task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
                   onClick={() => draftDescriptionEditorRef.current?.focus()}
                 >
+                  <TaskDescriptionAI
+                    task={selectedTaskDraftForAI}
+                    allTasks={tasksRaw}
+                    categories={categories}
+                    getCurrentDescription={getCurrentDraftDescriptionValue}
+                    onApply={handleApplyAIDraftDescription}
+                    disabled={selectedTask.read_only}
+                  />
                   <LiveMarkdownEditor
                     ref={draftDescriptionEditorRef}
                     key={`task-editor-${selectedTask.id}`}

@@ -39,9 +39,11 @@ import {
   IconX,
 } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
-import { useCategoriesQuery } from '../query/hooks';
+import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
+import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
@@ -427,6 +429,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const queryClient = useQueryClient();
   const { register, handleSubmit, watch, setValue, getValues } = useForm();
   const { data: categories = [] } = useCategoriesQuery();
+  const { data: tasksRaw = [] } = useTasksQuery();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showRecurrence, setShowRecurrence] = useState(false);
@@ -460,7 +463,18 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const detailPanelSnapshotRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const descriptionEditorRef = useRef(null);
+  const modalBodyScrollCleanupRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
+
+  const bindModalBodyScroll = useCallback((node) => {
+    modalBodyScrollCleanupRef.current?.();
+    modalBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
+  }, []);
+
+  useEffect(() => () => {
+    modalBodyScrollCleanupRef.current?.();
+    modalBodyScrollCleanupRef.current = null;
+  }, []);
 
   const isEditing = !!task;
   const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
@@ -1452,6 +1466,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     void handleSubmit(onSubmit)();
   }, [handleSubmit, loading, onSubmit]);
 
+  const getCurrentDescriptionValue = useCallback(() => (
+    descriptionEditorRef.current?.getValue?.()
+    ?? descriptionEditorRef.current?.getCachedValue?.()
+    ?? getValues('description')
+    ?? ''
+  ), [getValues]);
+
+  const handleApplyAIDescription = useCallback((nextValue) => {
+    setValue('description', String(nextValue || ''), { shouldDirty: true });
+  }, [setValue]);
+
   const requestClose = useCallback(() => {
     const state = modalHistoryRef.current;
     if (typeof window !== 'undefined' && state.hasEntry) {
@@ -2310,11 +2335,29 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                 </div>
               </div>
 
-              <div className="task-modal-body task-detail-body-scroll mobile-scrollbar-hidden flex min-h-0 flex-1 flex-col overflow-auto px-5 py-4 md:px-7 md:py-5">
+              <div ref={bindModalBodyScroll} className="task-modal-body task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-5 py-4 md:px-7 md:py-5">
                 <div
-                  className="task-modal-description-editor flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
+                  className="task-modal-description-editor task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
                   onClick={() => descriptionEditorRef.current?.focus()}
                 >
+                  <TaskDescriptionAI
+                    task={{
+                      ...(task || {}),
+                      title: titleValue,
+                      description: descriptionValue,
+                      priority: priorityValue,
+                      start_time: startInputValue,
+                      end_time: endInputValue,
+                      all_day: isAllDay,
+                      categories: categories.filter((cat) => selectedCategoryValues.includes(String(cat.id))),
+                    }}
+                    allTasks={tasksRaw}
+                    categories={categories}
+                    getCurrentDescription={getCurrentDescriptionValue}
+                    onApply={handleApplyAIDescription}
+                    disabled={loading}
+                    compact
+                  />
                   <LiveMarkdownEditor
                     ref={descriptionEditorRef}
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
