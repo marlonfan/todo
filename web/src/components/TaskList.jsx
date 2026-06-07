@@ -109,6 +109,7 @@ const DETAIL_PANEL_FLOATING_WIDTH_REMS = {
   category: 14.75,
   recurrence: 18.25,
 };
+const TASK_COMPACT_MOBILE_BREAKPOINT = 768;
 const TASK_DETAIL_SPLIT_MIN_WIDTH = 800;
 const TASK_SPLIT_STORAGE_KEY = 'todo:taskListDetailSplitRatio';
 const TASK_SPLIT_DEFAULT_RATIO = 0.55;
@@ -144,6 +145,18 @@ function readTaskSplitRatio() {
 function writeTaskSplitRatio(ratio) {
   if (typeof window === 'undefined') return;
   window.localStorage?.setItem(TASK_SPLIT_STORAGE_KEY, String(clampNumber(ratio, 0.25, 0.75).toFixed(4)));
+}
+
+function isTaskCompactMobileLayout() {
+  if (typeof window === 'undefined') return false;
+  return window.innerWidth < TASK_COMPACT_MOBILE_BREAKPOINT;
+}
+
+function shouldUseTaskModalLayout(workspaceWidth) {
+  if (isTaskCompactMobileLayout()) return true;
+  const measuredWidth = Number(workspaceWidth || 0);
+  if (measuredWidth > 0) return measuredWidth < TASK_DETAIL_SPLIT_MIN_WIDTH;
+  return false;
 }
 
 function isDraftSwitchDebugEnabled() {
@@ -1269,10 +1282,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const [deleteDialog, setDeleteDialog] = useState({ open: false, kind: '', context: null });
   const [deleteDialogSubmitting, setDeleteDialogSubmitting] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
-  const [isMobileViewport, setIsMobileViewport] = useState(true);
-  const [isCompactMobile, setIsCompactMobile] = useState(
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
-  );
+  const [isMobileViewport, setIsMobileViewport] = useState(() => shouldUseTaskModalLayout());
+  const [isCompactMobile, setIsCompactMobile] = useState(isTaskCompactMobileLayout);
   const [taskSplitRatio, setTaskSplitRatio] = useState(readTaskSplitRatio);
   const [isTaskSplitDragging, setIsTaskSplitDragging] = useState(false);
   const detailPanelRef = useRef(null);
@@ -1626,8 +1637,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   useEffect(() => {
     const handleResize = () => {
-      setIsCompactMobile(window.innerWidth < 768);
+      const compactMobile = isTaskCompactMobileLayout();
+      const workspaceWidth = taskWorkspaceRef.current?.getBoundingClientRect().width || 0;
+      setIsCompactMobile(compactMobile);
+      setIsMobileViewport(shouldUseTaskModalLayout(workspaceWidth));
     };
+    handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -1640,7 +1655,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const element = taskWorkspaceRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return undefined;
     const applyWorkspaceWidth = (width) => {
-      const shouldUseModal = width < TASK_DETAIL_SPLIT_MIN_WIDTH;
+      if (!width) return;
+      const shouldUseModal = shouldUseTaskModalLayout(width);
       setIsMobileViewport((prev) => (prev === shouldUseModal ? prev : shouldUseModal));
     };
     applyWorkspaceWidth(element.getBoundingClientRect().width || 0);
