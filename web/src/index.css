@@ -1208,6 +1208,10 @@ body {
   overscroll-behavior: contain;
 }
 
+.task-modal-sheet-handle {
+  display: none;
+}
+
 .task-modal-shell {
   @apply max-w-4xl;
   border-color: #eef2f7 !important;
@@ -1264,6 +1268,96 @@ body {
   border-top: 1px solid #f6f7f9;
 }
 
+@keyframes task-sheet-backdrop-in {
+  from {
+    background-color: rgba(15, 23, 42, 0);
+    backdrop-filter: blur(0);
+  }
+  to {
+    background-color: rgba(15, 23, 42, 0.38);
+    backdrop-filter: blur(4px);
+  }
+}
+
+@keyframes task-sheet-enter {
+  from {
+    opacity: 0.72;
+    transform: translate3d(0, 100%, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@media (max-width: 767px) {
+  .modal-overlay {
+    align-items: flex-end;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.38);
+    padding: 0;
+    backdrop-filter: blur(4px);
+    animation: task-sheet-backdrop-in 0.22s ease-out;
+  }
+
+  .modal-content.task-modal-shell {
+    position: relative;
+    width: 100%;
+    max-width: none;
+    height: calc((100vh - env(safe-area-inset-top)) * 5 / 6);
+    max-height: calc(100vh - max(0.75rem, env(safe-area-inset-top)));
+    border-width: 1px 0 0;
+    border-color: rgba(226, 232, 240, 0.92) !important;
+    border-radius: 22px 22px 0 0 !important;
+    background: #ffffff;
+    box-shadow:
+      0 -26px 60px -36px rgba(15, 23, 42, 0.62),
+      0 -8px 24px -20px rgba(15, 23, 42, 0.45) !important;
+    transform-origin: center bottom;
+    animation: task-sheet-enter 0.28s cubic-bezier(0.2, 0.86, 0.22, 1);
+  }
+
+  .task-modal-sheet-handle {
+    display: block;
+    position: absolute;
+    left: 50%;
+    top: max(0.42rem, env(safe-area-inset-top));
+    z-index: 30;
+    width: 2.75rem;
+    height: 0.28rem;
+    border-radius: 999px;
+    background: #cbd5e1;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+
+  .task-modal-frame {
+    height: 100%;
+    max-height: 100%;
+  }
+
+  .task-modal-header {
+    padding-top: max(1.35rem, calc(env(safe-area-inset-top) + 1.05rem)) !important;
+  }
+
+  .task-modal-footer {
+    padding-bottom: max(0.65rem, env(safe-area-inset-bottom)) !important;
+  }
+
+  .task-modal-footer .btn-secondary,
+  .task-modal-footer .btn-danger,
+  .task-modal-footer .btn-primary {
+    min-height: 2.55rem;
+  }
+}
+
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-content.task-modal-shell {
+    animation: none;
+  }
+}
+
 @supports (height: 100dvh) {
   .modal-content {
     max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 0.75rem);
@@ -1272,6 +1366,18 @@ body {
   .task-modal-frame {
     height: min(50rem, calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 0.75rem));
     max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 0.75rem);
+  }
+
+  @media (max-width: 767px) {
+    .modal-content.task-modal-shell {
+      height: calc((100dvh - env(safe-area-inset-top)) * 5 / 6);
+      max-height: calc(100dvh - max(0.75rem, env(safe-area-inset-top)));
+    }
+
+    .task-modal-frame {
+      height: 100%;
+      max-height: 100%;
+    }
   }
 }
 

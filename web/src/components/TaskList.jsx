@@ -1151,7 +1151,11 @@ const TaskRow = React.memo(function TaskRow({
   prev.selected === next.selected &&
   prev.timezone === next.timezone &&
   prev.labels === next.labels &&
-  prev.timeMode === next.timeMode
+  prev.timeMode === next.timeMode &&
+  prev.onBeforeSelectTask === next.onBeforeSelectTask &&
+  prev.onPointerSelectStart === next.onPointerSelectStart &&
+  prev.onSelectTask === next.onSelectTask &&
+  prev.onToggleStatus === next.onToggleStatus
 ));
 
 export const TaskListView = React.memo(function TaskListView({ forcedView = '', routeLocation }) {
@@ -3337,8 +3341,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
 
     const liveDescription = String(
-      draftDescriptionEditorRef.current?.flushMarkdownValue?.()
-      ?? draftDescriptionEditorRef.current?.getCachedValue?.()
+      draftDescriptionEditorRef.current?.getCachedValue?.()
       ?? draftValue.description
       ?? ''
     );
@@ -3952,6 +3955,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     setDeleteDialog({ open: false, kind: '', context: null });
   }, [deleteDialogSubmitting]);
 
+  const handleTaskRowPointerSelectStart = useCallback((event) => {
+    releaseFocusedDescriptionEditor(event.target, 'task_row_pointerdown');
+  }, [releaseFocusedDescriptionEditor]);
+
   const executeDeleteAction = useCallback(async (action) => {
     if (deleteDialogSubmitting) return;
     const ctx = deleteDialog?.context;
@@ -4149,12 +4156,13 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const currentDraftSourceTaskID = Number(draftSourceTaskIDRef.current || 0);
     // 比较选中状态（字符串 ID）
     const currentSelectedID = String(selectedTaskSnapshotRef.current?.id || '');
+    const shouldOpenTaskModal = isMobileViewport || isCompactMobile;
     if (currentSelectedID && selectedID === currentSelectedID) {
       logDraftSwitchDebug('select.sameTask', {
         selected_id: selectedID,
         source_task_id: sourceTaskID,
       });
-      if (isMobileViewport) {
+      if (shouldOpenTaskModal) {
         openAdvancedModal(task);
       }
       return;
@@ -4195,7 +4203,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     detailPanelSnapshotRef.current = null;
     setDetailPanel('');
     setSelectedTaskID(selectedID);
-    if (isMobileViewport) {
+    if (shouldOpenTaskModal) {
       openAdvancedModal(task);
     }
   }, [
@@ -4204,6 +4212,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     captureCurrentDescriptionDraft,
     flushDraftOnLeave,
     getEffectiveTaskID,
+    isCompactMobile,
     isMobileViewport,
     openAdvancedModal,
     setDraftWithSnapshot,
@@ -4406,7 +4415,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                           labels={listLabels}
                           timeMode={rowTimeMode}
                           onBeforeSelectTask={captureCurrentDescriptionDraft}
-                          onPointerSelectStart={(event) => releaseFocusedDescriptionEditor(event.target, 'task_row_pointerdown')}
+                          onPointerSelectStart={handleTaskRowPointerSelectStart}
                           onSelectTask={handleSelectTask}
                           onToggleStatus={handleStatusChange}
                         />

@@ -489,17 +489,6 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       });
       return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
     },
-    flushMarkdownValue: () => {
-      const currentValue = readMarkdownValue();
-      lastInternalValueRef.current = currentValue;
-      markdownInputVersionRef.current = Math.max(markdownInputVersionRef.current, fastInputVersionRef.current);
-      logEditorDebug('editor.flushMarkdownValue', {
-        fast_input_version: fastInputVersionRef.current,
-        markdown_input_version: markdownInputVersionRef.current,
-        current_value: summarizeDebugText(currentValue),
-      });
-      return currentValue;
-    },
     getDebugSnapshot: () => {
       const fastDOMValue = readFastInputValue();
       return {

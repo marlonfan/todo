@@ -545,6 +545,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const basicPanelRef = useRef(null);
   const detailPanelSnapshotRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
+  const modalOpenedAtRef = useRef(Date.now());
   const descriptionEditorRef = useRef(null);
   const modalBodyScrollCleanupRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
@@ -1605,6 +1606,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     onClose();
   }, [onClose]);
 
+  const handleOverlayClick = useCallback((event) => {
+    if (event.target !== event.currentTarget) return;
+    if (Date.now() - modalOpenedAtRef.current < 450) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    requestClose();
+  }, [requestClose]);
+
   const executeDelete = useCallback(async (scope = 'series') => {
     if (!isEditing || !task) return;
     setLoading(true);
@@ -1792,11 +1803,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   }, [deleteChoiceOpen, loading, requestClose]);
 
   return createPortal(
-    <div className="modal-overlay" onClick={requestClose}>
+    <div className="modal-overlay" onClick={handleOverlayClick}>
       <div
         className="modal-content task-modal-shell mobile-scrollbar-hidden"
         onClick={e => e.stopPropagation()}
       >
+        <div className="task-modal-sheet-handle" aria-hidden="true" />
         <div className="task-modal-frame relative flex min-h-0 flex-col">
           <div className="task-modal-header sticky top-0 z-20 bg-white/95 px-5 pb-3 pt-4 backdrop-blur md:px-7">
             <div className="flex items-start justify-between gap-4">
