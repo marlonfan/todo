@@ -5,11 +5,13 @@ import {
   commitOffsetFromWheelSession,
   resolveLeadingRenderBuffer,
   resolvePanDelta,
+  shouldOpenEventFromPointerRelease,
   shouldCommitWheelSession,
 } from './canvasMotionMath';
 import { getDayDisplayInfo, clearHolidayCache } from '../utils/holidays';
 import { getShowChineseHolidays, onUIPrefsChanged } from '../utils/uiPrefs';
 import { getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
+import { isReadOnlyCalendarEvent } from '../utils/calendarEvents';
 
 const HOUR_HEIGHT = 56;
 const MONTH_WEEK_HEIGHT = 164;
@@ -102,7 +104,7 @@ function getAllDayEventDates(event, timezone) {
 }
 
 function isReadonlyEvent(event) {
-  return !!event?.extendedProps?.readOnly || String(event?.extendedProps?.source || '') === 'caldav';
+  return isReadOnlyCalendarEvent(event);
 }
 
 function buildEventInstanceBaseKey(event) {
@@ -1230,6 +1232,7 @@ export default function InfiniteCalendarCanvas({
     const pointerId = drag.pointerId;
     const endX = drag.lastClientX || event.clientX;
     const endY = drag.lastClientY || event.clientY;
+    const totalMoveDistance = Math.hypot(endX - drag.startX, endY - drag.startY);
     dragRef.current.active = false;
     unlockTextSelection();
     clearEventDragVisual();
@@ -1239,21 +1242,41 @@ export default function InfiniteCalendarCanvas({
     drag.captured = false;
     if (!wasMoved) {
       resetPanLayer();
-      if (drag.ignoreClickTarget) {
-        return;
-      }
       if (eventCandidate) {
-        const targetEvent = eventByKey.get(eventCandidate) || null;
-        if (targetEvent) {
-          onOpenEvent?.(targetEvent);
+        if (shouldOpenEventFromPointerRelease({
+          eventCandidate,
+          totalMoveDistance,
+          clickCancelDistance: CLICK_CANCEL_DISTANCE_PX,
+          longPressTriggered: drag.longPressTriggered,
+        })) {
+          const targetEvent = eventByKey.get(eventCandidate) || null;
+          if (targetEvent) {
+            onOpenEvent?.(targetEvent);
+          }
           return;
         }
+        return;
       }
-      openCreateAtPoint(endX, endY);
+      if (!drag.ignoreClickTarget && totalMoveDistance <= CLICK_CANCEL_DISTANCE_PX) {
+        openCreateAtPoint(endX, endY);
+      }
       return;
     }
 
-    const totalMoveDistance = Math.hypot(endX - drag.startX, endY - drag.startY);
+    if (shouldOpenEventFromPointerRelease({
+      eventCandidate,
+      totalMoveDistance,
+      clickCancelDistance: CLICK_CANCEL_DISTANCE_PX,
+      longPressTriggered: drag.longPressTriggered,
+    })) {
+      resetPanLayer();
+      const targetEvent = eventByKey.get(eventCandidate) || null;
+      if (targetEvent) {
+        onOpenEvent?.(targetEvent);
+      }
+      return;
+    }
+
     if (
       (drag.mode === 'event' || drag.mode === 'resize')
       && drag.dragEvent

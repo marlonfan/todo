@@ -5,6 +5,7 @@ import {
   buildEventsSignature,
   decomposeEventsByDay,
   getEventDates,
+  isReadOnlyCalendarEvent,
 } from './calendarEvents.js';
 
 test('buildEventsSignature changes when event content changes but length stays same', () => {
@@ -43,6 +44,23 @@ test('decomposeEventsByDay segments readonly cross-day events for each day', () 
   assert.match(map['2026-03-06'][0].id, /::2026-03-06$/);
   assert.equal(map['2026-03-06'][0].start, '2026-03-06T00:00:00.000Z');
   assert.equal(dayjs(map['2026-03-05'][0].end).utc().format('YYYY-MM-DD'), '2026-03-05');
+});
+
+test('isReadOnlyCalendarEvent treats caldav source and readonly flags as external events', () => {
+  assert.equal(isReadOnlyCalendarEvent({
+    id: 'cached-caldav',
+    extendedProps: { source: 'caldav', taskId: 123 },
+  }), true);
+  assert.equal(isReadOnlyCalendarEvent({
+    id: 'non-editable-caldav',
+    editable: false,
+    extendedProps: { taskId: 123 },
+  }), true);
+  assert.equal(isReadOnlyCalendarEvent({
+    id: 'task-123',
+    editable: true,
+    extendedProps: { source: 'local_projection', taskId: 123 },
+  }), false);
 });
 
 test('decomposeEventsByDay keeps editable task event as single start-day record', () => {

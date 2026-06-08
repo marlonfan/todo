@@ -3,6 +3,7 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
+import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -33,6 +34,7 @@ import { openSearchDialog } from '../state/searchOverlay';
 import { useCalendarFetch, useEventsForRange } from '../hooks/useCalendarFetch';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 import { formatCalendarViewTitle, getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
+import { isReadOnlyCalendarEvent } from '../utils/calendarEvents';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -1106,7 +1108,7 @@ function CalendarView() {
 
   const handleEventClick = async (info) => {
     if (Date.now() < mobileClickSuppressUntilRef.current) return;
-    if (info?.event?.extendedProps?.readOnly) {
+    if (isReadOnlyCalendarEvent(info?.event)) {
       openReadonlyEventModal({
         id: info.event.id,
         title: info.event.title,
@@ -1155,7 +1157,7 @@ function CalendarView() {
   };
 
   const openTaskFromCalendarEvent = useCallback(async (eventLike) => {
-    if (eventLike?.extendedProps?.readOnly) {
+    if (isReadOnlyCalendarEvent(eventLike)) {
       openReadonlyEventModal(eventLike);
       return;
     }
@@ -1233,7 +1235,7 @@ function CalendarView() {
   }, [timezone]);
 
   const handleQuickComplete = async (event) => {
-    if (event?.extendedProps?.readOnly) return;
+    if (isReadOnlyCalendarEvent(event)) return;
     const taskId = event.extendedProps.taskId;
     const instanceId = event.extendedProps.instanceId || event.id;
     const isRecurring = !!event.extendedProps.isRecurring;
@@ -1260,7 +1262,7 @@ function CalendarView() {
   };
 
   const handleEventDrop = async (info) => {
-    if (info?.event?.extendedProps?.readOnly) {
+    if (isReadOnlyCalendarEvent(info?.event)) {
       info.revert();
       return;
     }
@@ -1291,7 +1293,7 @@ function CalendarView() {
   };
 
   const handleEventResize = async (info) => {
-    if (info?.event?.extendedProps?.readOnly) {
+    if (isReadOnlyCalendarEvent(info?.event)) {
       info.revert();
       return;
     }
@@ -1322,7 +1324,7 @@ function CalendarView() {
   };
 
   const handleCanvasEventMove = useCallback(async ({ event, start, end, allDay }) => {
-    if (!event || event?.extendedProps?.readOnly) return;
+    if (!event || isReadOnlyCalendarEvent(event)) return;
     const taskId = Number(event?.extendedProps?.taskId || 0);
     if (!taskId) return;
 
@@ -1387,8 +1389,7 @@ function CalendarView() {
 
   const renderEventContent = (arg) => {
     const completed = arg.event.extendedProps.status === 'completed';
-    const readOnly = !!arg.event.extendedProps?.readOnly;
-    const isReadonlyExternal = readOnly;
+    const isReadonlyExternal = isReadOnlyCalendarEvent(arg.event);
     const isMonthView = activeCalendarView === 'dayGridMonth';
     const hideTimeForView = activeCalendarView === 'timeGridDay' || activeCalendarView === 'timeGridWeek' || activeCalendarView === 'timeGridThreeDay';
     const hasTimeText = Boolean(arg.timeText) && !arg.event.allDay && !hideTimeForView;
@@ -1425,11 +1426,8 @@ function CalendarView() {
   };
 
   const getEventClassNames = useCallback((arg) => {
-    const ext = arg?.event?.extendedProps || {};
-    const source = String(ext.source || '');
-    const readOnly = !!ext.readOnly;
     const list = [];
-    if (readOnly || source === 'caldav') {
+    if (isReadOnlyCalendarEvent(arg?.event)) {
       list.push('event-readonly');
     }
     return list;
@@ -1624,8 +1622,8 @@ function CalendarView() {
         />
       )}
 
-      {readonlyEventOpen && readonlyEventDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-[1px]" onClick={handleReadonlyBackdropClick}>
+      {readonlyEventOpen && readonlyEventDetail && typeof document !== 'undefined' && createPortal(
+        <div className="calendar-readonly-event-overlay fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-[1px]" onClick={handleReadonlyBackdropClick}>
           <div
             className="readonly-event-card mobile-scrollbar-hidden w-full max-w-[42rem] overflow-hidden"
             onClick={(event) => event.stopPropagation()}
@@ -1720,7 +1718,8 @@ function CalendarView() {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {moreEventsOpen && (

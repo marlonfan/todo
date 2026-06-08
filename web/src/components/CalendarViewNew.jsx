@@ -32,7 +32,7 @@ import { openSearchDialog } from '../state/searchOverlay';
 import { useCalendarFetch, useEventsForRange, useInvalidateCalendarDates } from '../hooks/useCalendarFetch';
 import { useCalendarPrefetchManager } from '../hooks/useCalendarPrefetchManager';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
-import { getEventDates, decomposeEventsByDay } from '../utils/calendarEvents';
+import { getEventDates, decomposeEventsByDay, isReadOnlyCalendarEvent } from '../utils/calendarEvents';
 
 // ==================== 工具函数 ====================
 
@@ -287,9 +287,8 @@ function CalendarViewNew() {
     if (!event) return;
 
     const taskId = Number(event.extendedProps?.taskId || 0);
-    const readOnly = !!event.extendedProps?.readOnly;
 
-    if (taskId > 0 && !readOnly) {
+    if (taskId > 0 && !isReadOnlyCalendarEvent(event)) {
       const task = tasks.find((t) => t.id === taskId);
       if (task) {
         setSelectedTask(task);
@@ -328,6 +327,10 @@ function CalendarViewNew() {
 
   const handleEventDrop = async (info) => {
     const event = info.event;
+    if (isReadOnlyCalendarEvent(event)) {
+      info.revert?.();
+      return;
+    }
     const taskId = Number(event.extendedProps?.taskId || 0);
     if (!taskId) return;
 

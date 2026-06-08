@@ -4,6 +4,7 @@ import {
   commitOffsetFromWheelSession,
   resolveLeadingRenderBuffer,
   resolvePanDelta,
+  shouldOpenEventFromPointerRelease,
   shouldCommitWheelSession,
 } from './canvasMotionMath.js';
 
@@ -51,6 +52,25 @@ test('commitOffsetFromWheelSession applies cumulative wheel delta to start offse
 test('shouldCommitWheelSession ignores tiny noise and accepts real deltas', () => {
   assert.equal(shouldCommitWheelSession(0.009), false);
   assert.equal(shouldCommitWheelSession(-0.011), true);
+});
+
+test('shouldOpenEventFromPointerRelease accepts jitter but rejects real drags', () => {
+  assert.equal(shouldOpenEventFromPointerRelease({
+    eventCandidate: 'event-1',
+    totalMoveDistance: 5,
+    clickCancelDistance: 8,
+  }), true);
+  assert.equal(shouldOpenEventFromPointerRelease({
+    eventCandidate: 'event-1',
+    totalMoveDistance: 9,
+    clickCancelDistance: 8,
+  }), false);
+  assert.equal(shouldOpenEventFromPointerRelease({
+    eventCandidate: 'event-1',
+    totalMoveDistance: 2,
+    clickCancelDistance: 8,
+    longPressTriggered: true,
+  }), false);
 });
 
 test('resolveLeadingRenderBuffer covers the full snap span for week view', () => {

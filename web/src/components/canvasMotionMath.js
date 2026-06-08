@@ -21,6 +21,18 @@ export function shouldCommitWheelSession(totalDelta, threshold = 0.01) {
   return Math.abs(safeDelta) >= threshold;
 }
 
+export function shouldOpenEventFromPointerRelease({
+  eventCandidate,
+  totalMoveDistance = 0,
+  clickCancelDistance = 8,
+  longPressTriggered = false,
+}) {
+  if (!eventCandidate || longPressTriggered) return false;
+  const safeDistance = Number.isFinite(totalMoveDistance) ? totalMoveDistance : 0;
+  const safeThreshold = Math.max(0, Number.isFinite(clickCancelDistance) ? clickCancelDistance : 8);
+  return safeDistance <= safeThreshold;
+}
+
 export function resolveLeadingRenderBuffer(baseLeading = 0, snapUnitSteps = 1) {
   const leading = Math.max(0, Math.ceil(Number(baseLeading) || 0));
   const snapSpan = Math.max(1, Math.ceil(Number(snapUnitSteps) || 1));

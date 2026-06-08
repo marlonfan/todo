@@ -6,6 +6,7 @@ import {
   readTaskDragTaskID,
   resolveTaskDragTaskID,
   setCurrentDraggedTaskID,
+  shouldSelectTaskRowFromPointerRelease,
   TASK_DRAG_TASK_ID_MIME,
   writeTaskDragData,
 } from './taskDrag.js';
@@ -57,4 +58,36 @@ test('readTaskDragTaskID supports text/plain fallback', () => {
   dataTransfer.setData('text/plain', '88');
 
   assert.equal(readTaskDragTaskID(dataTransfer), 88);
+});
+
+test('shouldSelectTaskRowFromPointerRelease allows jitter but rejects drag intent', () => {
+  assert.equal(shouldSelectTaskRowFromPointerRelease({
+    startX: 10,
+    startY: 10,
+    endX: 15,
+    endY: 14,
+    clickDistance: 8,
+  }), true);
+  assert.equal(shouldSelectTaskRowFromPointerRelease({
+    startX: 10,
+    startY: 10,
+    endX: 22,
+    endY: 10,
+    clickDistance: 8,
+  }), false);
+  assert.equal(shouldSelectTaskRowFromPointerRelease({
+    startX: 10,
+    startY: 10,
+    endX: 12,
+    endY: 12,
+    dragStarted: true,
+  }), false);
+  assert.equal(shouldSelectTaskRowFromPointerRelease({
+    startX: 10,
+    startY: 10,
+    endX: 12,
+    endY: 12,
+    dragStarted: true,
+    allowStartedDrag: true,
+  }), true);
 });

@@ -27,7 +27,9 @@ import {
   emitTaskCategoryDrop,
   getCurrentDraggedTaskID,
   readTaskDragTaskID,
+  shouldTreatPointerReleaseAsClick,
 } from '../utils/taskDrag';
+import { blurActiveTaskDescriptionEditor } from '../utils/editorFocus';
 import { useCategoriesQuery } from '../query/hooks';
 import { moveTaskToCategoryLocal, updateTaskLocal } from '../data/taskMutations';
 import { closeSearchDialog, openSearchDialog, subscribeSearchOverlay } from '../state/searchOverlay';
@@ -210,6 +212,102 @@ function sortConflictFields(fields) {
     if (left !== right) return left - right;
     return String(a).localeCompare(String(b));
   });
+}
+
+function StableNavLink({
+  to,
+  replace = false,
+  state,
+  relative,
+  children,
+  onClick,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+  onDragStart,
+  ...props
+}) {
+  const navigate = useNavigate();
+  const pointerStateRef = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    navigatedFromPointer: false,
+  });
+
+  const isModifiedPointerEvent = (event) => !!(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
+
+  return (
+    <Link
+      {...props}
+      to={to}
+      replace={replace}
+      state={state}
+      relative={relative}
+      draggable={false}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        if (event.defaultPrevented || isModifiedPointerEvent(event)) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        blurActiveTaskDescriptionEditor();
+        pointerStateRef.current = {
+          active: true,
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          lastX: event.clientX,
+          lastY: event.clientY,
+          navigatedFromPointer: false,
+        };
+      }}
+      onPointerMove={(event) => {
+        onPointerMove?.(event);
+        const pointerState = pointerStateRef.current;
+        if (!pointerState.active || pointerState.pointerId !== event.pointerId) return;
+        pointerState.lastX = event.clientX;
+        pointerState.lastY = event.clientY;
+      }}
+      onPointerUp={(event) => {
+        onPointerUp?.(event);
+        const pointerState = pointerStateRef.current;
+        if (!pointerState.active || pointerState.pointerId !== event.pointerId) return;
+        pointerState.active = false;
+        if (event.defaultPrevented || isModifiedPointerEvent(event)) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (shouldTreatPointerReleaseAsClick({
+          startX: pointerState.startX,
+          startY: pointerState.startY,
+          endX: event.clientX,
+          endY: event.clientY,
+        })) {
+          pointerState.navigatedFromPointer = true;
+          navigate(to, { replace, state, relative });
+        }
+      }}
+      onPointerCancel={(event) => {
+        onPointerCancel?.(event);
+        pointerStateRef.current.active = false;
+      }}
+      onDragStart={(event) => {
+        onDragStart?.(event);
+        if (!event.defaultPrevented) event.preventDefault();
+      }}
+      onClick={(event) => {
+        if (pointerStateRef.current.navigatedFromPointer && !isModifiedPointerEvent(event)) {
+          pointerStateRef.current.navigatedFromPointer = false;
+          event.preventDefault();
+          return;
+        }
+        onClick?.(event);
+      }}
+    >
+      {children}
+    </Link>
+  );
 }
 
 function MainLayout({ user, setUser }) {
@@ -718,7 +816,7 @@ function MainLayout({ user, setUser }) {
         </div>
 
         <nav className="flex-1 space-y-1.5 px-5 pb-4">
-          <Link
+          <StableNavLink
             to="/"
             className={navItemClass(activeTab === 'calendar')}
           >
@@ -726,7 +824,7 @@ function MainLayout({ user, setUser }) {
               <IconCalendar className="h-[18px] w-[18px] shrink-0" />
               <span className="truncate">{t('nav.calendar')}</span>
             </span>
-          </Link>
+          </StableNavLink>
 
           <div className="mt-5 px-3 pb-1 text-xs font-semibold text-slate-400">
             {t('task.listView')}
@@ -749,7 +847,7 @@ function MainLayout({ user, setUser }) {
               );
             }
             return (
-              <Link
+              <StableNavLink
                 key={item.key}
                 to={item.to}
                 className={navItemClass(isTaskNavActive(item.to))}
@@ -758,14 +856,14 @@ function MainLayout({ user, setUser }) {
                   <ItemIcon className="h-[18px] w-[18px] shrink-0" />
                   <span className="truncate">{item.label}</span>
                 </span>
-              </Link>
+              </StableNavLink>
             );
           })}
 
           {categories.length > 0 && (
             <div className="mt-4 space-y-1.5 border-t border-slate-200 pt-3">
               {categories.map((cat) => (
-                <Link
+                <StableNavLink
                   key={cat.id}
                   to={`/tasks?category_id=${cat.id}`}
                   onDragOver={(event) => {
@@ -790,13 +888,13 @@ function MainLayout({ user, setUser }) {
                     )}
                     <span className="truncate">{cat.name}</span>
                   </span>
-                </Link>
+                </StableNavLink>
               ))}
             </div>
           )}
 
           <div className={`${categories.length > 0 ? 'mt-4' : 'mt-5'} border-t border-slate-200 pt-3`}>
-            <Link
+            <StableNavLink
               to="/tasks?view=completed"
               className={navItemClass(isTaskNavActive('/tasks?view=completed'))}
             >
@@ -804,8 +902,8 @@ function MainLayout({ user, setUser }) {
                 <IconStatus className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">{t('task.completedTasks')}</span>
               </span>
-            </Link>
-            <Link
+            </StableNavLink>
+            <StableNavLink
               to="/tasks?view=deleted"
               className={navItemClass(isTaskNavActive('/tasks?view=deleted'))}
             >
@@ -813,8 +911,8 @@ function MainLayout({ user, setUser }) {
                 <IconTrash className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">{t('task.deletedTasks')}</span>
               </span>
-            </Link>
-            <Link
+            </StableNavLink>
+            <StableNavLink
               to="/categories"
               className={navItemClass(activeTab === 'categories')}
             >
@@ -822,7 +920,7 @@ function MainLayout({ user, setUser }) {
                 <IconTag className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">{t('category.manageCategories')}</span>
               </span>
-            </Link>
+            </StableNavLink>
           </div>
 
           <button
@@ -903,7 +1001,7 @@ function MainLayout({ user, setUser }) {
               );
             }
             return (
-              <Link
+              <StableNavLink
                 key={item.key}
                 to={item.to}
                 aria-label={item.label}
@@ -919,7 +1017,7 @@ function MainLayout({ user, setUser }) {
                 >
                   <ItemIcon className="h-[18px] w-[18px]" />
                 </span>
-              </Link>
+              </StableNavLink>
             );
           })}
         </div>

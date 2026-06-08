@@ -77,6 +77,29 @@ export function readTaskDragTaskID(dataTransfer, fallbackTaskID = 0) {
   return 0;
 }
 
+export function shouldTreatPointerReleaseAsClick({
+  ignoreTarget = false,
+  dragStarted = false,
+  allowStartedDrag = false,
+  startX = 0,
+  startY = 0,
+  endX = 0,
+  endY = 0,
+  clickDistance = 8,
+}) {
+  if (ignoreTarget || (dragStarted && !allowStartedDrag)) return false;
+  const sx = Number.isFinite(startX) ? startX : 0;
+  const sy = Number.isFinite(startY) ? startY : 0;
+  const ex = Number.isFinite(endX) ? endX : sx;
+  const ey = Number.isFinite(endY) ? endY : sy;
+  const threshold = Math.max(0, Number.isFinite(clickDistance) ? clickDistance : 8);
+  return Math.hypot(ex - sx, ey - sy) <= threshold;
+}
+
+export function shouldSelectTaskRowFromPointerRelease(options = {}) {
+  return shouldTreatPointerReleaseAsClick(options);
+}
+
 export function emitTaskCategoryDrop({ taskID, categoryID }) {
   const normalizedTaskID = normalizeTaskID(taskID);
   const normalizedCategoryID = normalizeTaskID(categoryID);

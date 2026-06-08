@@ -495,6 +495,31 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       });
       return '';
     },
+    getPendingDOMSnapshot: () => {
+      captureFastInputValue('imperative.getPendingDOMSnapshot');
+      if (fastInputVersionRef.current > markdownInputVersionRef.current) {
+        logEditorDebug('editor.getPendingDOMSnapshot.fast', {
+          fast_input_version: fastInputVersionRef.current,
+          markdown_input_version: markdownInputVersionRef.current,
+          fast_input: summarizeDebugText(fastInputValueRef.current),
+          last_internal: summarizeDebugText(lastInternalValueRef.current),
+        });
+        return {
+          hasPendingDOMValue: true,
+          value: String(fastInputValueRef.current ?? ''),
+        };
+      }
+      logEditorDebug('editor.getPendingDOMSnapshot.none', {
+        fast_input_version: fastInputVersionRef.current,
+        markdown_input_version: markdownInputVersionRef.current,
+        fast_input: summarizeDebugText(fastInputValueRef.current),
+        last_internal: summarizeDebugText(lastInternalValueRef.current),
+      });
+      return {
+        hasPendingDOMValue: false,
+        value: '',
+      };
+    },
     getDebugSnapshot: () => {
       const fastDOMValue = readFastInputValue();
       return {
@@ -518,6 +543,24 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         } else {
           editorRef.current?.focus?.();
         }
+      } catch {
+        // ignore
+      }
+    },
+    blur: () => {
+      try {
+        const activeElement = document.activeElement;
+        if (
+          activeElement
+          && mountRef.current
+          && typeof mountRef.current.contains === 'function'
+          && mountRef.current.contains(activeElement)
+          && typeof activeElement.blur === 'function'
+        ) {
+          activeElement.blur();
+        }
+        editorRef.current?.blur?.();
+        window.getSelection?.()?.removeAllRanges?.();
       } catch {
         // ignore
       }

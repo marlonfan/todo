@@ -32,12 +32,17 @@ function resolveInclusiveEndDay(start, end) {
   return endDay;
 }
 
-function shouldCreateDailySegments(event) {
+export function isReadOnlyCalendarEvent(event) {
   const ext = event?.extendedProps || {};
-  const source = String(ext.source || '');
-  const readOnly = !!ext.readOnly;
+  const source = String(ext.source || '').trim().toLowerCase();
+  const provider = String(ext.provider || '').trim().toLowerCase();
+  const readOnly = !!ext.readOnly || event?.editable === false;
+  return readOnly || source === 'caldav' || provider === 'caldav' || provider === 'feishu';
+}
+
+function shouldCreateDailySegments(event) {
   // Editable task events keep single instance to avoid breaking move/resize flows.
-  return readOnly || source === 'caldav';
+  return isReadOnlyCalendarEvent(event);
 }
 
 function buildSegmentEvent(event, dayKey, dayStart, dayEnd, eventStart, eventEnd) {

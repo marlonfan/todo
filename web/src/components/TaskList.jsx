@@ -27,9 +27,14 @@ import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import { getLunarInfo } from '../utils/holidays';
 import {
   clearCurrentDraggedTaskID,
+  shouldSelectTaskRowFromPointerRelease,
   TASK_CATEGORY_DROP_EVENT,
   writeTaskDragData,
 } from '../utils/taskDrag';
+import {
+  blurTaskDescriptionEditorUnlessInside,
+  isTaskDescriptionEditorTarget,
+} from '../utils/editorFocus';
 import {
   getShowCategoryEmoji,
   onUIPrefsChanged,
@@ -927,9 +932,20 @@ const TaskRow = React.memo(function TaskRow({
   labels,
   timeMode,
   onBeforeSelectTask,
+  onPointerSelectStart,
   onSelectTask,
   onToggleStatus,
 }) {
+  const pointerStateRef = useRef({
+    active: false,
+    startX: 0,
+    startY: 0,
+    pointerId: null,
+    dragStarted: false,
+    selectedFromPointer: false,
+    lastX: 0,
+    lastY: 0,
+  });
   const isCompleted = task.status === 'completed';
   const isSkipped = task.status === 'skipped';
   const isDeleted = task.status === 'cancelled' || isSkipped;
@@ -952,13 +968,41 @@ const TaskRow = React.memo(function TaskRow({
       draggable={!isReadOnly}
       onDragStart={(event) => {
         if (isReadOnly) return;
+        const pointerState = pointerStateRef.current;
+        pointerState.dragStarted = true;
         writeTaskDragData(event.dataTransfer, task);
       }}
-      onDragEnd={() => {
+      onDragEnd={(event) => {
+        const pointerState = pointerStateRef.current;
+        const hasDragEndPosition = Number.isFinite(event.clientX)
+          && Number.isFinite(event.clientY)
+          && (event.clientX !== 0 || event.clientY !== 0);
+        if (shouldSelectTaskRowFromPointerRelease({
+          dragStarted: pointerState.dragStarted,
+          allowStartedDrag: true,
+          startX: pointerState.startX,
+          startY: pointerState.startY,
+          endX: hasDragEndPosition ? event.clientX : pointerState.lastX,
+          endY: hasDragEndPosition ? event.clientY : pointerState.lastY,
+        })) {
+          pointerState.selectedFromPointer = true;
+          onSelectTask(task);
+        }
+        pointerState.dragStarted = false;
         clearCurrentDraggedTaskID();
       }}
       onPointerDownCapture={(event) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
+        pointerStateRef.current = {
+          active: true,
+          startX: event.clientX,
+          startY: event.clientY,
+          pointerId: event.pointerId,
+          dragStarted: false,
+          selectedFromPointer: false,
+          lastX: event.clientX,
+          lastY: event.clientY,
+        };
         logDraftSwitchDebug('taskRow.pointerDownCapture', {
           pointer_type: event.pointerType || '',
           row_task_id: task.id,
@@ -966,8 +1010,41 @@ const TaskRow = React.memo(function TaskRow({
           row_selected: !!selected,
         });
         onBeforeSelectTask?.(task);
+        onPointerSelectStart?.(event, task);
+      }}
+      onPointerMoveCapture={(event) => {
+        const pointerState = pointerStateRef.current;
+        if (!pointerState.active || pointerState.pointerId !== event.pointerId) return;
+        pointerState.lastX = event.clientX;
+        pointerState.lastY = event.clientY;
+      }}
+      onPointerUp={(event) => {
+        const pointerState = pointerStateRef.current;
+        if (!pointerState.active || pointerState.pointerId !== event.pointerId) return;
+        pointerState.active = false;
+        const ignoreTarget = !!event.target.closest('button,a,input,textarea,select,[role="button"]');
+        if (shouldSelectTaskRowFromPointerRelease({
+          ignoreTarget,
+          dragStarted: pointerState.dragStarted,
+          allowStartedDrag: true,
+          startX: pointerState.startX,
+          startY: pointerState.startY,
+          endX: event.clientX,
+          endY: event.clientY,
+        })) {
+          pointerState.selectedFromPointer = true;
+          onSelectTask(task);
+        }
+      }}
+      onPointerCancel={() => {
+        pointerStateRef.current.active = false;
+        pointerStateRef.current.selectedFromPointer = false;
       }}
       onClick={() => {
+        if (pointerStateRef.current.selectedFromPointer) {
+          pointerStateRef.current.selectedFromPointer = false;
+          return;
+        }
         logDraftSwitchDebug('taskRow.click', {
           row_task_id: task.id,
           row_task_title: task.title || '',
@@ -1428,14 +1505,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       discardDraftOnUnloadTimerRef.current = 0;
     }
   }, []);
-
-  useEffect(() => {
-    if (!selectedTaskID) return;
-    const timer = setTimeout(() => {
-      draftDescriptionEditorRef.current?.focus();
-    }, 50);
-    return () => clearTimeout(timer);
-  }, [selectedTaskID]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -3267,10 +3336,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       return draftValue;
     }
 
+    const pendingDOMSnapshot = draftDescriptionEditorRef.current?.getPendingDOMSnapshot?.();
     const liveDescription = String(
-      draftDescriptionEditorRef.current?.getCachedValue?.()
-      ?? draftValue.description
-      ?? ''
+      pendingDOMSnapshot?.hasPendingDOMValue
+        ? pendingDOMSnapshot.value
+        : (
+            draftDescriptionEditorRef.current?.getCachedValue?.()
+            ?? draftValue.description
+            ?? ''
+          )
     );
     if (liveDescription === String(draftValue.description || '')) {
       logDraftSwitchDebug('draft.capture.same', {
@@ -3300,6 +3374,41 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       description: liveDescription,
     });
   }, [getEffectiveTaskID, setDraftWithSnapshot]);
+
+  const releaseFocusedDescriptionEditor = useCallback((target = null, source = 'outside_pointer') => {
+    const released = blurTaskDescriptionEditorUnlessInside(target);
+    draftDescriptionEditorRef.current?.blur?.();
+    if (released) {
+      logDraftSwitchDebug('draft.editor.blurActive', {
+        source,
+        task_id: getEffectiveTaskID(selectedTaskSnapshotRef.current),
+        draft_source_task_id: Number(draftSourceTaskIDRef.current || 0),
+      });
+    }
+    return released;
+  }, [getEffectiveTaskID]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const handlePointerDownCapture = (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (isTaskDescriptionEditorTarget(event.target)) return;
+      const activeElement = document.activeElement;
+      if (
+        !activeElement
+        || !taskWorkspaceRef.current
+        || !taskWorkspaceRef.current.contains(activeElement)
+      ) {
+        return;
+      }
+      captureCurrentDescriptionDraft();
+      releaseFocusedDescriptionEditor(event.target, 'document_pointerdown');
+    };
+    document.addEventListener('pointerdown', handlePointerDownCapture, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownCapture, true);
+    };
+  }, [captureCurrentDescriptionDraft, releaseFocusedDescriptionEditor]);
 
   const stageDraftForLeave = useCallback((submitSource = 'leave', options = {}) => {
     const taskValue = options?.taskValue || selectedTaskSnapshotRef.current;
@@ -4301,6 +4410,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                           labels={listLabels}
                           timeMode={rowTimeMode}
                           onBeforeSelectTask={captureCurrentDescriptionDraft}
+                          onPointerSelectStart={(event) => releaseFocusedDescriptionEditor(event.target, 'task_row_pointerdown')}
                           onSelectTask={handleSelectTask}
                           onToggleStatus={handleStatusChange}
                         />
