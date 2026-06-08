@@ -6,6 +6,13 @@ import {
   upsertTask,
 } from './localStore';
 import { enqueueTaskOperation } from './syncEngine';
+import {
+  hasBaseTaskPatchPayload,
+  isOccurrenceScopedPayload,
+  normalizeOccurrenceDateText,
+  patchOccurrenceDescriptionInItems,
+  patchOccurrenceScheduleInItems,
+} from './taskMutationHelpers.js';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 
 function nowISO() {
@@ -136,11 +143,6 @@ function resolveCategoriesFromIDs(queryClient, categoryIDs) {
   return categories.filter((item) => ids.includes(Number(item.id)));
 }
 
-function isOccurrenceScopedPayload(payload) {
-  const body = payload && typeof payload === 'object' ? payload : {};
-  return !!(body.instance_id || body.occurrence_date);
-}
-
 function patchRecurringOccurrenceCalendarStatus(taskID, payload) {
   const body = payload && typeof payload === 'object' ? payload : {};
   const status = String(body.status || '').trim();
@@ -151,53 +153,6 @@ function patchRecurringOccurrenceCalendarStatus(taskID, payload) {
     instanceID: String(body.instance_id || '').trim(),
     occurrenceDate: String(body.occurrence_date || '').trim(),
   });
-}
-
-function normalizeOccurrenceDateText(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
-  if (compact) {
-    return `${compact[1]}-${compact[2]}-${compact[3]}`;
-  }
-  const dateLike = raw.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (dateLike) {
-    return dateLike[1];
-  }
-  const parsed = Date.parse(raw);
-  if (Number.isFinite(parsed)) {
-    return new Date(parsed).toISOString().slice(0, 10);
-  }
-  return '';
-}
-
-function patchOccurrenceDescriptionInItems(items, taskID, scopedInstanceID, scopedDate, nextDescription) {
-  if (!Array.isArray(items) || items.length === 0) return items;
-  let changed = false;
-  const next = items.map((item) => {
-    const itemTaskID = Number(item?.task_id || item?.taskID || item?.source_task_id || item?.sourceTaskID || item?.id || 0);
-    if (!itemTaskID || itemTaskID !== taskID) return item;
-    const itemInstanceID = String(item?.instance_id || item?.instanceId || '').trim();
-    const itemDate = normalizeOccurrenceDateText(
-      item?.occurrence_date
-      || item?.occurrenceDate
-      || item?.original_date
-      || item?.originalDate
-      || item?.start_time
-      || item?.startTime
-      || '',
-    );
-    const scopedByInstance = !!(scopedInstanceID && itemInstanceID && scopedInstanceID === itemInstanceID);
-    const scopedByDate = !!(scopedDate && itemDate && scopedDate === itemDate);
-    if (!scopedByInstance && !scopedByDate) return item;
-    if (String(item?.description || '') === nextDescription) return item;
-    changed = true;
-    return {
-      ...item,
-      description: nextDescription,
-    };
-  });
-  return changed ? next : items;
 }
 
 function patchOccurrenceStatusInItems(items, taskID, scopedInstanceID, scopedDate, nextStatus) {
@@ -273,6 +228,48 @@ function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
       scopedInstanceID,
       scopedDate,
       nextDescription,
+    );
+    if (nextItems !== value.items) {
+      queryClient.setQueryData(queryKey, {
+        ...value,
+        items: nextItems,
+      });
+    }
+  });
+}
+
+function patchRecurringOccurrenceSchedule(queryClient, taskID, payload) {
+  if (!queryClient || !payload || typeof payload !== 'object') return;
+  const scopedInstanceID = String(payload?.instance_id || '').trim();
+  const scopedDate = normalizeOccurrenceDateText(payload?.occurrence_date || '');
+  if (!scopedInstanceID && !scopedDate) return;
+
+  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
+    patchOccurrenceScheduleInItems(prev, Number(taskID) || 0, scopedInstanceID, scopedDate, payload)
+  ));
+
+  const occurrenceQueries = queryClient.getQueriesData({ queryKey: ['tasks', 'occurrences'] });
+  occurrenceQueries.forEach(([queryKey, value]) => {
+    if (Array.isArray(value)) {
+      const nextItems = patchOccurrenceScheduleInItems(
+        value,
+        Number(taskID) || 0,
+        scopedInstanceID,
+        scopedDate,
+        payload,
+      );
+      if (nextItems !== value) {
+        queryClient.setQueryData(queryKey, nextItems);
+      }
+      return;
+    }
+    if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return;
+    const nextItems = patchOccurrenceScheduleInItems(
+      value.items,
+      Number(taskID) || 0,
+      scopedInstanceID,
+      scopedDate,
+      payload,
     );
     if (nextItems !== value.items) {
       queryClient.setQueryData(queryKey, {
@@ -430,13 +427,16 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
   } = options;
   const submitMeta = normalizeSubmitMeta(submitMetaInput || {});
   const occurrenceScoped = isOccurrenceScopedPayload(payload);
+  const shouldPatchBaseTask = hasBaseTaskPatchPayload(payload);
   if (occurrenceScoped) {
     patchRecurringOccurrenceDescription(queryClient, taskID, payload);
+    patchRecurringOccurrenceSchedule(queryClient, taskID, payload);
+    patchRecurringOccurrenceStatus(queryClient, taskID, payload);
   }
-  const snapshot = !skipOptimistic ? queryClient.getQueryData(queryKeys.tasks.all) : null;
+  const snapshot = !skipOptimistic && shouldPatchBaseTask ? queryClient.getQueryData(queryKeys.tasks.all) : null;
   let nextTask = null;
   let baseRevision = 0;
-  if (!skipOptimistic) {
+  if (!skipOptimistic && shouldPatchBaseTask) {
     setTasksCache(queryClient, (prev) => prev.map((task) => {
       if (!task || typeof task !== 'object') return task;
       if (Number(task.id) !== Number(taskID)) return task;
@@ -457,7 +457,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
 
   if (nextTask) {
     const persistWork = async () => {
-      if (!skipOptimistic) {
+      if (!skipOptimistic && shouldPatchBaseTask) {
         await upsertTask(nextTask);
       }
       if (!localOnly) {
@@ -469,11 +469,11 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
           payload,
           if_match_revision: baseRevision || undefined,
           ...submitMeta,
-        }, { schedule: shouldScheduleSync });
+      }, { schedule: shouldScheduleSync });
       }
       const needsCalendarInvalidate = shouldInvalidateCalendar(payload);
       await invalidateCalendarCaches(queryClient, taskID, {
-        revalidateQuery: !localOnly && needsCalendarInvalidate,
+        revalidateQuery: !localOnly && (needsCalendarInvalidate || occurrenceScoped),
         skipRangeInvalidate: !needsCalendarInvalidate,
       });
       if (typeof payload.recurrence_rule !== 'undefined') {

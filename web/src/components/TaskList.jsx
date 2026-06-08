@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
-import { MoreHorizontal, Plus, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import TaskModal from './TaskModal';
 import {
   formatDateTime,
@@ -89,7 +89,7 @@ import {
   updateTaskLocal,
   updateTaskStatusLocal,
 } from '../data/taskMutations';
-import { onTaskIDRemapped } from '../data/syncEngine';
+import { forceManualSync, onTaskIDRemapped } from '../data/syncEngine';
 import { Button } from './ui/Button';
 import {
   DropdownMenu,
@@ -121,6 +121,10 @@ const DETAIL_PANEL_FLOATING_WIDTH_REMS = {
   category: 14.75,
   recurrence: 18.25,
 };
+const TASK_PULL_REFRESH_TRIGGER_PX = 58;
+const TASK_PULL_REFRESH_MAX_PX = 76;
+const TASK_PULL_REFRESH_HOLD_PX = 54;
+const TASK_PULL_REFRESH_RESISTANCE = 0.46;
 const TASK_COMPACT_MOBILE_BREAKPOINT = 768;
 const TASK_DETAIL_SPLIT_MIN_WIDTH = 800;
 const TASK_SPLIT_STORAGE_KEY = 'todo:taskListDetailSplitRatio';
@@ -1454,8 +1458,19 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const detailPanelRef = useRef(null);
   const detailPanelTriggerRefs = useRef({});
   const taskWorkspaceRef = useRef(null);
+  const taskListScrollRef = useRef(null);
   const taskSplitDragRef = useRef({ startX: 0, startRatio: TASK_SPLIT_DEFAULT_RATIO, workspaceWidth: 0 });
   const taskSplitRatioRef = useRef(taskSplitRatio);
+  const taskPullRefreshRef = useRef({
+    active: false,
+    pulling: false,
+    pointerID: 0,
+    startX: 0,
+    startY: 0,
+    distance: 0,
+    refreshing: false,
+  });
+  const taskPullRefreshResetTimerRef = useRef(0);
   const listToolbarPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
   const draftSourceTaskIDRef = useRef(0);
@@ -1486,11 +1501,165 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const descriptionSessionTaskIDRef = useRef(0);
   const latestDescriptionSessionByTaskRef = useRef(new Map());
   const latestEditedDescriptionSessionByTaskRef = useRef(new Map());
+  const [taskPullRefresh, setTaskPullRefresh] = useState({ state: 'idle', distance: 0 });
 
   const bindDetailBodyScroll = useCallback((node) => {
     detailBodyScrollCleanupRef.current?.();
     detailBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
   }, []);
+
+  const resetTaskPullRefresh = useCallback((delay = 0) => {
+    if (taskPullRefreshResetTimerRef.current) {
+      window.clearTimeout(taskPullRefreshResetTimerRef.current);
+      taskPullRefreshResetTimerRef.current = 0;
+    }
+    const applyReset = () => {
+      taskPullRefreshResetTimerRef.current = 0;
+      taskPullRefreshRef.current = {
+        ...taskPullRefreshRef.current,
+        active: false,
+        pulling: false,
+        pointerID: 0,
+        startX: 0,
+        startY: 0,
+        distance: 0,
+      };
+      setTaskPullRefresh({ state: 'idle', distance: 0 });
+    };
+    if (delay > 0) {
+      taskPullRefreshResetTimerRef.current = window.setTimeout(applyReset, delay);
+      return;
+    }
+    applyReset();
+  }, []);
+
+  const refreshTaskListFromServer = useCallback(async () => {
+    const state = taskPullRefreshRef.current;
+    if (state.refreshing) return;
+    if (taskPullRefreshResetTimerRef.current) {
+      window.clearTimeout(taskPullRefreshResetTimerRef.current);
+      taskPullRefreshResetTimerRef.current = 0;
+    }
+    taskPullRefreshRef.current = {
+      ...state,
+      active: false,
+      pulling: false,
+      distance: TASK_PULL_REFRESH_HOLD_PX,
+      refreshing: true,
+    };
+    setTaskPullRefresh({ state: 'refreshing', distance: TASK_PULL_REFRESH_HOLD_PX });
+    try {
+      await forceManualSync();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+        queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+        queryClient.invalidateQueries({ queryKey: ['calendar'] }),
+      ]);
+      setTaskPullRefresh({ state: 'done', distance: TASK_PULL_REFRESH_HOLD_PX });
+    } catch (error) {
+      console.error('Failed to refresh task list:', error);
+      setTaskPullRefresh({ state: 'error', distance: TASK_PULL_REFRESH_HOLD_PX });
+    } finally {
+      taskPullRefreshRef.current.refreshing = false;
+      resetTaskPullRefresh(650);
+    }
+  }, [queryClient, resetTaskPullRefresh]);
+
+  const handleTaskListTouchStart = useCallback((event) => {
+    if (!(isCompactMobile || isMobileViewport)) return;
+    if (taskPullRefreshRef.current.refreshing) return;
+    const scrollNode = taskListScrollRef.current;
+    if (!scrollNode || scrollNode.scrollTop > 0) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    taskPullRefreshRef.current = {
+      ...taskPullRefreshRef.current,
+      active: true,
+      pulling: false,
+      pointerID: touch.identifier,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      distance: 0,
+    };
+  }, [isCompactMobile, isMobileViewport]);
+
+  const handleTaskListTouchMove = useCallback((event) => {
+    const state = taskPullRefreshRef.current;
+    if (!state.active || state.refreshing) return;
+    const scrollNode = taskListScrollRef.current;
+    if (!scrollNode) return;
+    const touch = Array.from(event.touches || []).find((item) => item.identifier === state.pointerID);
+    if (!touch) return;
+    const deltaX = touch.clientX - state.startX;
+    const deltaY = touch.clientY - state.startY;
+    if (!state.pulling && Math.abs(deltaX) > Math.max(12, Math.abs(deltaY) * 1.2)) {
+      resetTaskPullRefresh();
+      return;
+    }
+    if (scrollNode.scrollTop > 0 && !state.pulling) {
+      resetTaskPullRefresh();
+      return;
+    }
+    if (deltaY <= 0) {
+      if (state.pulling) {
+        taskPullRefreshRef.current.distance = 0;
+        setTaskPullRefresh({ state: 'pulling', distance: 0 });
+      }
+      return;
+    }
+    if (deltaY < 8 && !state.pulling) return;
+
+    const distance = Math.min(TASK_PULL_REFRESH_MAX_PX, Math.round(deltaY * TASK_PULL_REFRESH_RESISTANCE));
+    scrollNode.scrollTop = 0;
+    taskPullRefreshRef.current = {
+      ...state,
+      pulling: true,
+      distance,
+    };
+    setTaskPullRefresh({
+      state: distance >= TASK_PULL_REFRESH_TRIGGER_PX ? 'ready' : 'pulling',
+      distance,
+    });
+    event.preventDefault();
+  }, [resetTaskPullRefresh]);
+
+  const handleTaskListTouchEnd = useCallback(() => {
+    const state = taskPullRefreshRef.current;
+    if (!state.active || state.refreshing) return;
+    const shouldRefresh = state.pulling && state.distance >= TASK_PULL_REFRESH_TRIGGER_PX;
+    if (shouldRefresh) {
+      void refreshTaskListFromServer();
+      return;
+    }
+    resetTaskPullRefresh();
+  }, [refreshTaskListFromServer, resetTaskPullRefresh]);
+
+  const handleTaskListTouchCancel = useCallback(() => {
+    const state = taskPullRefreshRef.current;
+    if (!state.active || state.refreshing) return;
+    resetTaskPullRefresh();
+  }, [resetTaskPullRefresh]);
+
+  useEffect(() => {
+    const node = taskListScrollRef.current;
+    if (!node) return undefined;
+    node.addEventListener('touchstart', handleTaskListTouchStart, { passive: true });
+    node.addEventListener('touchmove', handleTaskListTouchMove, { passive: false });
+    node.addEventListener('touchend', handleTaskListTouchEnd, { passive: true });
+    node.addEventListener('touchcancel', handleTaskListTouchCancel, { passive: true });
+    return () => {
+      node.removeEventListener('touchstart', handleTaskListTouchStart);
+      node.removeEventListener('touchmove', handleTaskListTouchMove);
+      node.removeEventListener('touchend', handleTaskListTouchEnd);
+      node.removeEventListener('touchcancel', handleTaskListTouchCancel);
+    };
+  }, [
+    handleTaskListTouchCancel,
+    handleTaskListTouchEnd,
+    handleTaskListTouchMove,
+    handleTaskListTouchStart,
+  ]);
 
   const setDraftWithSnapshot = useCallback((updater) => {
     const prevSnapshot = draftSnapshotRef.current;
@@ -1504,6 +1673,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   useEffect(() => () => {
     detailBodyScrollCleanupRef.current?.();
     detailBodyScrollCleanupRef.current = null;
+    if (taskPullRefreshResetTimerRef.current) {
+      window.clearTimeout(taskPullRefreshResetTimerRef.current);
+      taskPullRefreshResetTimerRef.current = 0;
+    }
     if (discardDraftOnUnloadTimerRef.current) {
       window.clearTimeout(discardDraftOnUnloadTimerRef.current);
       discardDraftOnUnloadTimerRef.current = 0;
@@ -3300,8 +3473,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   ]);
 
   const getCurrentDraftDescriptionValue = useCallback(() => (
-    draftDescriptionEditorRef.current?.getValue?.()
-    ?? draftDescriptionEditorRef.current?.getCachedValue?.()
+    draftDescriptionEditorRef.current?.getCachedValue?.()
     ?? draftSnapshotRef.current?.description
     ?? draft?.description
     ?? ''
@@ -3309,6 +3481,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   const handleApplyAIDraftDescription = useCallback((nextValue) => {
     if (!selectedTaskSnapshotRef.current) return;
+    draftDescriptionEditorRef.current?.setValue?.(String(nextValue || ''));
     handleDraftDescriptionChange(nextValue, {
       taskID: getEffectiveTaskID(selectedTaskSnapshotRef.current),
       sessionID: activeDescriptionSessionRef.current,
@@ -4105,8 +4278,28 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     setModalTask(null);
   };
 
-  const handleTaskSaved = (savedTask) => {
+  const handleTaskSaved = (savedTask, saveContext = null) => {
     handleModalClose();
+    const hasOccurrenceScope = !!(
+      saveContext?.is_occurrence_scoped
+      || String(saveContext?.instance_id || '').trim()
+      || String(saveContext?.occurrence_date || '').trim()
+    );
+    if (hasOccurrenceScope) {
+      const selectedID = savedTask?.id || modalTask?.id || selectedTaskID;
+      if (selectedID) {
+        setSelectedTaskID(selectedID);
+      }
+      const description = String(saveContext?.description ?? savedTask?.description ?? '');
+      if (savedTask && String(selectedTaskSnapshotRef.current?.id || '') === String(savedTask.id || '')) {
+        selectedTaskSnapshotRef.current = {
+          ...selectedTaskSnapshotRef.current,
+          description,
+        };
+      }
+      setDraftWithSnapshot((prev) => (prev ? { ...prev, description } : prev));
+      return;
+    }
     if (savedTask?.id) {
       setSelectedTaskID(savedTask.id);
     }
@@ -4221,6 +4414,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
+  const taskPullRefreshDistance = Math.round(taskPullRefresh.distance || 0);
+  const taskPullRefreshProgress = Math.min(1, taskPullRefreshDistance / TASK_PULL_REFRESH_TRIGGER_PX);
+  const taskPullRefreshLabel = taskPullRefresh.state === 'refreshing'
+    ? t('task.pullRefreshRefreshing')
+    : taskPullRefresh.state === 'done'
+      ? t('task.pullRefreshDone')
+      : taskPullRefresh.state === 'error'
+        ? t('task.pullRefreshFailed')
+        : taskPullRefresh.state === 'ready'
+          ? t('task.pullRefreshRelease')
+          : t('task.pullRefreshPull');
   const sortOptions = useMemo(() => {
     if (view === 'completed') {
       return [
@@ -4387,44 +4591,74 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             </div>
           )}
 
-          <div className="mobile-scrollbar-hidden flex-1 overflow-auto bg-white md:bg-white">
-            {loading ? (
-              <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
-            ) : filteredTasks.length === 0 ? (
-              <div className="py-10 text-center text-slate-500">
-                <p>{view === 'search' ? t('task.searchNoResults') : t('task.noTasks')}</p>
-                <p className="mt-2 text-sm">{view === 'search' ? t('task.searchHint') : t('task.createFirst')}</p>
-              </div>
-            ) : (
-              <div className="space-y-5 px-0 py-1 md:px-5">
-                {taskGroups.map((group) => (
-                  <div key={group.key} className="space-y-1">
-                    {group.title ? (
-                      <div className="sticky top-0 z-[2] flex items-center gap-2 bg-white/95 px-4 py-2 text-base font-semibold text-slate-900 backdrop-blur md:px-5 md:bg-white/95">
-                        <span>{group.title}</span>
-                        <span className="text-sm font-normal text-slate-400">{group.tasks.length}</span>
-                      </div>
-                    ) : null}
-                    <div className="bg-white">
-                      {group.tasks.map((task) => (
-                        <TaskRow
-                          key={task.id}
-                          task={task}
-                          selected={selectedTaskID === task.id}
-                          timezone={timezone}
-                          labels={listLabels}
-                          timeMode={rowTimeMode}
-                          onBeforeSelectTask={captureCurrentDescriptionDraft}
-                          onPointerSelectStart={handleTaskRowPointerSelectStart}
-                          onSelectTask={handleSelectTask}
-                          onToggleStatus={handleStatusChange}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
+          <div
+            ref={taskListScrollRef}
+            className="task-list-scroll mobile-scrollbar-hidden relative flex-1 overflow-auto bg-white md:bg-white"
+          >
+            {(isCompactMobile || isMobileViewport) && (
+              <div
+                className={`task-pull-refresh${taskPullRefresh.state !== 'idle' ? ' task-pull-refresh--visible' : ''}${taskPullRefresh.state === 'refreshing' ? ' task-pull-refresh--refreshing' : ''}`}
+                style={{
+                  transform: `translate3d(-50%, ${Math.max(0, taskPullRefreshDistance - 44)}px, 0)`,
+                  opacity: taskPullRefresh.state === 'idle' ? 0 : Math.max(0.45, taskPullRefreshProgress),
+                }}
+                aria-hidden="true"
+              >
+                <RefreshCw
+                  className="h-4 w-4"
+                  style={{
+                    transform: taskPullRefresh.state === 'refreshing'
+                      ? undefined
+                      : `rotate(${Math.round(taskPullRefreshProgress * 180)}deg)`,
+                  }}
+                />
+                <span>{taskPullRefreshLabel}</span>
               </div>
             )}
+            <div
+              className="task-list-pull-content min-h-full"
+              style={{
+                transform: taskPullRefreshDistance > 0 ? `translate3d(0, ${taskPullRefreshDistance}px, 0)` : undefined,
+              }}
+            >
+              {loading ? (
+                <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
+              ) : filteredTasks.length === 0 ? (
+                <div className="py-10 text-center text-slate-500">
+                  <p>{view === 'search' ? t('task.searchNoResults') : t('task.noTasks')}</p>
+                  <p className="mt-2 text-sm">{view === 'search' ? t('task.searchHint') : t('task.createFirst')}</p>
+                </div>
+              ) : (
+                <div className="space-y-5 px-0 py-1 md:px-5">
+                  {taskGroups.map((group) => (
+                    <div key={group.key} className="space-y-1">
+                      {group.title ? (
+                        <div className="sticky top-0 z-[2] flex items-center gap-2 bg-white/95 px-4 py-2 text-base font-semibold text-slate-900 backdrop-blur md:px-5 md:bg-white/95">
+                          <span>{group.title}</span>
+                          <span className="text-sm font-normal text-slate-400">{group.tasks.length}</span>
+                        </div>
+                      ) : null}
+                      <div className="bg-white">
+                        {group.tasks.map((task) => (
+                          <TaskRow
+                            key={task.id}
+                            task={task}
+                            selected={selectedTaskID === task.id}
+                            timezone={timezone}
+                            labels={listLabels}
+                            timeMode={rowTimeMode}
+                            onBeforeSelectTask={captureCurrentDescriptionDraft}
+                            onPointerSelectStart={handleTaskRowPointerSelectStart}
+                            onSelectTask={handleSelectTask}
+                            onToggleStatus={handleStatusChange}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {isCompactMobile && (
@@ -4811,7 +5045,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     </button>
                     {showActivityPanel && selectedTask && (
                       <div className="fixed z-20 w-[30rem] max-w-[min(30rem,calc(100vw-3rem))]" style={activityPanelFloatingStyle}>
-                        <TaskActivityTimeline taskID={selectedTask.id} />
+                        <TaskActivityTimeline taskID={getEffectiveTaskID(selectedTask)} />
                       </div>
                     )}
                     <button

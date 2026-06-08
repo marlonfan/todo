@@ -103,6 +103,10 @@ function normalizeCalendarDefaultView(value) {
   return CALENDAR_DEFAULT_VIEWS.includes(value) ? value : 'timeGridDay';
 }
 
+function isMissingAIConfigEndpointError(error) {
+  return error?.response?.status === 404;
+}
+
 function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -616,6 +620,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
       setAIConfig(saved);
       showToast('success', t('settings.aiSaved'));
     } catch (err) {
+      if (isMissingAIConfigEndpointError(err)) {
+        showToast('success', t('settings.aiSavedLocalOnly'));
+        return;
+      }
       showToast('error', err.response?.data?.error || t('settings.saveFailed'));
     } finally {
       setAIConfigBusy(false);

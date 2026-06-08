@@ -155,17 +155,6 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   const resolveHeight = () => (fill ? '100%' : `${minHeight}px`);
   const normalize = (text) => String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
-  const readMarkdownValue = () => {
-    const editor = editorRef.current;
-    if (editor && typeof editor.getValue === 'function') {
-      try {
-        return String(editor.getValue() || '');
-      } catch {
-        return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
-      }
-    }
-    return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
-  };
   const readFastInputValue = () => {
     const root = mountRef.current;
     const editable = root?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset, [contenteditable="true"]');
@@ -186,10 +175,37 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       last_internal: summarizeDebugText(lastInternalValueRef.current),
     });
   };
-  const getCurrentValue = () => {
-    const currentValue = readMarkdownValue();
-    lastInternalValueRef.current = currentValue;
-    return currentValue;
+  const getCurrentValue = () => String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
+  const applyEditorValue = (nextValue, source = 'imperative') => {
+    const text = String(nextValue || '');
+    pendingExternalValueRef.current = text;
+    externalVersionRef.current += 1;
+    const currentExternalVersion = externalVersionRef.current;
+
+    const editor = editorRef.current;
+    if (readyRef.current && editor && typeof editor.setValue === 'function') {
+      syncingRef.current = true;
+      try {
+        editor.setValue(text, false);
+      } finally {
+        syncingRef.current = false;
+      }
+    }
+
+    lastInternalValueRef.current = text;
+    fastInputValueRef.current = text;
+    fastInputVersionRef.current += 1;
+    markdownInputVersionRef.current = fastInputVersionRef.current;
+    appliedExternalVersionRef.current = currentExternalVersion;
+    logEditorDebug('editor.value.applied', {
+      source,
+      external_version: currentExternalVersion,
+      applied_external_version: appliedExternalVersionRef.current,
+      fast_input_version: fastInputVersionRef.current,
+      markdown_input_version: markdownInputVersionRef.current,
+      next_value: summarizeDebugText(text),
+    });
+    return text;
   };
   const safeDestroy = (instance) => {
     if (!instance || typeof instance.destroy !== 'function') return;
@@ -455,7 +471,6 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     const nextValue = String(value || '');
     const normalizedNext = normalize(nextValue);
     if (normalizedNext === normalize(lastInternalValueRef.current)) return;
-    if (normalize(editor.getValue()) === normalizedNext) return;
 
     syncingRef.current = true;
     try {
@@ -479,6 +494,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   useImperativeHandle(ref, () => ({
     getValue: getCurrentValue,
+    setValue: (nextValue) => applyEditorValue(nextValue, 'imperative'),
     getCachedValue: () => {
       logEditorDebug('editor.getCachedValue.markdown', {
         fast_input_version: fastInputVersionRef.current,

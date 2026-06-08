@@ -169,6 +169,14 @@ export const aiConfigAPI = {
   save: (data) => apiClient.put('/ai/config', data),
 };
 
+export const promptsAPI = {
+  list: () => apiClient.get('/prompts'),
+  get: (id) => apiClient.get(`/prompts/${id}`),
+  create: (data) => apiClient.post('/prompts', data),
+  update: (id, data) => apiClient.put(`/prompts/${id}`, data),
+  delete: (id) => apiClient.delete(`/prompts/${id}`),
+};
+
 function withTaskMutationHeaders(options = {}) {
   const headers = {};
   const revision = Number(options?.ifMatchRevision || 0);

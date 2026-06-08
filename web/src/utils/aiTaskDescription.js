@@ -207,31 +207,93 @@ function isEventStreamResponse(response) {
   return String(response.headers?.get?.('content-type') || '').toLowerCase().includes('text/event-stream');
 }
 
-function findSSESeparator(buffer) {
-  const lfIndex = buffer.indexOf('\n\n');
-  const crlfIndex = buffer.indexOf('\r\n\r\n');
-  if (lfIndex === -1) return crlfIndex;
-  if (crlfIndex === -1) return lfIndex;
-  return Math.min(lfIndex, crlfIndex);
+function isLikelyStreamResponse(response) {
+  if (isEventStreamResponse(response)) return true;
+  return Boolean(response.body?.getReader);
 }
 
-function readSSEBlock(block) {
-  const lines = String(block || '').split(/\r?\n/);
-  let event = '';
-  const dataLines = [];
-  lines.forEach((line) => {
-    if (line.startsWith('event:')) {
-      event = line.slice(6).trim();
-      return;
-    }
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  });
-  return {
-    event,
-    data: dataLines.join('\n'),
-  };
+function tryParseJSON(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function isCompleteStreamPayload(value) {
+  const payload = String(value || '').trim();
+  if (!payload) return false;
+  if (payload === '[DONE]') return true;
+  if (!payload.startsWith('{') && !payload.startsWith('[')) return true;
+  return tryParseJSON(payload) !== null;
+}
+
+function extractString(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value.map(extractString).join('');
+  }
+  if (value && typeof value === 'object') {
+    return extractString(value.text ?? value.content ?? value.value ?? '');
+  }
+  return '';
+}
+
+function extractOpenAITextDelta(chunk) {
+  const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : null;
+  const delta = choice?.delta || {};
+  const message = choice?.message || {};
+  const candidates = [
+    delta.content,
+    delta.text,
+    delta.output_text,
+    choice?.text,
+    message.content,
+    chunk?.delta,
+    chunk?.content,
+    chunk?.text,
+    chunk?.response,
+  ];
+  for (const candidate of candidates) {
+    const text = extractString(candidate);
+    if (text) return text;
+  }
+  return '';
+}
+
+function extractAnthropicTextDelta(payload) {
+  const candidates = [
+    payload?.delta?.text,
+    payload?.content_block?.text,
+    payload?.message?.content,
+    payload?.content,
+    payload?.text,
+  ];
+  for (const candidate of candidates) {
+    const text = extractString(candidate);
+    if (text) return text;
+  }
+  return '';
+}
+
+function stripThinkingBlocks(value) {
+  let text = String(value || '');
+  text = text.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '');
+  const openThinkIndex = text.search(/<think\b[^>]*>/i);
+  if (openThinkIndex !== -1) {
+    text = text.slice(0, openThinkIndex);
+  }
+  return text;
+}
+
+function emitVisibleText(rawContent, visibleState, onDelta) {
+  const nextVisible = stripThinkingBlocks(rawContent);
+  if (nextVisible === visibleState.content) return;
+  const delta = nextVisible.startsWith(visibleState.content)
+    ? nextVisible.slice(visibleState.content.length)
+    : nextVisible;
+  visibleState.content = nextVisible;
+  onDelta?.(nextVisible, delta);
 }
 
 async function readSSEStream(response, onEvent, signal) {
@@ -240,34 +302,100 @@ async function readSSEStream(response, onEvent, signal) {
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let event = '';
+  let dataLines = [];
+
+  const flush = async () => {
+    if (!event && dataLines.length === 0) return;
+    const currentEvent = event;
+    const data = dataLines.join('\n');
+    event = '';
+    dataLines = [];
+    await onEvent({ event: currentEvent, data }, data);
+  };
+
+  const handleLine = async (line) => {
+    const nextLine = String(line || '').replace(/\r$/, '');
+    if (!nextLine) {
+      await flush();
+      return;
+    }
+    if (nextLine.startsWith(':')) return;
+
+    if (nextLine.startsWith('event:')) {
+      if (dataLines.length > 0) {
+        await flush();
+      }
+      event = nextLine.slice(6).trim();
+      return;
+    }
+
+    if (nextLine.startsWith('data:')) {
+      dataLines.push(nextLine.slice(5).trimStart());
+      if (isCompleteStreamPayload(dataLines.join('\n'))) {
+        await flush();
+      }
+      return;
+    }
+
+    const payload = nextLine.trim();
+    if (payload === '[DONE]' || payload.startsWith('{') || payload.startsWith('[')) {
+      await onEvent({ event: '', data: payload }, payload);
+    }
+  };
+
   while (true) {
     throwIfAborted(signal);
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    let separatorIndex = findSSESeparator(buffer);
-    while (separatorIndex !== -1) {
-      const block = buffer.slice(0, separatorIndex);
-      const separatorLength = buffer.startsWith('\r\n\r\n', separatorIndex) ? 4 : 2;
-      buffer = buffer.slice(separatorIndex + separatorLength);
-      const event = readSSEBlock(block);
-      if (event.data) {
-        await onEvent(event);
-      }
-      separatorIndex = findSSESeparator(buffer);
+    let newlineIndex = buffer.indexOf('\n');
+    while (newlineIndex !== -1) {
+      const line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      await handleLine(line);
+      newlineIndex = buffer.indexOf('\n');
     }
   }
 
   buffer += decoder.decode();
   const tail = buffer.trim();
   if (tail) {
-    const event = readSSEBlock(tail);
-    if (event.data) {
-      await onEvent(event);
-    }
+    await handleLine(tail);
+  }
+  await flush();
+  throwIfAborted(signal);
+}
+
+async function readTextStream(response, onText, signal) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return '';
+
+  const decoder = new TextDecoder();
+  let content = '';
+  while (true) {
+    throwIfAborted(signal);
+    const { value, done } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value, { stream: true });
+    if (!text) continue;
+    content += text;
+    await onText(content, text);
+  }
+  const tail = decoder.decode();
+  if (tail) {
+    content += tail;
+    await onText(content, tail);
   }
   throwIfAborted(signal);
+  return content;
+}
+
+function yieldForStreamUpdate() {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 async function callOpenAICompatible(config, prompt, options = {}) {
@@ -293,20 +421,30 @@ async function callOpenAICompatible(config, prompt, options = {}) {
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
-  if (isEventStreamResponse(response)) {
+  if (isLikelyStreamResponse(response)) {
     let content = '';
-    await readSSEStream(response, ({ data }) => {
-      if (data === '[DONE]') return;
-      const chunk = JSON.parse(data);
-      const delta = chunk?.choices?.[0]?.delta?.content || '';
+    const visibleState = { content: '' };
+    if (!isEventStreamResponse(response)) {
+      const rawContent = await readTextStream(response, async (next) => {
+        emitVisibleText(next, visibleState, onDelta);
+        await yieldForStreamUpdate();
+      }, signal);
+      return stripThinkingBlocks(rawContent);
+    }
+    await readSSEStream(response, async ({ data }, rawBlock) => {
+      const payload = String(data || '').trim();
+      if (!payload || payload === '[DONE]') return;
+      const chunk = tryParseJSON(payload);
+      const delta = chunk ? extractOpenAITextDelta(chunk) : payload || rawBlock;
       if (!delta) return;
       content += delta;
-      onDelta?.(content, delta);
+      emitVisibleText(content, visibleState, onDelta);
+      await yieldForStreamUpdate();
     }, signal);
-    return content.trim();
+    return stripThinkingBlocks(content);
   }
   const data = await response.json();
-  return String(data?.choices?.[0]?.message?.content || '').trim();
+  return stripThinkingBlocks(data?.choices?.[0]?.message?.content || '');
 }
 
 async function callAnthropicCompatible(config, prompt, options = {}) {
@@ -334,27 +472,36 @@ async function callAnthropicCompatible(config, prompt, options = {}) {
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
-  if (isEventStreamResponse(response)) {
+  if (isLikelyStreamResponse(response)) {
     let content = '';
-    await readSSEStream(response, ({ event, data }) => {
-      const payload = JSON.parse(data);
+    const visibleState = { content: '' };
+    if (!isEventStreamResponse(response)) {
+      const rawContent = await readTextStream(response, async (next) => {
+        emitVisibleText(next, visibleState, onDelta);
+        await yieldForStreamUpdate();
+      }, signal);
+      return stripThinkingBlocks(rawContent);
+    }
+    await readSSEStream(response, async ({ event, data }) => {
+      const payload = tryParseJSON(data);
       if (event === 'error' || payload?.type === 'error') {
         throw new Error(payload?.error?.message || 'Anthropic stream error');
       }
-      const delta = payload?.delta?.text || '';
+      if (!payload) return;
+      const delta = extractAnthropicTextDelta(payload);
       if (!delta) return;
       content += delta;
-      onDelta?.(content, delta);
+      emitVisibleText(content, visibleState, onDelta);
+      await yieldForStreamUpdate();
     }, signal);
-    return content.trim();
+    return stripThinkingBlocks(content);
   }
   const data = await response.json();
   const blocks = Array.isArray(data?.content) ? data.content : [];
-  return blocks
+  return stripThinkingBlocks(blocks
     .map((block) => block?.text || '')
     .filter(Boolean)
-    .join('\n')
-    .trim();
+    .join('\n'));
 }
 
 export function cleanGeneratedTaskDescription(value) {
@@ -392,6 +539,36 @@ export function cleanGeneratedTaskDescription(value) {
   return text;
 }
 
+export async function generateAIResponse({
+  systemPrompt = '',
+  userInput = '',
+  signal,
+  onDelta,
+} = {}) {
+  const config = normalizeAIConfig(readAIConfig());
+  if (!isAIConfigReady(config)) {
+    const err = new Error('AI model is not configured');
+    err.code = AI_CONFIG_REQUIRED_CODE;
+    throw err;
+  }
+
+  const prompt = {
+    system: String(systemPrompt || '').trim(),
+    user: String(userInput || '').trim(),
+  };
+
+  if (!prompt.system) {
+    throw new Error('System prompt is required');
+  }
+  if (!prompt.user) {
+    throw new Error('User input is required');
+  }
+
+  return config.protocol === AI_PROTOCOL_ANTHROPIC
+    ? callAnthropicCompatible(config, prompt, { signal, onDelta })
+    : callOpenAICompatible(config, prompt, { signal, onDelta });
+}
+
 export async function generateTaskDescriptionDraft({
   task,
   currentDescription = '',
@@ -402,11 +579,6 @@ export async function generateTaskDescriptionDraft({
   onDelta,
 } = {}) {
   const config = normalizeAIConfig(readAIConfig());
-  if (!isAIConfigReady(config)) {
-    const err = new Error('AI model is not configured');
-    err.code = AI_CONFIG_REQUIRED_CODE;
-    throw err;
-  }
 
   const prompt = buildTaskDescriptionPrompt({
     task,
@@ -419,9 +591,12 @@ export async function generateTaskDescriptionDraft({
     allowTaskContext: config.allowTaskContext,
   });
 
-  const content = config.protocol === AI_PROTOCOL_ANTHROPIC
-    ? await callAnthropicCompatible(config, prompt, { signal, onDelta })
-    : await callOpenAICompatible(config, prompt, { signal, onDelta });
+  const content = await generateAIResponse({
+    systemPrompt: prompt.system,
+    userInput: prompt.user,
+    signal,
+    onDelta,
+  });
   return cleanGeneratedTaskDescription(content);
 }
 

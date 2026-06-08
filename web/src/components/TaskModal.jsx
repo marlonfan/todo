@@ -505,10 +505,177 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
   };
 }
 
+function buildInitialTaskModalValues(task, initialRange) {
+  if (task) {
+    const timezoneName = getUserTimezone();
+    const recurrenceRule = parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
+    const baseStartTime = task.start_time || task.startTime;
+    const baseEndTime = task.end_time || task.endTime;
+    const allDay = !!(task.all_day || task.allDay);
+    const hasOccurrenceContext = !!(
+      recurrenceRule
+      && (
+        String(task?.instanceId || task?.instance_id || '').trim()
+        || String(task?.occurrenceDate || task?.occurrence_date || '').trim()
+        || String(task?.occurrenceStart || task?.occurrence_start || '').trim()
+      )
+    );
+    let startTime = baseStartTime;
+    let endTime = baseEndTime;
+
+    if (hasOccurrenceContext) {
+      const occurrenceStart = task?.occurrenceStart || task?.occurrence_start || '';
+      const occurrenceEnd = task?.occurrenceEnd || task?.occurrence_end || '';
+      if (occurrenceStart) {
+        startTime = occurrenceStart;
+        if (occurrenceEnd) {
+          endTime = occurrenceEnd;
+        } else {
+          const baseStartParsed = parseAbsoluteInTimezone(baseStartTime, timezoneName);
+          const baseEndParsed = parseAbsoluteInTimezone(baseEndTime, timezoneName);
+          const occurrenceStartParsed = parseAbsoluteInTimezone(occurrenceStart, timezoneName);
+          if (baseStartParsed && baseEndParsed && occurrenceStartParsed) {
+            const durationMinutes = baseEndParsed.diff(baseStartParsed, 'minute');
+            if (Number.isFinite(durationMinutes) && durationMinutes > 0) {
+              endTime = occurrenceStartParsed.add(durationMinutes, 'minute').toISOString();
+            }
+          }
+        }
+      }
+    }
+
+    let startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
+    let endInput = endTime ? toInputFormat(endTime, null, allDay) : '';
+    const parsedSelection = parseRecurrenceSelection(recurrenceRule, startInput);
+    if (!allDay && isWeeklyRecurrenceType(parsedSelection.type) && startInput) {
+      const nextStartInput = alignStartInputToWeekday(
+        startInput,
+        parsedSelection.days.length > 0 ? parsedSelection.days : DEFAULT_WORKDAY_KEYS,
+        timezoneName,
+      );
+      if (nextStartInput && nextStartInput !== startInput) {
+        const shiftedEnd = shiftEndByDuration(startInput, endInput, nextStartInput, timezoneName);
+        startInput = nextStartInput;
+        if (shiftedEnd) {
+          endInput = shiftedEnd;
+        }
+      }
+      endInput = coerceEndNotBeforeStart(startInput, endInput, timezoneName);
+    }
+
+    return {
+      title: task.title || '',
+      description: task.description || '',
+      priority: task.priority?.toString() || '0',
+      status: task.status || 'pending',
+      start_time: startInput || '',
+      end_time: endInput || '',
+      all_day: allDay,
+      category_ids: Array.isArray(task.categories) && task.categories.length > 0
+        ? task.categories.map((category) => category.id.toString())
+        : [],
+    };
+  }
+
+  if (initialRange?.start) {
+    return {
+      title: '',
+      description: '',
+      priority: '0',
+      status: 'pending',
+      start_time: initialRange.start,
+      end_time: initialRange.end || '',
+      all_day: !!initialRange.allDay,
+      category_ids: [],
+    };
+  }
+
+  return {
+    title: '',
+    description: '',
+    priority: '0',
+    status: 'pending',
+    start_time: getDefaultStartInputValue(getUserTimezone()),
+    end_time: '',
+    all_day: false,
+    category_ids: [],
+  };
+}
+
+function getTaskMutationID(task) {
+  const candidates = [
+    task?.source_task_id,
+    task?.sourceTaskID,
+    task?.task_id,
+    task?.taskID,
+    task?.id,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate || 0);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function getTaskInstanceID(task) {
+  const value = String(task?.instanceId || task?.instance_id || '').trim();
+  return /^\d+_\d{8}$/.test(value) ? value : '';
+}
+
+function normalizeTaskModalCategoryIDs(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (item && typeof item === 'object') return Number(item.id || 0);
+      return Number(item || 0);
+    })
+    .filter((item) => Number.isFinite(item) && item > 0)
+    .sort((left, right) => left - right);
+}
+
+function sameNumericList(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
+function buildTaskModalSavedTask(task, savedTask, payload, saveContext) {
+  if (!saveContext?.is_occurrence_scoped) {
+    if (!savedTask || typeof savedTask !== 'object') return savedTask;
+    return Object.prototype.hasOwnProperty.call(payload || {}, 'description')
+      ? { ...savedTask, description: String(payload.description || '') }
+      : savedTask;
+  }
+
+  const base = task && typeof task === 'object'
+    ? task
+    : savedTask && typeof savedTask === 'object'
+      ? savedTask
+      : null;
+  if (!base) return null;
+
+  return {
+    ...base,
+    id: task?.id ?? base.id,
+    source_task_id: saveContext.task_id || base.source_task_id || base.task_id || base.id,
+    task_id: saveContext.task_id || base.task_id || base.source_task_id || base.id,
+    virtual_occurrence: task?.virtual_occurrence ?? base.virtual_occurrence ?? true,
+    instance_id: saveContext.instance_id || base.instance_id || base.instanceId || '',
+    occurrence_date: saveContext.occurrence_date || base.occurrence_date || base.occurrenceDate || '',
+    description: Object.prototype.hasOwnProperty.call(payload || {}, 'description')
+      ? String(payload.description || '')
+      : String(base.description || ''),
+    status: Object.prototype.hasOwnProperty.call(payload || {}, 'status')
+      ? payload.status
+      : base.status,
+  };
+}
+
 function TaskModal({ task, initialRange, onClose, onSaved }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { register, handleSubmit, watch, setValue, getValues } = useForm();
+  const { register, handleSubmit, watch, setValue, getValues } = useForm({
+    defaultValues: buildInitialTaskModalValues(task, initialRange),
+  });
   const { data: categories = [] } = useCategoriesQuery();
   const { data: tasksRaw = [] } = useTasksQuery();
   const [loading, setLoading] = useState(false);
@@ -547,6 +714,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const modalOpenedAtRef = useRef(Date.now());
   const descriptionEditorRef = useRef(null);
+  const descriptionDraftRef = useRef(String(buildInitialTaskModalValues(task, initialRange).description || ''));
   const modalBodyScrollCleanupRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
 
@@ -561,6 +729,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   }, []);
 
   const isEditing = !!task;
+  const mutationTaskID = getTaskMutationID(task);
   const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
   const isAllDay = watch('all_day');
   const titleValue = watch('title') || '';
@@ -944,7 +1113,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     if (task) {
       // 编辑模式：填充表单数据
       setValue('title', task.title || '');
-      setValue('description', task.description || '');
+      descriptionDraftRef.current = String(task.description || '');
+      setValue('description', descriptionDraftRef.current);
       setValue('priority', task.priority?.toString() || '0');
       setValue('status', task.status || 'pending');
       
@@ -1060,6 +1230,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       }
     } else {
       // 新建模式：默认当前时间
+      descriptionDraftRef.current = '';
+      setValue('description', '');
       setShowRecurrence(false);
       setRecurrenceType('daily');
       setSelectedDays([]);
@@ -1172,14 +1344,20 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     const submitSource = String(submitOptions.submitSource || 'manual');
 
     try {
-      const liveDescription = String(descriptionEditorRef.current?.getValue?.() ?? data.description ?? '');
-      if (liveDescription !== String(data.description || '')) {
-        data.description = liveDescription;
+      const liveDescription = String(
+        descriptionDraftRef.current
+        ?? descriptionEditorRef.current?.getCachedValue?.()
+        ?? data.description
+        ?? ''
+      );
+      descriptionDraftRef.current = liveDescription;
+      data.description = liveDescription;
+      if (liveDescription !== String(getValues('description') || '')) {
         setValue('description', liveDescription, { shouldDirty: true });
       }
       const clientTimezone = getUserTimezone();
       logTimeDebug('taskModal.submit.start', {
-        task_id: Number(task?.id || 0),
+        task_id: mutationTaskID,
         is_editing: !!isEditing,
         timezone: clientTimezone,
       });
@@ -1189,7 +1367,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const parsedNaturalTime = applyNaturalTimeFromTitle(priorityNormalizedTitle, !timeTouched);
       const normalizedTitle = parsedNaturalTime?.cleanedTitle?.trim() || priorityNormalizedTitle;
 
-      const payload = {
+      let payload = {
         title: normalizedTitle,
         description: data.description || '',
         priority: Number.isInteger(parsedPriority?.priority) ? parsedPriority.priority : parseInt(data.priority),
@@ -1461,7 +1639,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       }
 
       logTimeDebug('taskModal.submit.payload_time', {
-        task_id: Number(task?.id || 0),
+        task_id: mutationTaskID,
         is_editing: !!isEditing,
         all_day: !!payload.all_day,
         start_time_local: payload.start_time_local || '',
@@ -1521,30 +1699,62 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         payload.category_ids = [];
       }
 
+      if (hasOccurrenceContext && (payload.instance_id || payload.occurrence_date)) {
+        const originalCategoryIDs = normalizeTaskModalCategoryIDs(task?.categories || []);
+        const nextCategoryIDs = normalizeTaskModalCategoryIDs(payload.category_ids || []);
+        const hasSchedulePayload = [
+          'start_time',
+          'end_time',
+          'start_time_local',
+          'end_time_local',
+          'all_day',
+        ].some((field) => Object.prototype.hasOwnProperty.call(payload, field));
+        const sourceFieldChanged = !!(
+          String(normalizedTitle || '') !== String(task?.title || '').trim()
+          || Number(payload.priority || 0) !== (Number.parseInt(task?.priority, 10) || 0)
+          || String(payload.status || '') !== String(task?.status || 'pending')
+          || !sameNumericList(originalCategoryIDs, nextCategoryIDs)
+          || recurrenceChanged
+          || hasSchedulePayload
+        );
+        if (!sourceFieldChanged) {
+          payload = {
+            description: String(payload.description || ''),
+            client_timezone: clientTimezone,
+            ...(payload.instance_id ? { instance_id: payload.instance_id } : {}),
+            ...(payload.occurrence_date ? { occurrence_date: payload.occurrence_date } : {}),
+          };
+        }
+      }
+
       const submitMeta = {
         submittedAt: new Date().toISOString(),
         submitSource,
       };
       const saveContext = {
         is_occurrence_scoped: hasOccurrenceContext,
-        task_id: Number(task?.id || 0),
+        task_id: mutationTaskID,
         instance_id: String(payload.instance_id || '').trim(),
         occurrence_date: String(payload.occurrence_date || '').trim(),
         description: String(payload.description || ''),
       };
+      const withSavedDescription = (savedTask) => buildTaskModalSavedTask(task, savedTask, payload, saveContext);
       let savePromise;
       if (isEditing) {
-        const localSavedTask = await updateTaskLocal(queryClient, task.id, payload, {
+        if (!mutationTaskID) {
+          throw new Error('invalid task ID');
+        }
+        const localSavedTask = await updateTaskLocal(queryClient, mutationTaskID, payload, {
           localOnly: true,
           scheduleSync: false,
         });
-        savePromise = updateTaskLocal(queryClient, task.id, payload, {
+        savePromise = updateTaskLocal(queryClient, mutationTaskID, payload, {
           localOnly: false,
           scheduleSync: true,
           submitMeta,
         });
         if (!silent) {
-          onSaved(localSavedTask || null, saveContext);
+          onSaved(withSavedDescription(localSavedTask) || null, saveContext);
         }
       } else {
         savePromise = createTaskLocal(queryClient, payload, { submitMeta });
@@ -1555,7 +1765,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       void Promise.resolve(savePromise)
         .then((savedTask) => {
           if (!silent && (isEditing ? savedTask?.id : true)) {
-            onSaved(savedTask || null, saveContext);
+            onSaved(withSavedDescription(savedTask) || null, saveContext);
           }
         })
         .catch((err) => {
@@ -1586,14 +1796,17 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   }, [handleSubmit, loading, onSubmit]);
 
   const getCurrentDescriptionValue = useCallback(() => (
-    descriptionEditorRef.current?.getValue?.()
+    descriptionDraftRef.current
     ?? descriptionEditorRef.current?.getCachedValue?.()
     ?? getValues('description')
     ?? ''
   ), [getValues]);
 
   const handleApplyAIDescription = useCallback((nextValue) => {
-    setValue('description', String(nextValue || ''), { shouldDirty: true });
+    const description = String(nextValue || '');
+    descriptionDraftRef.current = description;
+    descriptionEditorRef.current?.setValue?.(description);
+    setValue('description', description, { shouldDirty: true });
   }, [setValue]);
 
   const requestClose = useCallback(() => {
@@ -1634,7 +1847,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         if (occurrenceDate) {
           payload.occurrence_date = occurrenceDate;
         }
-        await updateTaskStatusLocal(queryClient, task.id, payload, {
+        await updateTaskStatusLocal(queryClient, mutationTaskID, payload, {
           submitMeta: {
             submittedAt: new Date().toISOString(),
             submitSource: 'manual',
@@ -1651,10 +1864,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           );
           if (occurrenceStart && taskStart && !occurrenceStart.isAfter(taskStart)) {
             // Deleting from the very first occurrence => delete whole series.
-            await deleteTaskLocal(queryClient, task.id);
+            await deleteTaskLocal(queryClient, mutationTaskID);
           } else if (occurrenceStart) {
             // Keep historical occurrences, stop current/future occurrences.
-            await updateTaskLocal(queryClient, task.id, {
+            await updateTaskLocal(queryClient, mutationTaskID, {
               recurrence_end_date: occurrenceStart.subtract(1, 'second').utc().toISOString(),
             }, {
               submitMeta: {
@@ -1663,12 +1876,12 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
               },
             });
           } else {
-            await deleteTaskLocal(queryClient, task.id);
+            await deleteTaskLocal(queryClient, mutationTaskID);
           }
         } else if (task?.status === 'cancelled') {
-          await deleteTaskLocal(queryClient, task.id);
+          await deleteTaskLocal(queryClient, mutationTaskID);
         } else {
-          await cancelTaskLocal(queryClient, task.id);
+          await cancelTaskLocal(queryClient, mutationTaskID);
         }
       }
       onSaved(null);
@@ -1679,7 +1892,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setLoading(false);
       setDeleteChoiceOpen(false);
     }
-  }, [isEditing, onSaved, queryClient, requestClose, t, task]);
+  }, [isEditing, mutationTaskID, onSaved, queryClient, requestClose, t, task]);
 
   const handleDelete = () => {
     if (!isEditing || !task) return;
@@ -1695,6 +1908,9 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     setLoading(true);
     setError('');
     try {
+      if (!mutationTaskID) {
+        throw new Error('invalid task ID');
+      }
       const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
       const recurrenceRule = parseRecurrenceRule(task.recurrence_rule || task.recurrenceRule);
       let statusPayload = nextStatus;
@@ -1714,7 +1930,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           ...(occurrenceDate ? { occurrence_date: occurrenceDate } : {}),
         };
       }
-      const savedTask = await updateTaskStatusLocal(queryClient, task.id, statusPayload, {
+      const savedTask = await updateTaskStatusLocal(queryClient, mutationTaskID, statusPayload, {
         submitMeta: {
           submittedAt: new Date().toISOString(),
           submitSource: 'manual',
@@ -1724,13 +1940,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const saveContext = (scopedPayload.instance_id || scopedPayload.occurrence_date)
         ? {
             is_occurrence_scoped: true,
-            task_id: Number(task.id || 0),
+            task_id: mutationTaskID,
             instance_id: String(scopedPayload.instance_id || '').trim(),
             occurrence_date: String(scopedPayload.occurrence_date || occurrenceDateForSaveContext || '').trim(),
             description: String(task.description || ''),
           }
         : null;
-      onSaved(savedTask || { ...task, status: nextStatus }, saveContext);
+      onSaved(
+        buildTaskModalSavedTask(
+          task,
+          savedTask || { ...task, status: nextStatus },
+          { status: nextStatus },
+          saveContext,
+        ) || null,
+        saveContext,
+      );
       requestClose();
     } catch (err) {
       setError(err.response?.data?.error || t('task.saveFailed'));
@@ -1878,9 +2102,9 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                         >
                           <IconHistory className="h-4 w-4" />
                         </button>
-                        {showActivityPanel && task?.id && (
+                        {showActivityPanel && mutationTaskID && (
                           <div className="absolute left-0 top-10 z-20 w-[min(30rem,calc(100vw-3.5rem))]">
-                            <TaskActivityTimeline taskID={task.id} />
+                            <TaskActivityTimeline taskID={mutationTaskID} />
                           </div>
                         )}
                       </>
@@ -2591,7 +2815,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     ref={descriptionEditorRef}
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
                     value={descriptionValue}
-                    onChange={(nextValue) => setValue('description', nextValue, { shouldDirty: true })}
+                    onChange={(nextValue) => {
+                      const description = String(nextValue || '');
+                      descriptionDraftRef.current = description;
+                      setValue('description', description, { shouldDirty: true });
+                    }}
                     onSaveShortcut={handleDescriptionSaveShortcut}
                     placeholder={t('task.description')}
                     className="min-h-0 min-w-0 flex-1 overflow-hidden"

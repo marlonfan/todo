@@ -11,7 +11,11 @@
     "test": "node --test",
     "test:ui": "node ./scripts/runPlaywrightWithCleanup.mjs",
     "test:ui:headed": "node ./scripts/runPlaywrightWithCleanup.mjs --headed",
-    "test:ui:report": "playwright show-report"
+    "test:ui:report": "playwright show-report",
+    "tauri": "cd .. && tauri",
+    "tauri:android:init": "cd .. && tauri android init",
+    "tauri:android:build": "node ./scripts/packageTauriAndroidArm64Debug.mjs",
+    "tauri:android:dev": "cd .. && tauri android dev"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.15",
@@ -46,6 +50,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@tauri-apps/cli": "^2.11.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

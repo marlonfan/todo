@@ -17,6 +17,7 @@ type Router struct {
 	notifyHandler   *handler.NotifyHandler
 	caldavHandler   *handler.CaldavHandler
 	aiConfigHandler *handler.AIConfigHandler
+	promptHandler   *handler.PromptHandler
 	cfg             *config.Config
 }
 
@@ -28,6 +29,7 @@ func NewRouter(
 	notifyHandler *handler.NotifyHandler,
 	caldavHandler *handler.CaldavHandler,
 	aiConfigHandler *handler.AIConfigHandler,
+	promptHandler *handler.PromptHandler,
 	cfg *config.Config,
 ) *Router {
 	return &Router{
@@ -38,6 +40,7 @@ func NewRouter(
 		notifyHandler:   notifyHandler,
 		caldavHandler:   caldavHandler,
 		aiConfigHandler: aiConfigHandler,
+		promptHandler:   promptHandler,
 		cfg:             cfg,
 	}
 }
@@ -78,6 +81,13 @@ func (r *Router) Setup() *gin.Engine {
 			// AI config
 			protected.GET("/ai/config", r.aiConfigHandler.Get)
 			protected.PUT("/ai/config", r.aiConfigHandler.Save)
+
+			// Prompts
+			protected.GET("/prompts", r.promptHandler.List)
+			protected.POST("/prompts", r.promptHandler.Create)
+			protected.GET("/prompts/:id", r.promptHandler.Get)
+			protected.PUT("/prompts/:id", r.promptHandler.Update)
+			protected.DELETE("/prompts/:id", r.promptHandler.Delete)
 
 			// Tasks
 			protected.GET("/tasks", r.taskHandler.List)

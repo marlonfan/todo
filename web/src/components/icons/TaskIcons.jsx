@@ -212,6 +212,18 @@ export function IconSearch({ className }) {
   );
 }
 
+export function IconPrompt({ className }) {
+  return (
+    <BaseIcon className={className}>
+      <rect x="4" y="4" width="16" height="16" rx="3" />
+      <path d="M8 9H16" />
+      <path d="M8 13H14" />
+      <path d="M8 17H11" />
+      <path d="M16 16L19 19" />
+    </BaseIcon>
+  );
+}
+
 export function IconSort({ className }) {
   return (
     <BaseIcon className={className}>

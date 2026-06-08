@@ -10,6 +10,7 @@ func Migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.UserAIConfig{},
+		&models.Prompt{},
 		&models.Category{},
 		&models.Task{},
 		&models.TaskDeleteLog{},

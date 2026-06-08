@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, Wand2, X } from 'lucide-react';
+import { flushSync } from 'react-dom';
+import { Bot, Check, Copy, Wand2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import Vditor from 'vditor';
+import 'vditor/dist/index.css';
+import vditorLuteUrl from 'vditor/dist/js/lute/lute.min.js?url';
 import {
   AI_CONFIG_REQUIRED_CODE,
   cleanGeneratedTaskDescription,
@@ -8,159 +12,116 @@ import {
 } from '../utils/aiTaskDescription';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 
-function renderInlineMarkdown(text, keyPrefix) {
-  const source = String(text || '');
-  const nodes = [];
-  const tokenPattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__)/g;
-  let lastIndex = 0;
-  let index = 0;
-  let match = tokenPattern.exec(source);
+let vditorLuteScriptPromise = null;
 
-  while (match) {
-    if (match.index > lastIndex) {
-      nodes.push(source.slice(lastIndex, match.index));
+function ensureVditorLuteScript() {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    return Promise.resolve();
+  }
+  if (window.Lute) {
+    if (!document.getElementById('vditorLuteScript')) {
+      const marker = document.createElement('script');
+      marker.id = 'vditorLuteScript';
+      marker.type = 'text/javascript';
+      document.head.appendChild(marker);
     }
+    return Promise.resolve();
+  }
+  if (vditorLuteScriptPromise) return vditorLuteScriptPromise;
 
-    const token = match[0];
-    if (token.startsWith('`')) {
-      nodes.push(
-        <code key={`${keyPrefix}-code-${index}`} className="task-ai-inline-code">
-          {token.slice(1, -1)}
-        </code>
-      );
-    } else {
-      nodes.push(
-        <strong key={`${keyPrefix}-strong-${index}`}>
-          {token.slice(2, -2)}
-        </strong>
-      );
-    }
-
-    lastIndex = match.index + token.length;
-    index += 1;
-    match = tokenPattern.exec(source);
+  const staleScript = document.getElementById('vditorLuteScript');
+  if (staleScript && !window.Lute) {
+    staleScript.remove();
   }
 
-  if (lastIndex < source.length) {
-    nodes.push(source.slice(lastIndex));
-  }
+  vditorLuteScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.id = 'vditorLuteScript';
+    script.src = vditorLuteUrl;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
 
-  return nodes;
+  return vditorLuteScriptPromise;
 }
 
-function flushListBlock(blocks, pendingList) {
-  if (!pendingList) return null;
-  const ListTag = pendingList.ordered ? 'ol' : 'ul';
-  blocks.push(
-    <ListTag key={`list-${blocks.length}`} className="task-ai-list">
-      {pendingList.items.map((item, index) => (
-        <li key={`item-${index}`} className={item.checked !== null ? 'task-ai-check-item' : ''}>
-          {item.checked !== null && (
-            <span className={`task-ai-check ${item.checked ? 'task-ai-check--checked' : ''}`} aria-hidden="true">
-              {item.checked ? <Check className="h-3 w-3" /> : null}
-            </span>
-          )}
-          <span>{renderInlineMarkdown(item.text, `list-${blocks.length}-${index}`)}</span>
-        </li>
-      ))}
-    </ListTag>
-  );
-  return null;
-}
+const TASK_AI_MARKDOWN_OPTIONS = {
+  cdn: '',
+  emojiPath: '',
+  anchor: 0,
+  markdown: {
+    codeBlockPreview: false,
+    gfmAutoLink: true,
+    listStyle: true,
+    mathBlockPreview: false,
+    sanitize: true,
+  },
+};
 
-function TaskAIMarkdownPreview({ value, fallback }) {
+export function TaskAIMarkdownPreview({ value, fallback }) {
+  const previewRef = useRef(null);
+  const renderIDRef = useRef(0);
+  const frameRef = useRef(0);
   const text = cleanGeneratedTaskDescription(value).trimEnd();
+
+  useEffect(() => {
+    const node = previewRef.current;
+    if (!node) return undefined;
+
+    if (!text.trim()) {
+      node.innerHTML = '';
+      return undefined;
+    }
+
+    const renderID = renderIDRef.current + 1;
+    renderIDRef.current = renderID;
+    let cancelled = false;
+
+    const renderMarkdown = async () => {
+      try {
+        await ensureVditorLuteScript();
+        const html = await Vditor.md2html(text, TASK_AI_MARKDOWN_OPTIONS);
+        if (cancelled || renderIDRef.current !== renderID || !previewRef.current) return;
+        previewRef.current.innerHTML = html;
+        previewRef.current.classList.remove('task-ai-markdown-fallback');
+        previewRef.current.classList.add('vditor-reset');
+      } catch {
+        if (cancelled || renderIDRef.current !== renderID || !previewRef.current) return;
+        previewRef.current.textContent = text;
+        previewRef.current.classList.add('task-ai-markdown-fallback');
+      }
+    };
+
+    frameRef.current = window.requestAnimationFrame(renderMarkdown);
+
+    return () => {
+      cancelled = true;
+      if (frameRef.current) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = 0;
+      }
+    };
+  }, [text]);
+
   if (!text.trim()) {
     return <p className="task-ai-empty">{fallback}</p>;
   }
 
-  const blocks = [];
-  const paragraphLines = [];
-  let pendingList = null;
+  return (
+    <div className="task-ai-markdown live-md-toast">
+      <div ref={previewRef} className="task-ai-markdown-preview vditor-reset" />
+    </div>
+  );
+}
 
-  const flushParagraph = () => {
-    if (paragraphLines.length === 0) return;
-    const paragraph = paragraphLines.join(' ');
-    blocks.push(
-      <p key={`p-${blocks.length}`}>
-        {renderInlineMarkdown(paragraph, `p-${blocks.length}`)}
-      </p>
-    );
-    paragraphLines.length = 0;
-  };
-
-  const closeList = () => {
-    pendingList = flushListBlock(blocks, pendingList);
-  };
-
-  text.replace(/\r\n/g, '\n').split('\n').forEach((rawLine) => {
-    const line = rawLine.trimEnd();
-    const trimmed = line.trim();
-
-    if (!trimmed) {
-      flushParagraph();
-      closeList();
-      return;
-    }
-
-    const heading = /^(#{1,4})\s+(.+)$/.exec(trimmed);
-    if (heading) {
-      flushParagraph();
-      closeList();
-      const level = Math.min(heading[1].length, 4);
-      const HeadingTag = `h${level + 2}`;
-      blocks.push(
-        <HeadingTag key={`h-${blocks.length}`}>
-          {renderInlineMarkdown(heading[2], `h-${blocks.length}`)}
-        </HeadingTag>
-      );
-      return;
-    }
-
-    if (/^([-*_])\s*\1\s*\1\s*$/.test(trimmed)) {
-      flushParagraph();
-      closeList();
-      blocks.push(<hr key={`hr-${blocks.length}`} />);
-      return;
-    }
-
-    const quote = /^>\s*(.+)$/.exec(trimmed);
-    if (quote) {
-      flushParagraph();
-      closeList();
-      blocks.push(
-        <blockquote key={`quote-${blocks.length}`}>
-          {renderInlineMarkdown(quote[1], `quote-${blocks.length}`)}
-        </blockquote>
-      );
-      return;
-    }
-
-    const taskItem = /^[-*+]\s+\[([ xX])\]\s+(.+)$/.exec(trimmed);
-    const unorderedItem = /^[-*+]\s+(.+)$/.exec(trimmed);
-    const orderedItem = /^\d+[.)]\s+(.+)$/.exec(trimmed);
-    if (taskItem || unorderedItem || orderedItem) {
-      flushParagraph();
-      const ordered = !!orderedItem;
-      if (!pendingList || pendingList.ordered !== ordered) {
-        closeList();
-        pendingList = { ordered, items: [] };
-      }
-      pendingList.items.push({
-        checked: taskItem ? taskItem[1].toLowerCase() === 'x' : null,
-        text: taskItem ? taskItem[2] : (orderedItem ? orderedItem[1] : unorderedItem[1]),
-      });
-      return;
-    }
-
-    closeList();
-    paragraphLines.push(trimmed);
-  });
-
-  flushParagraph();
-  closeList();
-
-  return <div className="task-ai-markdown">{blocks}</div>;
+export function TaskAIRawPreview({ value, fallback }) {
+  const text = String(value ?? '');
+  if (!text.trim()) {
+    return <p className="task-ai-empty">{fallback}</p>;
+  }
+  return <pre className="task-ai-raw">{text}</pre>;
 }
 
 function TaskDescriptionAI({
@@ -177,8 +138,10 @@ function TaskDescriptionAI({
   const [generated, setGenerated] = useState('');
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const requestRef = useRef(null);
   const resultScrollCleanupRef = useRef(null);
+  const copiedTimerRef = useRef(null);
 
   const bindResultScroll = useCallback((node) => {
     resultScrollCleanupRef.current?.();
@@ -190,6 +153,7 @@ function TaskDescriptionAI({
     requestRef.current = null;
     resultScrollCleanupRef.current?.();
     resultScrollCleanupRef.current = null;
+    if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
   }, []);
 
   const stopGeneration = () => {
@@ -215,6 +179,7 @@ function TaskDescriptionAI({
     setOpen(true);
     setGenerated('');
     setError('');
+    setCopied(false);
     let streamedContent = '';
     try {
       const next = await generateTaskDescriptionDraft({
@@ -228,7 +193,9 @@ function TaskDescriptionAI({
         signal: controller.signal,
         onDelta: (content) => {
           streamedContent = content;
-          setGenerated(content);
+          flushSync(() => {
+            setGenerated(content);
+          });
         },
       });
       if (requestRef.current !== controller) return;
@@ -260,6 +227,15 @@ function TaskDescriptionAI({
     setOpen(false);
   };
 
+  const handleCopyRaw = async () => {
+    const text = String(generated || '');
+    if (!text.trim()) return;
+    await navigator.clipboard?.writeText(text);
+    setCopied(true);
+    if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1600);
+  };
+
   return (
     <div
       className={`task-ai-description ${compact ? 'task-ai-description--compact' : ''}`}
@@ -285,14 +261,25 @@ function TaskDescriptionAI({
               </span>
               <span className="truncate text-sm font-semibold text-slate-900">{t('task.aiDescriptionTitle')}</span>
             </div>
-            <button
-              type="button"
-              onClick={closePopover}
-              className="task-ai-close"
-              aria-label={t('common.close')}
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleCopyRaw}
+                disabled={!String(generated || '').trim()}
+                className="task-ai-copy"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                <span>{copied ? t('prompt.copiedRaw') : t('prompt.copyRaw')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={closePopover}
+                className="task-ai-close"
+                aria-label={t('common.close')}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {error ? (

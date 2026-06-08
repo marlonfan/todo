@@ -42,6 +42,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 	notifyRepo := repository.NewNotificationRepository(db)
 	caldavRepo := repository.NewCaldavRepository(db)
 	aiConfigRepo := repository.NewAIConfigRepository(db)
+	promptRepo := repository.NewPromptRepository(db)
 
 	authSvc := service.NewAuthService(userRepo, &config.JWTConfig{
 		Secret: "e2e-secret",
@@ -53,6 +54,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 	taskSvc.SetCaldavService(caldavSvc)
 	catSvc := service.NewCategoryService(catRepo)
 	aiConfigSvc := service.NewAIConfigService(aiConfigRepo)
+	promptSvc := service.NewPromptService(promptRepo)
 
 	return NewRouter(
 		handler.NewAuthHandler(authSvc, notifySvc),
@@ -62,6 +64,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 		handler.NewNotifyHandler(notifySvc),
 		handler.NewCaldavHandler(caldavSvc),
 		handler.NewAIConfigHandler(aiConfigSvc),
+		handler.NewPromptHandler(promptSvc),
 		&config.Config{JWT: config.JWTConfig{Secret: "e2e-secret", Expire: 24 * time.Hour}},
 	).Setup()
 }

@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import CalendarView from './CalendarView';
 import TaskList, { TaskListView } from './TaskList';
 import CategoryManager from './CategoryManager';
+import PromptManager from './PromptManager';
 import Settings from './Settings';
 import SearchDialog from './SearchDialog';
 import {
@@ -13,6 +14,7 @@ import {
   IconInbox,
   IconList,
   IconLogout,
+  IconPrompt,
   IconSearch,
   IconSettings,
   IconStatus,
@@ -473,6 +475,12 @@ function MainLayout({ user, setUser }) {
         label: t('nav.categories'),
         icon: IconTag,
       },
+      prompts: {
+        key: 'prompts',
+        to: '/prompts',
+        label: t('nav.prompts'),
+        icon: IconPrompt,
+      },
       settings: {
         key: 'settings',
         to: '#settings',
@@ -484,7 +492,7 @@ function MainLayout({ user, setUser }) {
 
     switch (mobilePrefs.tabPreset) {
       case 'tasks_calendar_categories_settings':
-        return [baseTabs.tasks, baseTabs.search, baseTabs.calendar, baseTabs.categories, baseTabs.settings];
+        return [baseTabs.tasks, baseTabs.calendar, baseTabs.categories, baseTabs.prompts, baseTabs.settings];
       case 'tasks_inbox_calendar_settings':
         return [baseTabs.inbox, baseTabs.search, baseTabs.calendar, baseTabs.settings];
       default:
@@ -530,6 +538,7 @@ function MainLayout({ user, setUser }) {
     }
     if (location.pathname === '/search') return t('task.searchTasks');
     if (location.pathname === '/categories') return t('nav.categories');
+    if (location.pathname === '/prompts') return t('nav.prompts');
     if (location.pathname === '/settings') return t('nav.settings');
     return t('nav.calendar');
   }, [location.pathname, location.search, t]);
@@ -552,9 +561,11 @@ function MainLayout({ user, setUser }) {
       ? 'tasks'
       : location.pathname === '/categories'
         ? 'categories'
-        : location.pathname === '/settings'
-          ? 'settings'
-          : '';
+        : location.pathname === '/prompts'
+          ? 'prompts'
+          : location.pathname === '/settings'
+            ? 'settings'
+            : '';
   const showCalendarWorkspace = location.pathname === '/';
   const showTaskWorkspace = location.pathname === '/tasks';
   const shouldRenderCalendarWorkspace = workspaceVisited.calendar || showCalendarWorkspace;
@@ -734,9 +745,9 @@ function MainLayout({ user, setUser }) {
   }
 
   return (
-    <div className="h-screen bg-white flex flex-col md:flex-row">
+    <div className="app-shell h-screen bg-white flex flex-col md:flex-row">
       {activeSyncConflict && (
-        <div className="fixed right-2 top-2 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
+        <div className="sync-conflict-toast fixed right-2 top-2 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
           <div className="text-xs font-semibold text-amber-900">{t('task.syncConflictTitle')}</div>
           <div className="mt-1 text-xs leading-relaxed text-amber-800">
             {activeSyncConflict.task_title
@@ -767,7 +778,7 @@ function MainLayout({ user, setUser }) {
         </div>
       )}
       {!hideMobileHeader && (
-        <div className="md:hidden flex h-12 items-center justify-between border-b border-border bg-white/95 px-4 backdrop-blur">
+        <div className="mobile-top-bar md:hidden flex h-12 items-center justify-between border-b border-border bg-white/95 px-4 backdrop-blur">
           <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
           <Button
             type="button"
@@ -785,7 +796,7 @@ function MainLayout({ user, setUser }) {
         <button
           type="button"
           aria-label="Close menu"
-          className="fixed inset-0 bg-black/30 z-30 md:hidden"
+          className="mobile-menu-backdrop fixed inset-0 bg-black/30 z-30 md:hidden"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
@@ -921,6 +932,15 @@ function MainLayout({ user, setUser }) {
                 <span className="truncate">{t('category.manageCategories')}</span>
               </span>
             </StableNavLink>
+            <StableNavLink
+              to="/prompts"
+              className={navItemClass(activeTab === 'prompts')}
+            >
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <IconPrompt className="h-[18px] w-[18px] shrink-0" />
+                <span className="truncate">{t('prompt.managePrompts')}</span>
+              </span>
+            </StableNavLink>
           </div>
 
           <button
@@ -949,7 +969,7 @@ function MainLayout({ user, setUser }) {
       </div>
 
       {/* Main Content */}
-      <div className="relative flex-1 overflow-hidden pb-14 md:pb-0">
+      <div className="main-workspace relative flex-1 overflow-hidden pb-14 md:pb-0">
         {shouldRenderCalendarWorkspace && (
           <div className={`absolute inset-0 ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
             <CalendarView />
@@ -964,10 +984,11 @@ function MainLayout({ user, setUser }) {
         <Routes>
           <Route path="/search" element={<TaskList forcedView="search" />} />
           <Route path="/categories" element={<CategoryManager />} />
+          <Route path="/prompts" element={<PromptManager />} />
         </Routes>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-white/95 backdrop-blur md:hidden">
+      <div className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-20 border-t border-border bg-white md:hidden">
         <div className={`grid h-14 ${mobileTabs.length === 5 ? 'grid-cols-5' : mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;

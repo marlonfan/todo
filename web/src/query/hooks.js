@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { caldavAPI, categoriesAPI, tasksAPI } from '../api/client';
+import { caldavAPI, categoriesAPI, promptsAPI, tasksAPI } from '../api/client';
 import { queryKeys } from './keys';
 import {
   readCategories,
@@ -98,6 +98,16 @@ export function useCategoriesQuery() {
       }
       scheduleSync();
       return list;
+    },
+  });
+}
+
+export function usePromptsQuery() {
+  return useQuery({
+    queryKey: queryKeys.prompts.all,
+    queryFn: async () => {
+      const res = await promptsAPI.list();
+      return Array.isArray(res.data) ? res.data : [];
     },
   });
 }
