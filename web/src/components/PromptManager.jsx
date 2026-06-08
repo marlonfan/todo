@@ -350,11 +350,11 @@ function PromptManager() {
       <button
         type="button"
         onClick={openCreateDialog}
-        className="fixed bottom-6 right-6 z-40 inline-flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-xl shadow-blue-600/25 transition-colors hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-200"
+        className="prompt-create-fab"
         aria-label={t('prompt.newPrompt')}
         title={t('prompt.newPrompt')}
       >
-        <Plus className="h-6 w-6" />
+        <Plus className="prompt-create-fab-icon" />
       </button>
 
       {formDialogOpen && (
