@@ -266,6 +266,48 @@ const useCalendarCacheStore = create(
     },
 
     /**
+     * Remove local task-backed events without touching read-only subscription events.
+     * Used when a task is deleted from sync while keeping CalDAV/Feishu cache visible.
+     * @param {Array<number|string>} taskIDs
+     * @returns {Set<string>}
+     */
+    removeTaskEvents: (taskIDs = []) => {
+      const idSet = new Set(
+        (Array.isArray(taskIDs) ? taskIDs : [taskIDs])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id !== 0),
+      );
+      const changedDates = new Set();
+      if (idSet.size === 0) return changedDates;
+
+      set((state) => {
+        const buckets = state.eventsByDateByTimezone || {};
+        Object.keys(buckets).forEach((timezoneName) => {
+          const bucket = buckets[timezoneName];
+          if (!bucket || typeof bucket !== 'object') return;
+          Object.keys(bucket).forEach((dateKey) => {
+            const events = Array.isArray(bucket[dateKey]) ? bucket[dateKey] : [];
+            if (events.length === 0) return;
+            const nextEvents = events.filter((event) => {
+              const ext = event?.extendedProps || {};
+              const taskID = Number(ext?.taskId || 0);
+              if (!idSet.has(taskID)) return true;
+              const source = String(ext?.source || '').trim();
+              if (ext?.readOnly || source === 'caldav') return true;
+              return false;
+            });
+            if (nextEvents.length !== events.length) {
+              bucket[dateKey] = nextEvents;
+              changedDates.add(`${timezoneName}|${dateKey}`);
+            }
+          });
+        });
+      });
+
+      return changedDates;
+    },
+
+    /**
      * 记录已加载的范围
      * @param {string} start
      * @param {string} end

@@ -115,3 +115,38 @@ test('replaceFetchedSegments batches multiple segment updates', () => {
   assert.equal(Array.isArray(next.metadata.loadedRanges), true);
   assert.equal(next.metadata.loadedRanges.length, 2);
 });
+
+test('removeTaskEvents keeps read-only subscription events visible', () => {
+  const store = useCalendarCacheStore.getState();
+
+  store.replaceFetchedSegments([
+    {
+      start: '2026-03-01T00:00:00.000Z',
+      end: '2026-03-02T00:00:00.000Z',
+      timezone: 'UTC',
+      eventsByDate: {
+        '2026-03-01': [
+          {
+            id: 'task-8',
+            title: 'Local task',
+            start: '2026-03-01T08:00:00.000Z',
+            extendedProps: { taskId: 8, status: 'pending', source: 'task' },
+          },
+          {
+            id: 'caldav-8',
+            title: 'Subscribed event',
+            start: '2026-03-01T09:00:00.000Z',
+            extendedProps: { taskId: 8, status: 'pending', readOnly: true, source: 'caldav' },
+          },
+        ],
+      },
+    },
+  ]);
+
+  const changed = store.removeTaskEvents([8]);
+  const dayEvents = store.getEventsForDate('2026-03-01', 'UTC');
+
+  assert.equal(changed.has('UTC|2026-03-01'), true);
+  assert.equal(dayEvents.length, 1);
+  assert.equal(dayEvents[0].id, 'caldav-8');
+});
