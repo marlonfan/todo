@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   commitOffsetFromWheelSession,
+  resolveLeadingRenderBuffer,
   resolvePanDelta,
   shouldCommitWheelSession,
 } from './canvasMotionMath.js';
@@ -50,4 +51,10 @@ test('commitOffsetFromWheelSession applies cumulative wheel delta to start offse
 test('shouldCommitWheelSession ignores tiny noise and accepts real deltas', () => {
   assert.equal(shouldCommitWheelSession(0.009), false);
   assert.equal(shouldCommitWheelSession(-0.011), true);
+});
+
+test('resolveLeadingRenderBuffer covers the full snap span for week view', () => {
+  assert.equal(resolveLeadingRenderBuffer(5, 7), 7);
+  assert.equal(resolveLeadingRenderBuffer(5, 3), 5);
+  assert.equal(resolveLeadingRenderBuffer(2, 3), 3);
 });

@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { flushSync } from 'react-dom';
-import { commitOffsetFromWheelSession, resolvePanDelta, shouldCommitWheelSession } from './canvasMotionMath';
+import {
+  commitOffsetFromWheelSession,
+  resolveLeadingRenderBuffer,
+  resolvePanDelta,
+  shouldCommitWheelSession,
+} from './canvasMotionMath';
 import { getDayDisplayInfo, clearHolidayCache } from '../utils/holidays';
 import { getShowChineseHolidays, onUIPrefsChanged } from '../utils/uiPrefs';
 import { getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
@@ -209,6 +214,10 @@ export default function InfiniteCalendarCanvas({
   }, [dayColumns, viewportSize.width]);
   const stepPx = view === 'dayGridMonth' ? MONTH_WEEK_HEIGHT : dayWidth;
   const snapUnitSteps = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
+  const leadingRenderBuffer = useMemo(
+    () => resolveLeadingRenderBuffer(WINDOW_BUFFER_LEADING, snapUnitSteps),
+    [snapUnitSteps],
+  );
   const isMonthView = view === 'dayGridMonth';
   const isMobileViewport = (viewportSize.width || 0) <= 768;
   const allDayVisibleRows = isMobileViewport ? ALL_DAY_VISIBLE_ROWS_MOBILE : ALL_DAY_VISIBLE_ROWS_DESKTOP;
@@ -664,7 +673,7 @@ export default function InfiniteCalendarCanvas({
 
       if (state.mode === 'offset') {
         if (!isMonthView) {
-          const maxVisualDelta = stepPx * Math.max(3, WINDOW_BUFFER_LEADING - 1);
+          const maxVisualDelta = stepPx * Math.max(3, leadingRenderBuffer - 1);
           if (Math.abs(state.delta) > maxVisualDelta) {
             const overflow = state.delta > 0
               ? (state.delta - maxVisualDelta)
@@ -696,7 +705,7 @@ export default function InfiniteCalendarCanvas({
     };
 
     inertiaFrameRef.current = window.requestAnimationFrame(tick);
-  }, [commitOffsetAfterGesture, commitOffsetPx, flushPanLayer, isMonthView, settleInertia, stepPx]);
+  }, [commitOffsetAfterGesture, commitOffsetPx, flushPanLayer, isMonthView, leadingRenderBuffer, settleInertia, stepPx]);
 
   const reference = useMemo(() => {
     const base = view === 'timeGridDay'
@@ -770,19 +779,19 @@ export default function InfiniteCalendarCanvas({
   const visibleWindow = useMemo(() => {
     if (view === 'dayGridMonth') {
       const visibleWeeks = Math.max(6, Math.ceil((viewportSize.height || 1) / MONTH_WEEK_HEIGHT) + 2);
-      const startIndex = Math.floor(cameraSteps) - WINDOW_BUFFER_LEADING;
-      const endIndex = startIndex + visibleWeeks + WINDOW_BUFFER_LEADING + WINDOW_BUFFER_TRAILING;
+      const startIndex = Math.floor(cameraSteps) - leadingRenderBuffer;
+      const endIndex = startIndex + visibleWeeks + leadingRenderBuffer + WINDOW_BUFFER_TRAILING;
       const start = reference.add(startIndex, 'week');
       const end = reference.add(endIndex, 'week').endOf('week');
       return { start, end, startIndex, endIndex };
     }
     const visibleDays = Math.max(dayColumns, Math.ceil(((viewportSize.width || 1) - TIME_AXIS_WIDTH) / dayWidth) + 2);
-    const startIndex = Math.floor(cameraSteps) - WINDOW_BUFFER_LEADING;
-    const endIndex = startIndex + visibleDays + WINDOW_BUFFER_LEADING + WINDOW_BUFFER_TRAILING;
+    const startIndex = Math.floor(cameraSteps) - leadingRenderBuffer;
+    const endIndex = startIndex + visibleDays + leadingRenderBuffer + WINDOW_BUFFER_TRAILING;
     const start = reference.add(startIndex, 'day').startOf('day');
     const end = reference.add(endIndex, 'day').endOf('day');
     return { start, end, startIndex, endIndex };
-  }, [cameraSteps, dayColumns, dayWidth, reference, view, viewportSize.height, viewportSize.width]);
+  }, [cameraSteps, dayColumns, dayWidth, leadingRenderBuffer, reference, view, viewportSize.height, viewportSize.width]);
 
   const emitCommittedViewport = useCallback(() => {
     const currentStart = view === 'dayGridMonth'
@@ -849,7 +858,7 @@ export default function InfiniteCalendarCanvas({
       Math.floor(topInRows / MONTH_WEEK_HEIGHT),
     ));
     const visibleWeeks = Math.max(1, Math.ceil(rowsViewportHeight / MONTH_WEEK_HEIGHT));
-    const rangeStartOffset = Math.max(0, startWeekOffset - WINDOW_BUFFER_LEADING);
+    const rangeStartOffset = Math.max(0, startWeekOffset - leadingRenderBuffer);
     const rangeEndOffset = Math.min(
       monthNativeWeeksCount - 1,
       startWeekOffset + visibleWeeks + WINDOW_BUFFER_TRAILING,
@@ -885,7 +894,7 @@ export default function InfiniteCalendarCanvas({
       onCenterDateChange(centerDate);
       lastCommitRef.current.centerDate = centerDate;
     }
-  }, [isMonthView, monthNativeStartWeek, monthNativeWeeksCount, onCenterDateChange, onRangeChange]);
+  }, [isMonthView, leadingRenderBuffer, monthNativeStartWeek, monthNativeWeeksCount, onCenterDateChange, onRangeChange]);
 
   const handleMonthScroll = useCallback(() => {
     if (!isMonthView) return;

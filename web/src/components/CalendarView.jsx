@@ -976,8 +976,6 @@ function CalendarView() {
           : 1;
     const displayEnd = getCalendarDisplayEnd(displayStart, spanDays);
 
-    canvasOffsetRef.current = { x: 0, y: 0 };
-    applyDesktopMotion(0, 0, 0);
     setCanvasNudgeDirection(0);
     setCurrentViewTitle(formatCalendarViewTitle(
       normalizedView,
@@ -1576,11 +1574,7 @@ function CalendarView() {
           className="h-full overflow-hidden bg-white"
           style={{ touchAction: 'auto' }}
         >
-          <div
-            className="h-full"
-            ref={desktopMotionLayerRef}
-            style={{ willChange: 'transform', transform: 'translate3d(0, 0, 0)' }}
-          >
+          <div className="h-full">
             <InfiniteCalendarCanvas
               view={activeCalendarView}
               timezone={timezone}
