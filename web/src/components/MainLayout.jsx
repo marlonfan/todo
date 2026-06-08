@@ -22,6 +22,12 @@ import {
 import { Button } from './ui/Button';
 import { getTokenStore } from '../api/client';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
+import {
+  clearCurrentDraggedTaskID,
+  emitTaskCategoryDrop,
+  getCurrentDraggedTaskID,
+  readTaskDragTaskID,
+} from '../utils/taskDrag';
 import { useCategoriesQuery } from '../query/hooks';
 import { moveTaskToCategoryLocal, updateTaskLocal } from '../data/taskMutations';
 import { closeSearchDialog, openSearchDialog, subscribeSearchOverlay } from '../state/searchOverlay';
@@ -312,14 +318,16 @@ function MainLayout({ user, setUser }) {
     event.preventDefault();
     setDragOverCategoryID(0);
 
-    const rawTaskID = event.dataTransfer.getData('text/task-id') || event.dataTransfer.getData('text/plain');
-    const taskID = Number.parseInt(rawTaskID || '', 10);
+    const taskID = readTaskDragTaskID(event.dataTransfer, getCurrentDraggedTaskID());
     if (!taskID) return;
 
     try {
       await moveTaskToCategoryLocal(queryClient, taskID, categoryID);
+      emitTaskCategoryDrop({ taskID, categoryID });
     } catch (error) {
       console.error('Failed to move task to category:', error);
+    } finally {
+      clearCurrentDraggedTaskID(taskID);
     }
   };
 

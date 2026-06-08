@@ -26,6 +26,11 @@ import {
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import { getLunarInfo } from '../utils/holidays';
 import {
+  clearCurrentDraggedTaskID,
+  TASK_CATEGORY_DROP_EVENT,
+  writeTaskDragData,
+} from '../utils/taskDrag';
+import {
   getShowCategoryEmoji,
   onUIPrefsChanged,
   getTaskListSortPref,
@@ -947,10 +952,10 @@ const TaskRow = React.memo(function TaskRow({
       draggable={!isReadOnly}
       onDragStart={(event) => {
         if (isReadOnly) return;
-        const taskID = String(task.id);
-        event.dataTransfer.setData('text/task-id', taskID);
-        event.dataTransfer.setData('text/plain', taskID);
-        event.dataTransfer.effectAllowed = 'move';
+        writeTaskDragData(event.dataTransfer, task);
+      }}
+      onDragEnd={() => {
+        clearCurrentDraggedTaskID();
       }}
       onPointerDownCapture={(event) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -1422,6 +1427,25 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }, 50);
     return () => clearTimeout(timer);
   }, [selectedTaskID]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleTaskCategoryDrop = (event) => {
+      const taskID = Number(event?.detail?.taskID || 0);
+      const categoryID = Number(event?.detail?.categoryID || 0);
+      if (!taskID || !categoryID) return;
+      if (Number(draftSourceTaskIDRef.current || 0) !== taskID) return;
+      setDraftWithSnapshot((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          category_ids: [String(categoryID)],
+        };
+      });
+    };
+    window.addEventListener(TASK_CATEGORY_DROP_EVENT, handleTaskCategoryDrop);
+    return () => window.removeEventListener(TASK_CATEGORY_DROP_EVENT, handleTaskCategoryDrop);
+  }, [setDraftWithSnapshot]);
 
   const hasStaleDraftEventContext = useCallback((closureTaskID) => {
     const closureID = Number(closureTaskID || 0);
