@@ -50,3 +50,26 @@ test('keeps temporary local task ids while waiting for remap', () => {
 
   assert.deepEqual(result, { action: 'keep', selectedTaskID: -3 });
 });
+
+test('selects an equivalent virtual occurrence when the saved task becomes recurring', () => {
+  const result = resolveTaskListSelection({
+    selectedTaskID: 42,
+    filteredTaskIDs: ['occ_42_20260608', 7],
+    allTaskIDs: [7, 'occ_42_20260608', 42],
+    equivalentTaskID: 'occ_42_20260608',
+    preserveCurrent: false,
+  });
+
+  assert.deepEqual(result, { action: 'select', selectedTaskID: 'occ_42_20260608' });
+});
+
+test('keeps the selected task during a save while its replacement occurrence is not loaded yet', () => {
+  const result = resolveTaskListSelection({
+    selectedTaskID: 42,
+    filteredTaskIDs: [7, 9],
+    allTaskIDs: [7, 9, 42],
+    preserveCurrent: true,
+  });
+
+  assert.deepEqual(result, { action: 'keep', selectedTaskID: 42 });
+});

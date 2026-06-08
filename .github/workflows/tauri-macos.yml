@@ -53,7 +53,7 @@ jobs:
         working-directory: web
 
       - name: Build frontend
-        run: npm run build
+        run: npm run build:desktop
         working-directory: web
         env:
           VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://todo.marlon.life/api' }}

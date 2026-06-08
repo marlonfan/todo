@@ -1411,6 +1411,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     detailBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
   }, []);
 
+  const setDraftWithSnapshot = useCallback((updater) => {
+    const prevSnapshot = draftSnapshotRef.current;
+    const next = typeof updater === 'function' ? updater(prevSnapshot) : updater;
+    const normalizedNext = next ?? null;
+    draftSnapshotRef.current = normalizedNext;
+    setDraft(normalizedNext);
+    return normalizedNext;
+  }, []);
+
   useEffect(() => () => {
     detailBodyScrollCleanupRef.current?.();
     detailBodyScrollCleanupRef.current = null;
@@ -1468,15 +1477,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const markDraftTouched = useCallback(() => {
     draftTouchedRef.current = true;
     draftEditVersionRef.current += 1;
-  }, []);
-
-  const setDraftWithSnapshot = useCallback((updater) => {
-    const prevSnapshot = draftSnapshotRef.current;
-    const next = typeof updater === 'function' ? updater(prevSnapshot) : updater;
-    const normalizedNext = next ?? null;
-    draftSnapshotRef.current = normalizedNext;
-    setDraft(normalizedNext);
-    return normalizedNext;
   }, []);
 
   const scheduleDescriptionDraftRender = useCallback((taskIDInput = 0, sessionIDInput = 0) => {
@@ -2087,7 +2087,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   // Stable primitives for the auto-reset effect — only changes when task IDs change,
   // so background syncs that fetch the same tasks don't trigger the effect.
   const filteredTaskIDsRef = useRef([]);
+  const filteredTasksRef = useRef([]);
   const tasksRef = useRef(tasks);
+  filteredTasksRef.current = filteredTasks;
   filteredTaskIDsRef.current = useMemo(() => filteredTasks.map((t) => t.id), [filteredTasks]);
   tasksRef.current = tasks;
   const filteredTaskIDsKey = filteredTaskIDsRef.current.join(',');
@@ -2121,16 +2123,25 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   useEffect(() => {
     const currentFilteredIDs = filteredTaskIDsRef.current;
+    const currentFilteredTasks = Array.isArray(filteredTasksRef.current) ? filteredTasksRef.current : [];
     const currentTasks = tasksRef.current;
     const allTaskIDs = currentTasks.map((task) => task?.id);
-    const selectedSourceTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current);
+    const selectedNumericTaskID = Number(selectedTaskID || 0);
+    const selectedSourceTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current)
+      || (selectedNumericTaskID > 0 ? selectedNumericTaskID : 0);
     const selectedExistsByDirectID = currentTasks.some((task) => Number(task?.id) === Number(selectedTaskID || 0));
     const selectedExistsBySourceID = selectedSourceTaskID > 0
-      && currentTasks.some((task) => Number(task?.id) === selectedSourceTaskID);
+      && currentTasks.some((task) => getEffectiveTaskID(task) === selectedSourceTaskID);
     const selectedExistsInAllTasks = selectedExistsByDirectID || selectedExistsBySourceID;
     if (!selectedExistsByDirectID && selectedExistsBySourceID && selectedTaskID) {
       allTaskIDs.push(selectedTaskID);
     }
+    const equivalentFilteredTask = selectedSourceTaskID > 0
+      ? currentFilteredTasks.find((task) => (
+        String(task?.id || '') !== String(selectedTaskID || '')
+        && getEffectiveTaskID(task) === selectedSourceTaskID
+      ))
+      : null;
     const pendingTaskID = Number(pendingSubmitTaskIDRef.current || 0);
     const preservingTaskID = Number(preservingSavedSelectionTaskIDRef.current || 0);
     // Read save-state from refs so that transitions (e.g. savingDraft true→false)
@@ -2153,6 +2164,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       selectedTaskID,
       filteredTaskIDs: currentFilteredIDs,
       allTaskIDs,
+      equivalentTaskID: equivalentFilteredTask?.id || 0,
       preserveCurrent: shouldPreserveCurrentSelection,
     });
 
@@ -2195,8 +2207,16 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const fromFiltered = filteredTasks.find((task) => String(task?.id) === String(selectedTaskID || ''));
     if (fromFiltered) return fromFiltered;
     const fromAllTasks = tasks.find((task) => String(task?.id) === String(selectedTaskID || ''));
-    return fromAllTasks || null;
-  }, [filteredTasks, selectedTaskID, tasks]);
+    if (fromAllTasks) return fromAllTasks;
+    const selectedNumericTaskID = Number(selectedTaskID || 0);
+    if (selectedNumericTaskID > 0) {
+      const equivalentFiltered = filteredTasks.find((task) => getEffectiveTaskID(task) === selectedNumericTaskID);
+      if (equivalentFiltered) return equivalentFiltered;
+      const equivalentTask = tasks.find((task) => getEffectiveTaskID(task) === selectedNumericTaskID);
+      if (equivalentTask) return equivalentTask;
+    }
+    return null;
+  }, [filteredTasks, getEffectiveTaskID, selectedTaskID, tasks]);
   // 对于虚拟实例，使用源任务的数字 ID
   activeRenderTaskIDRef.current = getEffectiveTaskID(selectedTask);
   const parsedDraftPriority = parsePriorityFromTitle(String(draft?.title || ''));

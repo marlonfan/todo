@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm test && vite build",
+    "build:desktop": "npm test && vite build --base=./",
     "preview": "vite preview",
     "test": "node --test",
     "test:ui": "node ./scripts/runPlaywrightWithCleanup.mjs",

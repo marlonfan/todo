@@ -60,6 +60,10 @@ function clearAuthAndRedirect() {
   store.remove();
   localStorage.removeItem('user');
   if (typeof window !== 'undefined') {
+    if ('__TAURI_INTERNALS__' in window) {
+      window.location.hash = '#/login';
+      return;
+    }
     window.location.href = '/login';
   }
 }

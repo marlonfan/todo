@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, HashRouter } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import './i18n'  // 引入 i18n 配置
 import App from './App.jsx'
@@ -10,7 +10,7 @@ import { initializeSyncEngine } from './data/syncEngine'
 import { initPlatform } from './platform/init'
 
 (async () => {
-  const isTauri = '__TAURI_INTERNALS__' in window;
+  const isTauri = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri);
   const shouldUseServiceWorker = 'serviceWorker' in navigator && !isTauri && !import.meta.env.DEV;
 
   // Dev servers need fresh modules for HMR, so clear any SW left from older runs.
@@ -61,13 +61,14 @@ import { initPlatform } from './platform/init'
   initPlatform();
 
   initializeSyncEngine(queryClient);
+  const Router = isTauri ? HashRouter : BrowserRouter;
 
   ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
+        <Router>
           <App />
-        </BrowserRouter>
+        </Router>
       </QueryClientProvider>
     </React.StrictMode>,
   );
