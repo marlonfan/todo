@@ -146,6 +146,8 @@ export default function InfiniteCalendarCanvas({
   const panSnapTimerRef = useRef(0);
   const panSnapFinishRef = useRef(null);
   const panFrameRef = useRef(0);
+  const eventDragFrameRef = useRef(0);
+  const eventDragVisualRef = useRef(null);
   const monthScrollFrameRef = useRef(0);
   const pendingPanDeltaRef = useRef(Number.NaN);
   const currentPanDeltaRef = useRef(0);
@@ -182,13 +184,17 @@ export default function InfiniteCalendarCanvas({
     suppressShortSnap: false,
     ignoreClickTarget: false,
     captured: false,
+    eventNodeKey: '',
+    visualBaseHeight: 0,
+    visualActive: false,
+    visualNode: null,
+    gestureLockApplied: false,
   });
   const [viewportSize, setViewportSize] = useState(() => ({
     width: typeof window !== 'undefined' ? window.innerWidth : 0,
     height: typeof window !== 'undefined' ? window.innerHeight : 0,
   }));
   const [offsetPx, setOffsetPx] = useState(0);
-  const [dragVisual, setDragVisual] = useState(null);
   const [eventGestureLocked, setEventGestureLocked] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [showChineseHolidays, setShowChineseHolidays] = useState(() => getShowChineseHolidays());
@@ -271,6 +277,70 @@ export default function InfiniteCalendarCanvas({
     }
   }, []);
 
+  const resetEventDragVisualNode = useCallback((visual) => {
+    const node = visual?.node;
+    if (!node) return;
+    node.style.transform = '';
+    node.style.height = '';
+    node.style.zIndex = '';
+    node.style.willChange = '';
+    node.classList.remove('shadow-lg');
+  }, []);
+
+  const applyEventDragVisual = useCallback(() => {
+    const visual = eventDragVisualRef.current;
+    const node = visual?.node;
+    if (!node) return;
+    const dx = visual.mode === 'event' ? (Number(visual.dx) || 0) : 0;
+    const dy = visual.mode === 'event' && !visual.allDay ? (Number(visual.dy) || 0) : 0;
+    node.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+    if (visual.mode === 'resize') {
+      node.style.height = `${Math.max(18, (Number(visual.baseHeight) || 18) + (Number(visual.dy) || 0))}px`;
+    }
+    node.style.zIndex = '90';
+    node.style.willChange = visual.mode === 'resize' ? 'height' : 'transform';
+    node.classList.add('shadow-lg');
+  }, []);
+
+  const scheduleEventDragVisual = useCallback((patch) => {
+    eventDragVisualRef.current = {
+      ...(eventDragVisualRef.current || {}),
+      ...(patch || {}),
+    };
+    if (eventDragFrameRef.current) return;
+    eventDragFrameRef.current = window.requestAnimationFrame(() => {
+      eventDragFrameRef.current = 0;
+      applyEventDragVisual();
+    });
+  }, [applyEventDragVisual]);
+
+  const startEventDragVisual = useCallback((drag) => {
+    if (!drag || drag.visualActive) return;
+    const node = drag.visualNode;
+    if (!node) return;
+    const measuredHeight = node.getBoundingClientRect?.().height || Number.parseFloat(node.style.height || '') || 18;
+    drag.visualBaseHeight = measuredHeight;
+    drag.visualActive = true;
+    eventDragVisualRef.current = {
+      node,
+      mode: drag.mode,
+      allDay: !!drag.dragEvent?.allDay,
+      dx: 0,
+      dy: 0,
+      baseHeight: measuredHeight,
+    };
+    applyEventDragVisual();
+  }, [applyEventDragVisual]);
+
+  const clearEventDragVisual = useCallback(() => {
+    if (eventDragFrameRef.current) {
+      window.cancelAnimationFrame(eventDragFrameRef.current);
+      eventDragFrameRef.current = 0;
+    }
+    resetEventDragVisualNode(eventDragVisualRef.current);
+    eventDragVisualRef.current = null;
+  }, [resetEventDragVisualNode]);
+
   const abortWheelSession = useCallback(() => {
     clearWheelCommitTimer();
     wheelSessionRef.current.active = false;
@@ -321,6 +391,7 @@ export default function InfiniteCalendarCanvas({
       window.cancelAnimationFrame(monthScrollFrameRef.current);
       monthScrollFrameRef.current = 0;
     }
+    clearEventDragVisual();
     if (inertiaFrameRef.current) {
       window.cancelAnimationFrame(inertiaFrameRef.current);
       inertiaFrameRef.current = 0;
@@ -985,6 +1056,11 @@ export default function InfiniteCalendarCanvas({
       mode: dragMode,
       eventCandidate: eventKey,
       dragEvent: targetEvent || null,
+      eventNodeKey: eventNode?.getAttribute('data-event-node-key') || '',
+      visualBaseHeight: 0,
+      visualActive: false,
+      visualNode: eventNode || null,
+      gestureLockApplied: false,
       lastClientX: event.clientX,
       lastClientY: event.clientY,
       startScrollTop: timeGridScrollRef.current?.scrollTop || 0,
@@ -1010,11 +1086,15 @@ export default function InfiniteCalendarCanvas({
         activeDrag.moved = true;
         activeDrag.ignoreClickTarget = true;
         lockTextSelection();
+        startEventDragVisual(activeDrag);
         if (!activeDrag.captured) {
           viewportRef.current?.setPointerCapture?.(activeDrag.pointerId);
           activeDrag.captured = true;
         }
-        setEventGestureLocked(true);
+        if (!activeDrag.gestureLockApplied) {
+          activeDrag.gestureLockApplied = true;
+          setEventGestureLocked(true);
+        }
       }, LONG_PRESS_TO_DRAG_MS);
     } else {
       setEventGestureLocked(false);
@@ -1059,20 +1139,19 @@ export default function InfiniteCalendarCanvas({
       if (!drag.moved && (absX > GESTURE_ACTIVATE_PX || absY > GESTURE_ACTIVATE_PX)) {
         drag.moved = true;
         lockTextSelection();
+        startEventDragVisual(drag);
         if (!drag.captured) {
           event.currentTarget.setPointerCapture?.(drag.pointerId);
           drag.captured = true;
         }
       }
       if (drag.moved) {
-        setEventGestureLocked(true);
-        setDragVisual({
-          eventKey: drag.eventCandidate,
-          mode: drag.mode,
-          dx,
-          dy,
-        });
-        event.preventDefault();
+        if (!drag.gestureLockApplied) {
+          drag.gestureLockApplied = true;
+          setEventGestureLocked(true);
+        }
+        scheduleEventDragVisual({ dx, dy });
+        if (event.cancelable) event.preventDefault();
       }
       return;
     }
@@ -1144,7 +1223,7 @@ export default function InfiniteCalendarCanvas({
     const endY = drag.lastClientY || event.clientY;
     dragRef.current.active = false;
     unlockTextSelection();
-    setDragVisual(null);
+    clearEventDragVisual();
     if (drag.captured && event.currentTarget.hasPointerCapture?.(pointerId)) {
       event.currentTarget.releasePointerCapture(pointerId);
     }
@@ -1550,26 +1629,16 @@ export default function InfiniteCalendarCanvas({
             </>
           )}
           {blocks.map(({ blockKey, eventKey, event, resizable, style, className, titleStyle }) => {
-            const isDraggingThis = dragVisual && String(dragVisual.eventKey) === String(eventKey);
             const readonly = isReadonlyEvent(event);
-            const visualStyle = isDraggingThis
-              ? {
-                  ...style,
-                  transform: `translate3d(${dragVisual.mode === 'event' ? dragVisual.dx : 0}px, ${dragVisual.mode === 'event' ? dragVisual.dy : 0}px, 0)`,
-                  height: dragVisual.mode === 'resize'
-                    ? Math.max(18, (style.height || 18) + dragVisual.dy)
-                    : style.height,
-                  zIndex: 90,
-                }
-              : style;
             return (
             <div
               key={blockKey}
               data-event-key={eventKey}
+              data-event-node-key={blockKey}
               data-event-id={event.id}
-              className={`${className} ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
+              className={`${className} ${readonly ? '' : 'cursor-grab active:cursor-grabbing'}`}
               style={{
-                ...visualStyle,
+                ...style,
                 touchAction: isMonthView ? 'none' : (readonly ? 'pan-y' : 'none'),
                 WebkitUserSelect: 'none',
               }}
@@ -1670,32 +1739,26 @@ export default function InfiniteCalendarCanvas({
       visibleItems.forEach((item, rowIndex) => {
         const readonly = isReadonlyEvent(item.event);
         const y = allDayAreaTop + ALL_DAY_AREA_PADDING_TOP + (rowIndex * (allDayEventHeight + ALL_DAY_EVENT_GAP));
-        const isDraggingThis = dragVisual && String(dragVisual.eventKey) === String(item.eventKey);
         const style = {
           left: x + 2,
           top: y,
           width: Math.max(18, dayWidth - 4),
           height: allDayEventHeight,
         };
-        const visualStyle = isDraggingThis && dragVisual?.mode === 'event'
-          ? {
-              ...style,
-              transform: `translate3d(${dragVisual.dx}px, 0, 0)`,
-              zIndex: 90,
-            }
-          : style;
+        const nodeKey = `${item.eventKey}::${dayKey}`;
         allDayEvents.push(
           <div
-            key={`${item.eventKey}::${dayKey}`}
+            key={nodeKey}
             data-event-key={item.eventKey}
+            data-event-node-key={nodeKey}
             data-event-id={item.event.id}
             className={`canvas-event absolute z-30 overflow-hidden px-1 text-[10px] leading-tight ${
               readonly
                 ? 'calendar-event-readonly'
                 : 'calendar-event-task'
-            } ${readonly ? '' : 'cursor-grab active:cursor-grabbing'} ${isDraggingThis ? 'shadow-lg' : ''}`}
+            } ${readonly ? '' : 'cursor-grab active:cursor-grabbing'}`}
             style={{
-              ...visualStyle,
+              ...style,
               touchAction: readonly ? 'pan-y' : 'none',
               WebkitUserSelect: 'none',
             }}

@@ -312,7 +312,7 @@ function MainLayout({ user, setUser }) {
     event.preventDefault();
     setDragOverCategoryID(0);
 
-    const rawTaskID = event.dataTransfer.getData('text/task-id');
+    const rawTaskID = event.dataTransfer.getData('text/task-id') || event.dataTransfer.getData('text/plain');
     const taskID = Number.parseInt(rawTaskID || '', 10);
     if (!taskID) return;
 

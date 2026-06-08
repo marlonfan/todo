@@ -293,6 +293,13 @@ export async function getDueOutbox(now = Date.now(), limit = 50) {
     .slice(0, limit);
 }
 
+export async function getOutboxBatch(limit = 50) {
+  const all = await getAll(STORE_OUTBOX);
+  return all
+    .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
+    .slice(0, limit);
+}
+
 export async function removeOutbox(opID) {
   await del(STORE_OUTBOX, opID);
 }

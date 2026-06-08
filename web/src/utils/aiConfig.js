@@ -43,12 +43,12 @@ export function normalizeAIConfig(value = {}) {
   const protocol = normalizeAIProtocol(value?.protocol);
   return {
     protocol,
-    baseURL: normalizeAIBaseURL(value?.baseURL, protocol),
-    apiKey: String(value?.apiKey || '').trim(),
-    modelID: String(value?.modelID || '').trim(),
-    systemPrompt: String(value?.systemPrompt || DEFAULT_AI_SYSTEM_PROMPT).trim() || DEFAULT_AI_SYSTEM_PROMPT,
-    userProfile: String(value?.userProfile || ''),
-    allowTaskContext: value?.allowTaskContext !== false,
+    baseURL: normalizeAIBaseURL(value?.baseURL ?? value?.base_url, protocol),
+    apiKey: String(value?.apiKey ?? value?.api_key ?? '').trim(),
+    modelID: String(value?.modelID ?? value?.model_id ?? '').trim(),
+    systemPrompt: String(value?.systemPrompt ?? value?.system_prompt ?? DEFAULT_AI_SYSTEM_PROMPT).trim() || DEFAULT_AI_SYSTEM_PROMPT,
+    userProfile: String(value?.userProfile ?? value?.user_profile ?? ''),
+    allowTaskContext: (value?.allowTaskContext ?? value?.allow_task_context) !== false,
   };
 }
 
@@ -70,6 +70,25 @@ export function saveAIConfig(value) {
     window.dispatchEvent(new CustomEvent('todo:ai-config-changed', { detail: normalized }));
   }
   return normalized;
+}
+
+export function toAIConfigPayload(value) {
+  const normalized = normalizeAIConfig(value);
+  return {
+    protocol: normalized.protocol,
+    base_url: normalized.baseURL,
+    api_key: normalized.apiKey,
+    model_id: normalized.modelID,
+    system_prompt: normalized.systemPrompt,
+    user_profile: normalized.userProfile,
+    allow_task_context: normalized.allowTaskContext,
+  };
+}
+
+export function normalizeRemoteAIConfigResponse(value) {
+  const config = value?.config || value;
+  if (!config || value?.configured === false) return null;
+  return normalizeAIConfig(config);
 }
 
 export function isAIConfigReady(value) {

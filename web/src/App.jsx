@@ -6,6 +6,7 @@ import MainLayout from './components/MainLayout';
 import { authAPI, getToken, getTokenStore } from './api/client';
 import { tokenReady } from './platform/init';
 import { setUserTimezone } from './utils/time';
+import { scheduleSync } from './data/syncEngine';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -31,6 +32,7 @@ function App() {
             if (res.data.timezone) {
               setUserTimezone(res.data.timezone, false);
             }
+            scheduleSync();
           })
           .catch(() => {
             getTokenStore().remove();

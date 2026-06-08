@@ -6,6 +6,7 @@ import {
   clearCalendarRanges,
   enqueueOutbox,
   getDueOutbox,
+  getOutboxBatch,
   getMeta,
   invalidateCalendarRangesByTask,
   invalidateCalendarRangesByTaskIDs,
@@ -542,11 +543,14 @@ async function handleOutboxFailure(op, error) {
   });
 }
 
-async function processOutbox() {
+async function processOutbox(options = {}) {
+  const force = !!options?.force;
   let loopCount = 0;
   while (loopCount < 200) {
     loopCount += 1;
-    const dueOps = await safeLocalCall(() => getDueOutbox(Date.now(), 30), [], 'getDueOutbox');
+    const dueOps = force
+      ? await safeLocalCall(() => getOutboxBatch(30), [], 'getOutboxBatch')
+      : await safeLocalCall(() => getDueOutbox(Date.now(), 30), [], 'getDueOutbox');
     if (!dueOps.length) break;
 
     for (const op of dueOps) {
@@ -757,7 +761,7 @@ async function waitForIdle(timeoutMs = 15000) {
 }
 
 async function runSyncCycle(options = {}) {
-  const { silent = true, forceReconcile = false } = options;
+  const { silent = true, forceReconcile = false, forceOutbox = false } = options;
 
   if (!queryClientRef) {
     if (!silent) {
@@ -779,7 +783,7 @@ async function runSyncCycle(options = {}) {
   running = true;
   let syncError = null;
   try {
-    await processOutbox();
+    await processOutbox({ force: forceOutbox });
     const outboxOps = await safeLocalCall(() => readOutbox(), [], 'readOutbox:reconcile');
     await runTaskReconcileIfNeeded(outboxOps, { force: forceReconcile });
     await pullServerData();
@@ -877,7 +881,7 @@ export async function forceManualSync() {
     rerunRequested = true;
     await waitForIdle();
   }
-  await runSyncCycle({ silent: false, forceReconcile: true });
+  await runSyncCycle({ silent: false, forceReconcile: true, forceOutbox: true });
 }
 
 export async function rebuildLocalDataAndSync() {

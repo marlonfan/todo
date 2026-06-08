@@ -82,11 +82,42 @@ async function attemptTokenRefresh() {
   return newToken;
 }
 
+function isTauriCrossOriginAPI() {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return false;
+  const base = import.meta.env.VITE_API_BASE_URL ?? '/api';
+  try {
+    const resolved = new URL(base, window.location.origin);
+    return resolved.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function removeTaskMutationHeaders(config) {
+  if (!config?.headers) return;
+  ['If-Match', 'X-Client-Op-Id', 'X-Client-Submitted-At', 'X-Client-Submit-Source'].forEach((key) => {
+    delete config.headers[key];
+    delete config.headers[key.toLowerCase()];
+  });
+}
+
+function shouldRetryWithoutTaskMutationHeaders(error) {
+  const config = error?.config;
+  if (!config?.__todoTaskMutationHeaders || config._retriedWithoutTaskMutationHeaders) return false;
+  if (error?.response) return false;
+  return isTauriCrossOriginAPI();
+}
+
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    if (shouldRetryWithoutTaskMutationHeaders(error)) {
+      originalRequest._retriedWithoutTaskMutationHeaders = true;
+      removeTaskMutationHeaders(originalRequest);
+      return apiClient(originalRequest);
+    }
     if (error.response?.status === 401 && !originalRequest._retried) {
       originalRequest._retried = true;
 
@@ -129,6 +160,11 @@ export const authAPI = {
   reconcileReminders: () => apiClient.post('/auth/reconcile-reminders'),
 };
 
+export const aiConfigAPI = {
+  get: () => apiClient.get('/ai/config'),
+  save: (data) => apiClient.put('/ai/config', data),
+};
+
 function withTaskMutationHeaders(options = {}) {
   const headers = {};
   const revision = Number(options?.ifMatchRevision || 0);
@@ -154,7 +190,7 @@ function withTaskMutationHeaders(options = {}) {
     headers['X-Client-Op-Id'] = clientOpID;
   }
   if (Object.keys(headers).length === 0) return {};
-  return { headers };
+  return { headers, __todoTaskMutationHeaders: true };
 }
 
 // Tasks API

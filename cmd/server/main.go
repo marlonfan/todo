@@ -71,6 +71,7 @@ func main() {
 	notifyRepo := repository.NewNotificationRepository(db)
 	caldavRepo := repository.NewCaldavRepository(db)
 	taskMutationReceiptRepo := repository.NewTaskMutationReceiptRepository(db)
+	aiConfigRepo := repository.NewAIConfigRepository(db)
 
 	// Initialize notification registry
 	registry := notify.NewRegistry()
@@ -94,6 +95,7 @@ func main() {
 	taskService.SetCaldavService(caldavService)
 	catService := service.NewCategoryService(catRepo)
 	notifyService := service.NewNotifyService(notifyRepo, userRepo, taskRepo, registry)
+	aiConfigService := service.NewAIConfigService(aiConfigRepo)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService, notifyService)
@@ -102,6 +104,7 @@ func main() {
 	calendarHandler := handler.NewCalendarHandler(taskService, caldavService)
 	notifyHandler := handler.NewNotifyHandler(notifyService)
 	caldavHandler := handler.NewCaldavHandler(caldavService)
+	aiConfigHandler := handler.NewAIConfigHandler(aiConfigService)
 
 	// Setup router
 	router := api.NewRouter(
@@ -111,6 +114,7 @@ func main() {
 		calendarHandler,
 		notifyHandler,
 		caldavHandler,
+		aiConfigHandler,
 		cfg,
 	).Setup()
 

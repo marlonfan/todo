@@ -16,6 +16,7 @@ type Router struct {
 	calendarHandler *handler.CalendarHandler
 	notifyHandler   *handler.NotifyHandler
 	caldavHandler   *handler.CaldavHandler
+	aiConfigHandler *handler.AIConfigHandler
 	cfg             *config.Config
 }
 
@@ -26,6 +27,7 @@ func NewRouter(
 	calendarHandler *handler.CalendarHandler,
 	notifyHandler *handler.NotifyHandler,
 	caldavHandler *handler.CaldavHandler,
+	aiConfigHandler *handler.AIConfigHandler,
 	cfg *config.Config,
 ) *Router {
 	return &Router{
@@ -35,6 +37,7 @@ func NewRouter(
 		calendarHandler: calendarHandler,
 		notifyHandler:   notifyHandler,
 		caldavHandler:   caldavHandler,
+		aiConfigHandler: aiConfigHandler,
 		cfg:             cfg,
 	}
 }
@@ -71,6 +74,10 @@ func (r *Router) Setup() *gin.Engine {
 			protected.PATCH("/auth/profile", r.authHandler.UpdateProfile)
 			protected.PATCH("/auth/password", r.authHandler.UpdatePassword)
 			protected.POST("/auth/reconcile-reminders", r.authHandler.ReconcileReminders)
+
+			// AI config
+			protected.GET("/ai/config", r.aiConfigHandler.Get)
+			protected.PUT("/ai/config", r.aiConfigHandler.Save)
 
 			// Tasks
 			protected.GET("/tasks", r.taskHandler.List)

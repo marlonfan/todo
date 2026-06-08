@@ -870,7 +870,9 @@ const TaskRow = React.memo(function TaskRow({
       draggable={!isReadOnly}
       onDragStart={(event) => {
         if (isReadOnly) return;
-        event.dataTransfer.setData('text/task-id', String(task.id));
+        const taskID = String(task.id);
+        event.dataTransfer.setData('text/task-id', taskID);
+        event.dataTransfer.setData('text/plain', taskID);
         event.dataTransfer.effectAllowed = 'move';
       }}
       onPointerDownCapture={(event) => {

@@ -27,14 +27,15 @@ import {
   AI_PROTOCOL_OPENAI,
   DEFAULT_AI_SYSTEM_PROMPT,
   getDefaultBaseURLForProtocol,
+  normalizeRemoteAIConfigResponse,
   readAIConfig,
   saveAIConfig,
+  toAIConfigPayload,
 } from '../utils/aiConfig';
 import { getShowCategoryEmoji, setShowCategoryEmoji, getShowChineseHolidays, setShowChineseHolidays } from '../utils/uiPrefs';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
-import { authAPI } from '../api/client';
-import { caldavAPI } from '../api/client';
+import { aiConfigAPI, authAPI, caldavAPI } from '../api/client';
 import {
   forceManualSync,
   getConfiguredSyncIntervalSeconds,
@@ -166,9 +167,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     normalizeMobileTabPreset(cachedUser.mobile_tab_preset)
   );
   const [syncBusy, setSyncBusy] = useState(false);
-  const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '' });
+  const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '', lastError: '' });
   const [syncIntervalSeconds, setSyncIntervalSeconds] = useState(getConfiguredSyncIntervalSeconds());
   const [aiConfig, setAIConfig] = useState(() => readAIConfig());
+  const [aiConfigBusy, setAIConfigBusy] = useState(false);
   const [showAIKey, setShowAIKey] = useState(false);
   const [caldavForm, setCaldavForm] = useState({ name: '', baseURL: '', username: '', password: '' });
   const [caldavCalendars, setCaldavCalendars] = useState([]);
@@ -206,9 +208,14 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     ]);
 
     const lastPullFromCache = queryClient.getQueryData(queryKeys.sync.lastPull) || '';
+    const pendingOps = Array.isArray(outbox) ? outbox : [];
+    const lastFailedOp = [...pendingOps]
+      .reverse()
+      .find((op) => String(op?.last_error || '').trim());
     setSyncStatus({
-      pendingCount: Array.isArray(outbox) ? outbox.length : 0,
+      pendingCount: pendingOps.length,
       lastPullAt: String(lastPullFromCache || lastPullFromDB || ''),
+      lastError: String(lastFailedOp?.last_error || ''),
     });
   };
 
@@ -296,6 +303,27 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
       active = false;
     };
   }, [setUser]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai') return undefined;
+    let active = true;
+
+    aiConfigAPI.get()
+      .then((res) => {
+        if (!active) return;
+        const remoteConfig = normalizeRemoteAIConfigResponse(res.data);
+        if (!remoteConfig) return;
+        const saved = saveAIConfig(remoteConfig);
+        setAIConfig(saved);
+      })
+      .catch(() => {
+        // Keep the local cached draft available when offline or before migration.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [activeTab]);
 
   const persistProfile = async (payload, rollback) => {
     setSaveToast(null);
@@ -577,10 +605,21 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     }));
   };
 
-  const handleSaveAIConfig = () => {
-    const saved = saveAIConfig(aiConfig);
-    setAIConfig(saved);
-    showToast('success', t('settings.aiSaved'));
+  const handleSaveAIConfig = async () => {
+    const normalized = saveAIConfig(aiConfig);
+    setAIConfig(normalized);
+    setAIConfigBusy(true);
+    try {
+      const res = await aiConfigAPI.save(toAIConfigPayload(normalized));
+      const remoteConfig = normalizeRemoteAIConfigResponse(res.data) || normalized;
+      const saved = saveAIConfig(remoteConfig);
+      setAIConfig(saved);
+      showToast('success', t('settings.aiSaved'));
+    } catch (err) {
+      showToast('error', err.response?.data?.error || t('settings.saveFailed'));
+    } finally {
+      setAIConfigBusy(false);
+    }
   };
 
   const handleResetAISystemPrompt = () => {
@@ -1393,9 +1432,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 <button
                   type="button"
                   onClick={handleSaveAIConfig}
+                  disabled={aiConfigBusy}
                   className="btn-primary"
                 >
-                  {t('settings.aiSave')}
+                  {t(aiConfigBusy ? 'common.loading' : 'settings.aiSave')}
                 </button>
               </div>
             </div>
@@ -1419,6 +1459,11 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 <p className="mt-1 text-sm text-gray-700">
                   {t('settings.syncLastPull')}: <span className="font-medium">{formatSyncTime(syncStatus.lastPullAt)}</span>
                 </p>
+                {syncStatus.lastError && (
+                  <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    {t('settings.syncLastError')}: <span className="font-medium">{syncStatus.lastError}</span>
+                  </p>
+                )}
               </div>
 
               <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
