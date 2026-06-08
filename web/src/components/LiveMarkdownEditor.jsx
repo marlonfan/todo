@@ -155,6 +155,17 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
 
   const resolveHeight = () => (fill ? '100%' : `${minHeight}px`);
   const normalize = (text) => String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
+  const readMarkdownValue = () => {
+    const editor = editorRef.current;
+    if (editor && typeof editor.getValue === 'function') {
+      try {
+        return String(editor.getValue() || '');
+      } catch {
+        return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
+      }
+    }
+    return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
+  };
   const readFastInputValue = () => {
     const root = mountRef.current;
     const editable = root?.querySelector('.vditor-ir pre.vditor-reset, .vditor-ir .vditor-reset, [contenteditable="true"]');
@@ -162,6 +173,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     return String(editable.textContent || '').replace(/\u200b/g, '').replace(/\u00a0/g, ' ');
   };
   const captureFastInputValue = (eventType = '') => {
+    if (!isDraftSwitchDebugEnabled()) return;
     const nextValue = readFastInputValue();
     if (nextValue === fastInputValueRef.current) return;
     fastInputValueRef.current = nextValue;
@@ -175,15 +187,9 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
     });
   };
   const getCurrentValue = () => {
-    const editor = editorRef.current;
-    if (editor && typeof editor.getValue === 'function') {
-      try {
-        return String(editor.getValue() || '');
-      } catch {
-        return String(lastInternalValueRef.current || pendingExternalValueRef.current || '');
-      }
-    }
-    return String(lastInternalValueRef.current || pendingExternalValueRef.current || '');
+    const currentValue = readMarkdownValue();
+    lastInternalValueRef.current = currentValue;
+    return currentValue;
   };
   const safeDestroy = (instance) => {
     if (!instance || typeof instance.destroy !== 'function') return;
@@ -274,6 +280,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         cache: { enable: false },
         toolbar: [],
         counter: { enable: false },
+        undoDelay: 240,
         typewriterMode: false,
         placeholder: placeholder || '',
         image: { isPreview: true },
@@ -283,14 +290,21 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         icon: '',
         preview: {
           mode: 'editor',
-          delay: 0,
+          delay: 300,
+          hljs: {
+            enable: false,
+            lineNumber: false,
+            defaultLang: '',
+            style: 'github',
+          },
           render: {
             media: {
               enable: true,
             },
           },
           markdown: {
-            codeBlockPreview: true,
+            codeBlockPreview: false,
+            mathBlockPreview: false,
             listStyle: true,
             sanitize: false,
           },
@@ -466,7 +480,6 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   useImperativeHandle(ref, () => ({
     getValue: getCurrentValue,
     getCachedValue: () => {
-      captureFastInputValue('imperative.getCachedValue');
       logEditorDebug('editor.getCachedValue.markdown', {
         fast_input_version: fastInputVersionRef.current,
         markdown_input_version: markdownInputVersionRef.current,
@@ -476,49 +489,16 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
       });
       return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
     },
-    getPendingDOMValue: () => {
-      captureFastInputValue('imperative.getPendingDOMValue');
-      if (fastInputVersionRef.current > markdownInputVersionRef.current) {
-        logEditorDebug('editor.getPendingDOMValue.fast', {
-          fast_input_version: fastInputVersionRef.current,
-          markdown_input_version: markdownInputVersionRef.current,
-          fast_input: summarizeDebugText(fastInputValueRef.current),
-          last_internal: summarizeDebugText(lastInternalValueRef.current),
-        });
-        return String(fastInputValueRef.current ?? '');
-      }
-      logEditorDebug('editor.getPendingDOMValue.none', {
+    flushMarkdownValue: () => {
+      const currentValue = readMarkdownValue();
+      lastInternalValueRef.current = currentValue;
+      markdownInputVersionRef.current = Math.max(markdownInputVersionRef.current, fastInputVersionRef.current);
+      logEditorDebug('editor.flushMarkdownValue', {
         fast_input_version: fastInputVersionRef.current,
         markdown_input_version: markdownInputVersionRef.current,
-        fast_input: summarizeDebugText(fastInputValueRef.current),
-        last_internal: summarizeDebugText(lastInternalValueRef.current),
+        current_value: summarizeDebugText(currentValue),
       });
-      return '';
-    },
-    getPendingDOMSnapshot: () => {
-      captureFastInputValue('imperative.getPendingDOMSnapshot');
-      if (fastInputVersionRef.current > markdownInputVersionRef.current) {
-        logEditorDebug('editor.getPendingDOMSnapshot.fast', {
-          fast_input_version: fastInputVersionRef.current,
-          markdown_input_version: markdownInputVersionRef.current,
-          fast_input: summarizeDebugText(fastInputValueRef.current),
-          last_internal: summarizeDebugText(lastInternalValueRef.current),
-        });
-        return {
-          hasPendingDOMValue: true,
-          value: String(fastInputValueRef.current ?? ''),
-        };
-      }
-      logEditorDebug('editor.getPendingDOMSnapshot.none', {
-        fast_input_version: fastInputVersionRef.current,
-        markdown_input_version: markdownInputVersionRef.current,
-        fast_input: summarizeDebugText(fastInputValueRef.current),
-        last_internal: summarizeDebugText(lastInternalValueRef.current),
-      });
-      return {
-        hasPendingDOMValue: false,
-        value: '',
-      };
+      return currentValue;
     },
     getDebugSnapshot: () => {
       const fastDOMValue = readFastInputValue();

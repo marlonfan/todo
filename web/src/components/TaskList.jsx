@@ -3336,15 +3336,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       return draftValue;
     }
 
-    const pendingDOMSnapshot = draftDescriptionEditorRef.current?.getPendingDOMSnapshot?.();
     const liveDescription = String(
-      pendingDOMSnapshot?.hasPendingDOMValue
-        ? pendingDOMSnapshot.value
-        : (
-            draftDescriptionEditorRef.current?.getCachedValue?.()
-            ?? draftValue.description
-            ?? ''
-          )
+      draftDescriptionEditorRef.current?.flushMarkdownValue?.()
+      ?? draftDescriptionEditorRef.current?.getCachedValue?.()
+      ?? draftValue.description
+      ?? ''
     );
     if (liveDescription === String(draftValue.description || '')) {
       logDraftSwitchDebug('draft.capture.same', {
