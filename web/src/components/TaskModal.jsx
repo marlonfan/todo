@@ -49,6 +49,7 @@ import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, upd
 const DEFAULT_TASK_START_TIME = '09:00';
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
+const RECURRENCE_INTERVAL_MAX = 99;
 const BASIC_PANELS_REQUIRING_CONFIRM = new Set(['time', 'recurrence']);
 
 function getStoredUser() {
@@ -321,22 +322,33 @@ function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, f
   return `${firstLabel}+${selected.length - 1}`;
 }
 
-function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, lunarSelection = null) {
+function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, recurrenceMeta = null) {
   if (!enabled) return t('task.repeatOff');
   if (recurrenceType === 'lunar') {
-    const month = Number.parseInt(lunarSelection?.month, 10) || 1;
-    const day = Number.parseInt(lunarSelection?.day, 10) || 1;
-    const leap = !!lunarSelection?.isLeapMonth;
+    const month = Number.parseInt(recurrenceMeta?.month, 10) || 1;
+    const day = Number.parseInt(recurrenceMeta?.day, 10) || 1;
+    const leap = !!recurrenceMeta?.isLeapMonth;
     return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
+  }
+  const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
+  if (recurrenceType === 'custom_weekly') {
+    const label = t('task.customWeeklySummary', {
+      count: clampCustomRecurrenceInterval(recurrenceMeta?.weeklyInterval),
+    });
+    return dayCount > 0 ? `${label}(${dayCount})` : label;
+  }
+  if (recurrenceType === 'custom_monthly') {
+    return t('task.customMonthlySummary', {
+      count: clampCustomRecurrenceInterval(recurrenceMeta?.monthlyInterval),
+      date: clampMonthlyDate(recurrenceMeta?.monthDate, 1),
+    });
   }
   if (recurrenceType === 'biweekly') {
     const label = t('task.biweekly');
-    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
     return dayCount > 0 ? `${label}(${dayCount})` : label;
   }
   if (recurrenceType === 'weekly') {
     const weeklyLabel = t('task.weekly');
-    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
     return dayCount > 0 ? `${weeklyLabel}(${dayCount})` : weeklyLabel;
   }
   if (recurrenceType === 'monthly') return t('task.monthly');
@@ -355,6 +367,39 @@ function clampMonthlyDate(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(31, Math.max(1, parsed));
+}
+
+function clampRecurrenceInterval(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(RECURRENCE_INTERVAL_MAX, Math.max(1, parsed));
+}
+
+function clampCustomRecurrenceInterval(value) {
+  return Math.max(2, clampRecurrenceInterval(value, 2));
+}
+
+function isWeeklyRecurrenceType(value) {
+  const type = String(value || 'daily');
+  return type === 'weekly' || type === 'biweekly' || type === 'custom_weekly';
+}
+
+function isMonthlyRecurrenceType(value) {
+  const type = String(value || 'daily');
+  return type === 'monthly' || type === 'custom_monthly';
+}
+
+function isCustomRecurrenceTypeValue(value) {
+  const type = String(value || 'daily');
+  return type === 'biweekly' || type === 'custom_weekly' || type === 'custom_monthly' || type === 'lunar';
+}
+
+function getRecurrenceIntervalForType(recurrenceType, weeklyInterval = 1, monthlyInterval = 1) {
+  const type = String(recurrenceType || 'daily');
+  if (type === 'biweekly') return 2;
+  if (type === 'custom_weekly') return clampCustomRecurrenceInterval(weeklyInterval);
+  if (type === 'custom_monthly') return clampCustomRecurrenceInterval(monthlyInterval);
+  return 1;
 }
 
 function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
@@ -388,6 +433,7 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
       type: 'daily',
       days: [],
       monthDate: 1,
+      interval: 1,
       lunarYear: fallbackLunar.year,
       lunarMonth: fallbackLunar.month,
       lunarDay: fallbackLunar.day,
@@ -404,6 +450,7 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
       type: 'lunar',
       days: [],
       monthDate,
+      interval: 1,
       lunarYear: lunar.year,
       lunarMonth: lunar.month,
       lunarDay: lunar.day,
@@ -415,6 +462,31 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
       type: 'biweekly',
       days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
       monthDate,
+      interval: 2,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
+  }
+  if (freq === 'weekly' && interval > 2) {
+    return {
+      type: 'custom_weekly',
+      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+      monthDate,
+      interval,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
+  }
+  if (freq === 'monthly' && interval > 1) {
+    return {
+      type: 'custom_monthly',
+      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+      monthDate,
+      interval,
       lunarYear: fallbackLunar.year,
       lunarMonth: fallbackLunar.month,
       lunarDay: fallbackLunar.day,
@@ -425,6 +497,7 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
     type: freq || 'daily',
     days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
     monthDate,
+    interval,
     lunarYear: fallbackLunar.year,
     lunarMonth: fallbackLunar.month,
     lunarDay: fallbackLunar.day,
@@ -444,6 +517,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [recurrenceType, setRecurrenceType] = useState('daily');
   const [selectedDays, setSelectedDays] = useState([]);
   const [monthlyDate, setMonthlyDate] = useState(1);
+  const [weeklyInterval, setWeeklyInterval] = useState(2);
+  const [monthlyInterval, setMonthlyInterval] = useState(2);
   const [showCustomRecurrenceMenu, setShowCustomRecurrenceMenu] = useState(false);
   const [showMonthlyDatePicker, setShowMonthlyDatePicker] = useState(false);
   const [timeRangeEnabled, setTimeRangeEnabled] = useState(false);
@@ -544,13 +619,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     month: recurrenceLunarMonth,
     day: recurrenceLunarDay,
     isLeapMonth: recurrenceLunarIsLeapMonth,
+    monthDate: monthlyDate,
+    weeklyInterval,
+    monthlyInterval,
   });
   const recurrenceButtonClass = basicPanel === 'recurrence'
     ? 'bg-slate-100 text-slate-700'
     : showRecurrence
       ? 'text-emerald-600 hover:bg-emerald-50'
       : 'text-slate-500 hover:bg-slate-100';
-  const isCustomRecurrenceType = recurrenceType === 'biweekly' || recurrenceType === 'lunar';
+  const isCustomRecurrenceType = isCustomRecurrenceTypeValue(recurrenceType);
   const recurrenceLunarPickerDate = (
     solarDateFromLunarSelection({
       year: recurrenceLunarYear,
@@ -594,6 +672,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         recurrenceType: recurrenceType || 'daily',
         selectedDays: [...selectedDays],
         monthlyDate: clampMonthlyDate(monthlyDate, 1),
+        weeklyInterval: clampCustomRecurrenceInterval(weeklyInterval),
+        monthlyInterval: clampCustomRecurrenceInterval(monthlyInterval),
         recurrenceLunarYear: Number.parseInt(recurrenceLunarYear, 10) || dayjs().tz(LUNAR_TIMEZONE).year(),
         recurrenceLunarMonth: Number.parseInt(recurrenceLunarMonth, 10) || 1,
         recurrenceLunarDay: Number.parseInt(recurrenceLunarDay, 10) || 1,
@@ -608,6 +688,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     getValues,
     isBasicPanelRequiringConfirm,
     monthlyDate,
+    monthlyInterval,
     parsePreview,
     recurrenceLunarDay,
     recurrenceLunarIsLeapMonth,
@@ -622,6 +703,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     timeRangeEditing,
     timeRangeEnabled,
     timeTouched,
+    weeklyInterval,
   ]);
 
   const restoreBasicPanelSnapshot = useCallback((snapshot) => {
@@ -646,6 +728,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setRecurrenceType(String(draftState.recurrenceType || 'daily'));
       setSelectedDays(Array.isArray(draftState.selectedDays) ? [...draftState.selectedDays] : []);
       setMonthlyDate(clampMonthlyDate(draftState.monthlyDate, 1));
+      setWeeklyInterval(clampCustomRecurrenceInterval(draftState.weeklyInterval));
+      setMonthlyInterval(clampCustomRecurrenceInterval(draftState.monthlyInterval));
       setRecurrenceLunarYear(Number.parseInt(draftState.recurrenceLunarYear, 10) || dayjs().tz(LUNAR_TIMEZONE).year());
       setRecurrenceLunarMonth(Number.parseInt(draftState.recurrenceLunarMonth, 10) || 1);
       setRecurrenceLunarDay(Number.parseInt(draftState.recurrenceLunarDay, 10) || 1);
@@ -774,7 +858,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setShowMonthlyDatePicker(false);
       return;
     }
-    if (recurrenceType !== 'monthly') {
+    if (!isMonthlyRecurrenceType(recurrenceType)) {
       setShowMonthlyDatePicker(false);
     }
   }, [showRecurrence, recurrenceType]);
@@ -904,7 +988,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const parsedSelection = parseRecurrenceSelection(recurrenceRule, startInput);
       if (
         !allDay
-        && (parsedSelection.type === 'weekly' || parsedSelection.type === 'biweekly')
+        && isWeeklyRecurrenceType(parsedSelection.type)
         && startInput
       ) {
         const nextStartInput = alignStartInputToWeekday(
@@ -931,6 +1015,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setRecurrenceType('daily');
       setSelectedDays([]);
       setMonthlyDate(resolveMonthlyDateFromRule(null, startInput));
+      setWeeklyInterval(2);
+      setMonthlyInterval(2);
       const fallbackRecurrenceLunar = parseLunarYearlyRule(
         { freq: 'lunar_yearly' },
         startInput || getDefaultStartInputValue(getUserTimezone()),
@@ -946,11 +1032,21 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         setRecurrenceType(parsedSelection.type);
         setSelectedDays(parsedSelection.days);
         setMonthlyDate(resolveMonthlyDateFromRule(recurrenceRule, startInput));
+        if (parsedSelection.type === 'custom_weekly') {
+          setWeeklyInterval(clampCustomRecurrenceInterval(parsedSelection.interval));
+        } else {
+          setWeeklyInterval(2);
+        }
+        if (parsedSelection.type === 'custom_monthly') {
+          setMonthlyInterval(clampCustomRecurrenceInterval(parsedSelection.interval));
+        } else {
+          setMonthlyInterval(2);
+        }
         setRecurrenceLunarYear(Number.parseInt(parsedSelection.lunarYear, 10) || fallbackRecurrenceLunar.year);
         setRecurrenceLunarMonth(Number.parseInt(parsedSelection.lunarMonth, 10) || fallbackRecurrenceLunar.month);
         setRecurrenceLunarDay(Number.parseInt(parsedSelection.lunarDay, 10) || fallbackRecurrenceLunar.day);
         setRecurrenceLunarIsLeapMonth(!!parsedSelection.lunarIsLeapMonth);
-        if (parsedSelection.type === 'biweekly' || parsedSelection.type === 'lunar') {
+        if (isCustomRecurrenceTypeValue(parsedSelection.type)) {
           setShowCustomRecurrenceMenu(true);
         }
       }
@@ -967,6 +1063,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       setRecurrenceType('daily');
       setSelectedDays([]);
       setMonthlyDate(1);
+      setWeeklyInterval(2);
+      setMonthlyInterval(2);
       const fallbackLunarSelection = parseLunarYearlyRule(
         { freq: 'lunar_yearly' },
         initialRange?.start || getDefaultStartInputValue(getUserTimezone()),
@@ -1134,12 +1232,14 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
         day: Number.parseInt(recurrenceLunarDay, 10) || 1,
         leap: !!recurrenceLunarIsLeapMonth,
       };
+      const currentRecurrenceInterval = getRecurrenceIntervalForType(recurrenceType, weeklyInterval, monthlyInterval);
       const recurrenceChanged = isEditing && (
         showRecurrence !== !!existingRecurrenceRule
         || (showRecurrence && (
           (recurrenceType || 'daily') !== (existingRecurrenceSelection.type || 'daily')
+          || currentRecurrenceInterval !== clampRecurrenceInterval(existingRecurrenceSelection.interval, 1)
           || JSON.stringify(normalizedSelectedDays) !== JSON.stringify(normalizedExistingDays)
-          || ((recurrenceType || 'daily') === 'monthly'
+          || (isMonthlyRecurrenceType(recurrenceType)
             && clampMonthlyDate(monthlyDate) !== clampMonthlyDate(existingRecurrenceSelection.monthDate, 1))
           || ((recurrenceType || 'daily') === 'lunar' && (
             normalizedCurrentLunar.month !== normalizedExistingLunar.month
@@ -1174,7 +1274,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const shouldAlignNearestSolarStart = !!(
         showRecurrence
         && recurrenceType !== 'lunar'
-        && ['weekly', 'biweekly', 'monthly', 'yearly'].includes(recurrenceType)
+        && ['weekly', 'biweekly', 'custom_weekly', 'monthly', 'custom_monthly', 'yearly'].includes(recurrenceType)
         && (!isEditing || recurrenceChanged)
       );
       const nowLocalInput = dayjs().tz(clientTimezone).format('YYYY-MM-DDTHH:mm');
@@ -1213,6 +1313,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             recurrenceType,
             recurrenceDays: recurrenceDaysForAlignment,
             recurrenceDate: monthlyDate,
+            recurrenceInterval: currentRecurrenceInterval,
             allDay: true,
             referenceInput: nowLocalDateInput,
             timezoneName: clientTimezone,
@@ -1294,6 +1395,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
             recurrenceType,
             recurrenceDays: recurrenceDaysForAlignment,
             recurrenceDate: monthlyDate,
+            recurrenceInterval: currentRecurrenceInterval,
             allDay: false,
             referenceInput: nowLocalInput,
             timezoneName: clientTimezone,
@@ -1388,6 +1490,14 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
           rule.freq = 'weekly';
           rule.interval = 2;
           rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+        } else if (recurrenceType === 'custom_weekly') {
+          rule.freq = 'weekly';
+          rule.interval = clampCustomRecurrenceInterval(weeklyInterval);
+          rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+        } else if (recurrenceType === 'custom_monthly') {
+          rule.freq = 'monthly';
+          rule.interval = clampCustomRecurrenceInterval(monthlyInterval);
+          rule.bydate = [clampMonthlyDate(monthlyDate)];
         } else if (recurrenceType === 'monthly') {
           rule.bydate = [clampMonthlyDate(monthlyDate)];
         } else if (recurrenceType === 'weekly' && normalizedDays.length > 0) {
@@ -2104,7 +2214,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             type="button"
                             onClick={() => {
                               setShowRecurrence(true);
-                              if ((recurrenceType === 'weekly' || recurrenceType === 'biweekly') && selectedDays.length === 0) {
+                              if (isWeeklyRecurrenceType(recurrenceType) && selectedDays.length === 0) {
                                 setSelectedDays(workDayKeys);
                               }
                             }}
@@ -2132,10 +2242,10 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   onClick={() => {
                                     setRecurrenceType(option.value);
                                     setShowCustomRecurrenceMenu(false);
-                                    if ((option.value === 'weekly' || option.value === 'biweekly') && selectedDays.length === 0) {
+                                    if (isWeeklyRecurrenceType(option.value) && selectedDays.length === 0) {
                                       setSelectedDays(workDayKeys);
                                     }
-                                    if (option.value !== 'weekly' && option.value !== 'biweekly') {
+                                    if (!isWeeklyRecurrenceType(option.value)) {
                                       setSelectedDays([]);
                                     }
                                     if (option.value === 'monthly') {
@@ -2173,6 +2283,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   type="button"
                                   onClick={() => {
                                     setRecurrenceType('biweekly');
+                                    setWeeklyInterval(2);
                                     if (selectedDays.length === 0) {
                                       setSelectedDays(workDayKeys);
                                     }
@@ -2180,6 +2291,32 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   className={`task-quick-chip${recurrenceType === 'biweekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.biweekly')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRecurrenceType('custom_weekly');
+                                      setWeeklyInterval((prev) => clampCustomRecurrenceInterval(prev));
+                                      if (selectedDays.length === 0) {
+                                        setSelectedDays(workDayKeys);
+                                      }
+                                    }}
+                                    className={`task-quick-chip${recurrenceType === 'custom_weekly' ? ' task-quick-chip--active' : ''}`}
+                                  >
+                                    {t('task.customWeekly')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRecurrenceType('custom_monthly');
+                                      setSelectedDays([]);
+                                      setMonthlyInterval((prev) => clampCustomRecurrenceInterval(prev));
+                                      const start = parseLocalInput(startInputValue || getValues('start_time') || '');
+                                      if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
+                                    }}
+                                    className={`task-quick-chip${recurrenceType === 'custom_monthly' ? ' task-quick-chip--active' : ''}`}
+                                  >
+                                    {t('task.customMonthly')}
                                   </button>
                                   <button
                                     type="button"
@@ -2205,6 +2342,74 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                     {t('task.lunarYearly')}
                                   </button>
                               </div>
+                              {recurrenceType === 'custom_weekly' && (
+                                <div className="task-quick-interval-row">
+                                  <span>{t('task.repeatEvery')}</span>
+                                  <div className="task-quick-stepper">
+                                    <button
+                                      type="button"
+                                      title={t('task.decreaseInterval')}
+                                      aria-label={t('task.decreaseInterval')}
+                                      onClick={() => setWeeklyInterval((prev) => Math.max(2, clampCustomRecurrenceInterval(prev) - 1))}
+                                      className="task-quick-stepper-btn"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="number"
+                                      min="2"
+                                      max={RECURRENCE_INTERVAL_MAX}
+                                      value={clampCustomRecurrenceInterval(weeklyInterval)}
+                                      onChange={(event) => setWeeklyInterval(clampCustomRecurrenceInterval(event.target.value))}
+                                      className="task-quick-stepper-input"
+                                    />
+                                    <button
+                                      type="button"
+                                      title={t('task.increaseInterval')}
+                                      aria-label={t('task.increaseInterval')}
+                                      onClick={() => setWeeklyInterval((prev) => Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(prev) + 1))}
+                                      className="task-quick-stepper-btn"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span>{t('task.repeatWeeksUnit')}</span>
+                                </div>
+                              )}
+                              {recurrenceType === 'custom_monthly' && (
+                                <div className="task-quick-interval-row">
+                                  <span>{t('task.repeatEvery')}</span>
+                                  <div className="task-quick-stepper">
+                                    <button
+                                      type="button"
+                                      title={t('task.decreaseInterval')}
+                                      aria-label={t('task.decreaseInterval')}
+                                      onClick={() => setMonthlyInterval((prev) => Math.max(2, clampCustomRecurrenceInterval(prev) - 1))}
+                                      className="task-quick-stepper-btn"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="number"
+                                      min="2"
+                                      max={RECURRENCE_INTERVAL_MAX}
+                                      value={clampCustomRecurrenceInterval(monthlyInterval)}
+                                      onChange={(event) => setMonthlyInterval(clampCustomRecurrenceInterval(event.target.value))}
+                                      className="task-quick-stepper-input"
+                                    />
+                                    <button
+                                      type="button"
+                                      title={t('task.increaseInterval')}
+                                      aria-label={t('task.increaseInterval')}
+                                      onClick={() => setMonthlyInterval((prev) => Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(prev) + 1))}
+                                      className="task-quick-stepper-btn"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  <span>{t('task.repeatMonthsUnit')}</span>
+                                </div>
+                              )}
                             </div>
                           )}
 
@@ -2241,7 +2446,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             </div>
                           )}
 
-                          {(recurrenceType === 'weekly' || recurrenceType === 'biweekly') && (
+                          {isWeeklyRecurrenceType(recurrenceType) && (
                             <div className="task-quick-section">
                               <p className="task-quick-section-title">{t('task.selectWeekdays')}</p>
                               <div className="task-quick-chip-row mb-2">
@@ -2281,7 +2486,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               </div>
                             </div>
                           )}
-                          {recurrenceType === 'monthly' && (
+                          {isMonthlyRecurrenceType(recurrenceType) && (
                             <div className="task-quick-section">
                               <button
                                 type="button"

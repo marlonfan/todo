@@ -396,6 +396,69 @@ body {
   color: #1d4ed8;
 }
 
+.task-quick-interval-row {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.36rem;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 620;
+}
+
+.task-quick-stepper {
+  display: inline-grid;
+  grid-template-columns: 1.5rem 2.7rem 1.5rem;
+  height: 1.72rem;
+  overflow: hidden;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.task-quick-stepper-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 720;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.task-quick-stepper-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.task-quick-stepper-input {
+  min-width: 0;
+  border: 0;
+  border-left: 1px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+  background: #fff;
+  color: #0f172a;
+  font-size: 0.74rem;
+  font-weight: 720;
+  text-align: center;
+  outline: none;
+}
+
+.task-quick-stepper-input::-webkit-outer-spin-button,
+.task-quick-stepper-input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.task-quick-stepper-input[type='number'] {
+  -moz-appearance: textfield;
+}
+
 .task-quick-weekday-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));

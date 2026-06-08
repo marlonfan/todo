@@ -49,3 +49,27 @@ test('alignStartInputToNearestRecurrence supports all-day output and timezone pa
 
   assert.equal(result, '2026-02-12');
 });
+
+test('alignStartInputToNearestRecurrence treats custom weekly like weekly alignment', () => {
+  const result = alignStartInputToNearestRecurrence({
+    startInput: '2026-03-03T09:30',
+    recurrenceType: 'custom_weekly',
+    recurrenceDays: ['MO'],
+    recurrenceInterval: 3,
+    allDay: false,
+  });
+
+  assert.equal(result, '2026-03-09T09:30');
+});
+
+test('alignStartInputToNearestRecurrence treats custom monthly like monthly alignment', () => {
+  const result = alignStartInputToNearestRecurrence({
+    startInput: '2026-03-20',
+    recurrenceType: 'custom_monthly',
+    recurrenceDate: 15,
+    recurrenceInterval: 2,
+    allDay: true,
+  });
+
+  assert.equal(result, '2026-04-15');
+});

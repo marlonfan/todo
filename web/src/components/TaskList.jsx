@@ -97,6 +97,7 @@ const DRAFT_IDLE_SUBMIT_MS = 3000;
 const DRAFT_TEXT_AUTOSAVE_MS = 2500;
 const DRAFT_DESCRIPTION_RENDER_DELAY_MS = 120;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
+const RECURRENCE_INTERVAL_MAX = 99;
 const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
 const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled,skipped';
 const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
@@ -121,6 +122,7 @@ const TIME_PANEL_DRAFT_FIELDS = ['all_day', 'start_time', 'end_time'];
 const RECURRENCE_PANEL_DRAFT_FIELDS = [
   'recurrence_enabled',
   'recurrence_type',
+  'recurrence_interval',
   'recurrence_days',
   'recurrence_date',
   'recurrence_lunar_month',
@@ -211,6 +213,7 @@ function normalizeDraftForCompare(draft) {
     category_ids: [...(draft.category_ids || [])].map(String).sort(),
     recurrence_enabled: !!draft.recurrence_enabled,
     recurrence_type: draft.recurrence_type || 'daily',
+    recurrence_interval: clampRecurrenceInterval(draft.recurrence_interval, 1),
     recurrence_days: [...(draft.recurrence_days || [])].map(String).sort(),
     recurrence_date: Number.parseInt(draft.recurrence_date, 10) || 1,
     recurrence_lunar_month: Number.parseInt(draft.recurrence_lunar_month, 10) || 1,
@@ -434,22 +437,33 @@ function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, f
   return `${firstLabel}+${selected.length - 1}`;
 }
 
-function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, lunarSelection = null) {
+function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, recurrenceMeta = null) {
   if (!enabled) return t('task.repeatOff');
   if (recurrenceType === 'lunar') {
-    const month = Number.parseInt(lunarSelection?.month, 10) || 1;
-    const day = Number.parseInt(lunarSelection?.day, 10) || 1;
-    const leap = !!lunarSelection?.isLeapMonth;
+    const month = Number.parseInt(recurrenceMeta?.month, 10) || 1;
+    const day = Number.parseInt(recurrenceMeta?.day, 10) || 1;
+    const leap = !!recurrenceMeta?.isLeapMonth;
     return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
+  }
+  const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
+  if (recurrenceType === 'custom_weekly') {
+    const label = t('task.customWeeklySummary', {
+      count: clampCustomRecurrenceInterval(recurrenceMeta?.interval),
+    });
+    return dayCount > 0 ? `${label}(${dayCount})` : label;
+  }
+  if (recurrenceType === 'custom_monthly') {
+    return t('task.customMonthlySummary', {
+      count: clampCustomRecurrenceInterval(recurrenceMeta?.interval),
+      date: clampMonthlyDate(recurrenceMeta?.monthDate, 1),
+    });
   }
   if (recurrenceType === 'biweekly') {
     const biweeklyLabel = t('task.biweekly');
-    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
     return dayCount > 0 ? `${biweeklyLabel}(${dayCount})` : biweeklyLabel;
   }
   if (recurrenceType === 'weekly') {
     const weeklyLabel = t('task.weekly');
-    const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
     return dayCount > 0 ? `${weeklyLabel}(${dayCount})` : weeklyLabel;
   }
   if (recurrenceType === 'monthly') return t('task.monthly');
@@ -468,6 +482,40 @@ function clampMonthlyDate(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(31, Math.max(1, parsed));
+}
+
+function clampRecurrenceInterval(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(RECURRENCE_INTERVAL_MAX, Math.max(1, parsed));
+}
+
+function clampCustomRecurrenceInterval(value) {
+  return Math.max(2, clampRecurrenceInterval(value, 2));
+}
+
+function isWeeklyRecurrenceType(value) {
+  const type = String(value || 'daily');
+  return type === 'weekly' || type === 'biweekly' || type === 'custom_weekly';
+}
+
+function isMonthlyRecurrenceType(value) {
+  const type = String(value || 'daily');
+  return type === 'monthly' || type === 'custom_monthly';
+}
+
+function isCustomRecurrenceTypeValue(value) {
+  const type = String(value || 'daily');
+  return type === 'biweekly' || type === 'custom_weekly' || type === 'custom_monthly' || type === 'lunar';
+}
+
+function getRecurrenceIntervalForType(recurrenceType, interval = 1) {
+  const type = String(recurrenceType || 'daily');
+  if (type === 'biweekly') return 2;
+  if (type === 'custom_weekly' || type === 'custom_monthly') {
+    return clampCustomRecurrenceInterval(interval);
+  }
+  return 1;
 }
 
 function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
@@ -501,6 +549,7 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
       type: 'daily',
       days: [],
       monthDate: 1,
+      interval: 1,
       lunarYear: fallbackLunar.year,
       lunarMonth: fallbackLunar.month,
       lunarDay: fallbackLunar.day,
@@ -517,6 +566,7 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
       type: 'lunar',
       days: [],
       monthDate,
+      interval: 1,
       lunarYear: lunar.year,
       lunarMonth: lunar.month,
       lunarDay: lunar.day,
@@ -528,6 +578,31 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
       type: 'biweekly',
       days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
       monthDate,
+      interval: 2,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
+  }
+  if (freq === 'weekly' && interval > 2) {
+    return {
+      type: 'custom_weekly',
+      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+      monthDate,
+      interval,
+      lunarYear: fallbackLunar.year,
+      lunarMonth: fallbackLunar.month,
+      lunarDay: fallbackLunar.day,
+      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
+    };
+  }
+  if (freq === 'monthly' && interval > 1) {
+    return {
+      type: 'custom_monthly',
+      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
+      monthDate,
+      interval,
       lunarYear: fallbackLunar.year,
       lunarMonth: fallbackLunar.month,
       lunarDay: fallbackLunar.day,
@@ -538,6 +613,7 @@ function parseRecurrenceSelection(rule, fallbackStartInput = '') {
     type: freq || 'daily',
     days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
     monthDate,
+    interval,
     lunarYear: fallbackLunar.year,
     lunarMonth: fallbackLunar.month,
     lunarDay: fallbackLunar.day,
@@ -2148,6 +2224,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       month: draft?.recurrence_lunar_month,
       day: draft?.recurrence_lunar_day,
       isLeapMonth: draft?.recurrence_lunar_is_leap_month,
+      interval: draft?.recurrence_interval,
+      monthDate: draft?.recurrence_date,
     },
   );
   const draftRecurrenceButtonClass = detailPanel === 'recurrence'
@@ -2159,7 +2237,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     () => getDetailPanelFloatingStyle(detailPanelTriggerRefs.current?.[detailPanel], detailPanel),
     [detailPanel]
   );
-  const isDraftCustomRecurrenceType = (draft?.recurrence_type || 'daily') === 'biweekly' || (draft?.recurrence_type || 'daily') === 'lunar';
+  const isDraftCustomRecurrenceType = isCustomRecurrenceTypeValue(draft?.recurrence_type || 'daily');
   const draftStatus = draft?.status || selectedTask?.status || 'pending';
   const selectedTaskDraftForAI = useMemo(() => {
     if (!selectedTask || !draft) return selectedTask;
@@ -2214,7 +2292,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       setShowDraftMonthlyDatePicker(false);
       return;
     }
-    if ((draft?.recurrence_type || 'daily') !== 'monthly') {
+    if (!isMonthlyRecurrenceType(draft?.recurrence_type || 'daily')) {
       setShowDraftMonthlyDatePicker(false);
     }
   }, [draft?.recurrence_enabled, draft?.recurrence_type]);
@@ -2228,7 +2306,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const parsedRecurrence = parseRecurrenceSelection(recurrenceRule, startTime ? toInputFormat(startTime, null, allDay) : '');
     let startInput = startTime ? toInputFormat(startTime, null, allDay) : '';
     let endInput = endTime ? toInputFormat(endTime, null, allDay) : '';
-    if (!allDay && (parsedRecurrence.type === 'weekly' || parsedRecurrence.type === 'biweekly') && startInput) {
+    if (!allDay && isWeeklyRecurrenceType(parsedRecurrence.type) && startInput) {
       const alignedStartInput = alignStartToWeekdayLocal(
         startInput,
         parsedRecurrence.days.length > 0 ? parsedRecurrence.days : DEFAULT_WORKDAY_KEYS,
@@ -2253,6 +2331,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       category_ids: (taskValue.categories || []).map((cat) => String(cat.id)),
       recurrence_enabled: !!recurrenceRule,
       recurrence_type: parsedRecurrence.type,
+      recurrence_interval: parsedRecurrence.interval,
       recurrence_days: parsedRecurrence.days,
       recurrence_date: parsedRecurrence.monthDate,
       recurrence_lunar_month: parsedRecurrence.lunarMonth,
@@ -2740,6 +2819,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const recurrenceChanged =
       !!draftValue.recurrence_enabled !== !!originalDraft?.recurrence_enabled
       || String(draftValue.recurrence_type || 'daily') !== String(originalDraft?.recurrence_type || 'daily')
+      || getRecurrenceIntervalForType(draftValue.recurrence_type, draftValue.recurrence_interval)
+        !== getRecurrenceIntervalForType(originalDraft?.recurrence_type, originalDraft?.recurrence_interval)
       || JSON.stringify([...(draftValue.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
         !== JSON.stringify([...(originalDraft?.recurrence_days || [])].map((day) => String(day || '').toUpperCase()).sort())
       || clampMonthlyDate(draftValue.recurrence_date, 1) !== clampMonthlyDate(originalDraft?.recurrence_date, 1)
@@ -2796,6 +2877,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         isLeapMonth: !!draftValue.recurrence_lunar_is_leap_month,
       });
       const recurrenceType = String(draftValue.recurrence_type || 'daily');
+      const recurrenceInterval = getRecurrenceIntervalForType(recurrenceType, draftValue.recurrence_interval);
       const normalizedRecurrenceDays = (draftValue.recurrence_days || [])
         .map((day) => String(day || '').toUpperCase())
         .filter((day) => WEEKDAY_ONLY_RE.test(day));
@@ -2807,7 +2889,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         recurrenceChanged
         && draftValue.recurrence_enabled
         && !isLunarRecurrence
-        && ['weekly', 'biweekly', 'monthly', 'yearly'].includes(recurrenceType)
+        && ['weekly', 'biweekly', 'custom_weekly', 'monthly', 'custom_monthly', 'yearly'].includes(recurrenceType)
       );
       const nowLocalInput = dayjs().tz(timezone).format('YYYY-MM-DDTHH:mm');
       const nowLocalDateInput = dayjs().tz(timezone).format('YYYY-MM-DD');
@@ -2842,6 +2924,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             recurrenceType,
             recurrenceDays: recurrenceDaysForAlignment,
             recurrenceDate: draftValue.recurrence_date,
+            recurrenceInterval,
             allDay: true,
             referenceInput: nowLocalDateInput,
             timezoneName: timezone,
@@ -2892,6 +2975,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             recurrenceType,
             recurrenceDays: recurrenceDaysForAlignment,
             recurrenceDate: draftValue.recurrence_date,
+            recurrenceInterval,
             allDay: false,
             referenceInput: nowLocalInput,
             timezoneName: timezone,
@@ -2944,6 +3028,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         rule.freq = 'weekly';
         rule.interval = 2;
         rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+      } else if (draftValue.recurrence_type === 'custom_weekly') {
+        rule.freq = 'weekly';
+        rule.interval = clampCustomRecurrenceInterval(draftValue.recurrence_interval);
+        rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
+      } else if (draftValue.recurrence_type === 'custom_monthly') {
+        rule.freq = 'monthly';
+        rule.interval = clampCustomRecurrenceInterval(draftValue.recurrence_interval);
+        rule.bydate = [clampMonthlyDate(draftValue.recurrence_date, 1)];
       } else if (draftValue.recurrence_type === 'monthly') {
         rule.bydate = [clampMonthlyDate(draftValue.recurrence_date, 1)];
       } else if (rule.freq === 'weekly' && normalizedDays.length > 0) {
@@ -4724,6 +4816,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                               onClick={() => {
                                 handleDraftFieldChange('recurrence_enabled', false);
                                 handleDraftFieldChange('recurrence_type', 'daily');
+                                handleDraftFieldChange('recurrence_interval', 1);
                                 handleDraftFieldChange('recurrence_days', []);
                                 handleDraftFieldChange('recurrence_date', 1);
                               }}
@@ -4736,8 +4829,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                               onClick={() => {
                                 handleDraftFieldChange('recurrence_enabled', true);
                                 if (
-                                  ((draft.recurrence_type || 'daily') === 'weekly'
-                                    || (draft.recurrence_type || 'daily') === 'biweekly')
+                                  isWeeklyRecurrenceType(draft.recurrence_type || 'daily')
                                   && (draft.recurrence_days || []).length === 0
                                 ) {
                                   handleDraftFieldChange('recurrence_days', workDayKeys);
@@ -4767,10 +4859,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                     onClick={() => {
                                       handleDraftFieldChange('recurrence_type', option.value);
                                       setShowDraftCustomRecurrenceMenu(false);
-                                      if ((option.value === 'weekly' || option.value === 'biweekly') && (draft.recurrence_days || []).length === 0) {
+                                      handleDraftFieldChange('recurrence_interval', 1);
+                                      if (isWeeklyRecurrenceType(option.value) && (draft.recurrence_days || []).length === 0) {
                                         handleDraftFieldChange('recurrence_days', workDayKeys);
                                       }
-                                      if (option.value !== 'weekly' && option.value !== 'biweekly') {
+                                      if (!isWeeklyRecurrenceType(option.value)) {
                                         handleDraftFieldChange('recurrence_days', []);
                                       }
                                       if (option.value === 'monthly') {
@@ -4810,6 +4903,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                     type="button"
                                     onClick={() => {
                                       handleDraftFieldChange('recurrence_type', 'biweekly');
+                                      handleDraftFieldChange('recurrence_interval', 2);
                                       if ((draft.recurrence_days || []).length === 0) {
                                         handleDraftFieldChange('recurrence_days', workDayKeys);
                                       }
@@ -4821,7 +4915,36 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      handleDraftFieldChange('recurrence_type', 'custom_weekly');
+                                      handleDraftFieldChange('recurrence_interval', clampCustomRecurrenceInterval(draft.recurrence_interval));
+                                      if ((draft.recurrence_days || []).length === 0) {
+                                        handleDraftFieldChange('recurrence_days', workDayKeys);
+                                      }
+                                    }}
+                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'custom_weekly' ? ' task-quick-chip--active' : ''}`}
+                                  >
+                                    {t('task.customWeekly')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleDraftFieldChange('recurrence_type', 'custom_monthly');
+                                      handleDraftFieldChange('recurrence_interval', clampCustomRecurrenceInterval(draft.recurrence_interval));
+                                      handleDraftFieldChange('recurrence_days', []);
+                                      const start = parseLocalInput(draft.start_time || '');
+                                      if (start) {
+                                        handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
+                                      }
+                                    }}
+                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'custom_monthly' ? ' task-quick-chip--active' : ''}`}
+                                  >
+                                    {t('task.customMonthly')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
                                       handleDraftFieldChange('recurrence_type', 'lunar');
+                                      handleDraftFieldChange('recurrence_interval', 1);
                                       handleDraftFieldChange('recurrence_days', []);
                                       const fallback = parseLunarYearlyRule(
                                         { freq: 'lunar_yearly' },
@@ -4842,6 +4965,92 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                     {t('task.lunarYearly')}
                                   </button>
                                 </div>
+                                {(draft.recurrence_type || 'daily') === 'custom_weekly' && (
+                                  <div className="task-quick-interval-row">
+                                    <span>{t('task.repeatEvery')}</span>
+                                    <div className="task-quick-stepper">
+                                      <button
+                                        type="button"
+                                        title={t('task.decreaseInterval')}
+                                        aria-label={t('task.decreaseInterval')}
+                                        onClick={() => handleDraftFieldChange(
+                                          'recurrence_interval',
+                                          Math.max(2, clampCustomRecurrenceInterval(draft.recurrence_interval) - 1)
+                                        )}
+                                        className="task-quick-stepper-btn"
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="2"
+                                        max={RECURRENCE_INTERVAL_MAX}
+                                        value={clampCustomRecurrenceInterval(draft.recurrence_interval)}
+                                        onChange={(event) => handleDraftFieldChange(
+                                          'recurrence_interval',
+                                          clampCustomRecurrenceInterval(event.target.value)
+                                        )}
+                                        className="task-quick-stepper-input"
+                                      />
+                                      <button
+                                        type="button"
+                                        title={t('task.increaseInterval')}
+                                        aria-label={t('task.increaseInterval')}
+                                        onClick={() => handleDraftFieldChange(
+                                          'recurrence_interval',
+                                          Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(draft.recurrence_interval) + 1)
+                                        )}
+                                        className="task-quick-stepper-btn"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                    <span>{t('task.repeatWeeksUnit')}</span>
+                                  </div>
+                                )}
+                                {(draft.recurrence_type || 'daily') === 'custom_monthly' && (
+                                  <div className="task-quick-interval-row">
+                                    <span>{t('task.repeatEvery')}</span>
+                                    <div className="task-quick-stepper">
+                                      <button
+                                        type="button"
+                                        title={t('task.decreaseInterval')}
+                                        aria-label={t('task.decreaseInterval')}
+                                        onClick={() => handleDraftFieldChange(
+                                          'recurrence_interval',
+                                          Math.max(2, clampCustomRecurrenceInterval(draft.recurrence_interval) - 1)
+                                        )}
+                                        className="task-quick-stepper-btn"
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="2"
+                                        max={RECURRENCE_INTERVAL_MAX}
+                                        value={clampCustomRecurrenceInterval(draft.recurrence_interval)}
+                                        onChange={(event) => handleDraftFieldChange(
+                                          'recurrence_interval',
+                                          clampCustomRecurrenceInterval(event.target.value)
+                                        )}
+                                        className="task-quick-stepper-input"
+                                      />
+                                      <button
+                                        type="button"
+                                        title={t('task.increaseInterval')}
+                                        aria-label={t('task.increaseInterval')}
+                                        onClick={() => handleDraftFieldChange(
+                                          'recurrence_interval',
+                                          Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(draft.recurrence_interval) + 1)
+                                        )}
+                                        className="task-quick-stepper-btn"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                    <span>{t('task.repeatMonthsUnit')}</span>
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -4878,7 +5087,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                               </div>
                             )}
 
-                            {((draft.recurrence_type || 'daily') === 'weekly' || (draft.recurrence_type || 'daily') === 'biweekly') && (
+                            {isWeeklyRecurrenceType(draft.recurrence_type || 'daily') && (
                               <div className="task-quick-section">
                                 <p className="task-quick-section-title">{t('task.selectWeekdays')}</p>
                                 <div className="task-quick-chip-row mb-2">
@@ -4918,7 +5127,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                 </div>
                               </div>
                             )}
-                            {(draft.recurrence_type || 'daily') === 'monthly' && (
+                            {isMonthlyRecurrenceType(draft.recurrence_type || 'daily') && (
                               <div className="task-quick-section">
                                 <button
                                   type="button"

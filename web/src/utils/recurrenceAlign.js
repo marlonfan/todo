@@ -72,6 +72,7 @@ export function alignStartInputToNearestRecurrence({
   recurrenceType,
   recurrenceDays = [],
   recurrenceDate = 1,
+  recurrenceInterval = 1,
   allDay = false,
   referenceInput = '',
   timezoneName = '',
@@ -80,13 +81,20 @@ export function alignStartInputToNearestRecurrence({
   if (!start) return startInput || '';
   const reference = parseInput(referenceInput, timezoneName);
   const baseline = start;
-  const type = String(recurrenceType || 'daily');
+  const rawType = String(recurrenceType || 'daily');
+  const interval = Math.max(1, Number.parseInt(recurrenceInterval, 10) || 1);
+  const type = rawType === 'custom_weekly'
+    ? 'weekly'
+    : rawType === 'custom_monthly'
+      ? 'monthly'
+      : rawType;
 
   if (type === 'weekly' || type === 'biweekly') {
     const targets = normalizeRecurrenceDays(recurrenceDays);
     if (targets.length === 0) return formatOutput(start, allDay);
     const searchStart = baseline.startOf('day');
-    for (let offset = 0; offset <= 14; offset += 1) {
+    const searchDays = Math.max(14, interval * 7);
+    for (let offset = 0; offset <= searchDays; offset += 1) {
       const currentDay = searchStart.add(offset, 'day');
       if (!targets.includes(currentDay.day())) continue;
       const candidate = withAnchorClock(currentDay, start, allDay);
@@ -99,7 +107,8 @@ export function alignStartInputToNearestRecurrence({
   if (type === 'monthly') {
     const targetDate = clampMonthlyDate(recurrenceDate, start.date());
     const monthCursor = baseline.startOf('month');
-    for (let offset = 0; offset <= 24; offset += 1) {
+    const searchMonths = Math.max(24, interval * 12);
+    for (let offset = 0; offset <= searchMonths; offset += 1) {
       const monthStart = monthCursor.add(offset, 'month');
       const dayValue = Math.min(targetDate, monthStart.daysInMonth());
       const candidate = withAnchorClock(monthStart.date(dayValue), start, allDay);

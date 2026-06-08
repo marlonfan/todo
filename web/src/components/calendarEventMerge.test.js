@@ -178,6 +178,60 @@ test('buildProjectedEventsFromTasks projects recurring task even when dtstart is
   assert.equal(projected[0].start, '2026-03-13T12:00:00.000Z');
 });
 
+test('buildProjectedEventsFromTasks expands custom weekly interval with selected weekday', () => {
+  const tasks = [
+    {
+      id: 31,
+      title: 'every 3 weeks monday',
+      status: 'pending',
+      recurrence_rule: { freq: 'weekly', interval: 3, byday: ['MO'] },
+      start_time: '2026-03-02T09:00:00Z',
+      end_time: '2026-03-02T10:00:00Z',
+      priority: 0,
+    },
+  ];
+
+  const projected = buildProjectedEventsFromTasks(tasks, {
+    rangeStart: '2026-03-01T00:00:00Z',
+    rangeEnd: '2026-04-15T00:00:00Z',
+    timezone: 'UTC',
+    toCalendarISO: (v) => v,
+  });
+
+  assert.deepEqual(projected.map((item) => item.id), [
+    '31_20260302',
+    '31_20260323',
+    '31_20260413',
+  ]);
+});
+
+test('buildProjectedEventsFromTasks expands custom monthly interval on month day', () => {
+  const tasks = [
+    {
+      id: 32,
+      title: 'every 2 months on 15',
+      status: 'pending',
+      recurrence_rule: { freq: 'monthly', interval: 2, bydate: [15] },
+      start_time: '2026-01-15T09:00:00Z',
+      end_time: '2026-01-15T10:00:00Z',
+      priority: 0,
+    },
+  ];
+
+  const projected = buildProjectedEventsFromTasks(tasks, {
+    rangeStart: '2026-01-01T00:00:00Z',
+    rangeEnd: '2026-06-30T00:00:00Z',
+    timezone: 'UTC',
+    toCalendarISO: (v) => v,
+  });
+
+  assert.deepEqual(projected.map((item) => item.id), [
+    '32_20260115',
+    '32_20260315',
+    '32_20260515',
+  ]);
+});
+
 test('mergeCalendarEvents removes cancelled server events and keeps recurring', () => {
   const server = [
     {
