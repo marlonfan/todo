@@ -62,6 +62,7 @@ import {
   shouldIncludeTaskInUpcomingView,
 } from './taskListOverdue';
 import { isTaskUnsyncedLocally } from './taskListRecurringVisibility';
+import { resolveTaskListSelection } from './taskListSelection';
 import {
   buildNextPendingFromProjectedTask,
   hasOptimisticOccurrenceStatusForTask,
@@ -1378,6 +1379,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const draftDescriptionRenderTimerRef = useRef(0);
   const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
   const pendingImmediateSubmitSourceRef = useRef('');
+  const preservingSavedSelectionTaskIDRef = useRef(0);
   const selectedTaskSnapshotRef = useRef(null);
   const draftSnapshotRef = useRef(null);
   const isDraftDirtyRef = useRef(false);
@@ -2096,7 +2098,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   useEffect(() => {
     const currentFilteredIDs = filteredTaskIDsRef.current;
     const currentTasks = tasksRef.current;
-    const selectedExistsInAllTasks = currentTasks.some((task) => Number(task?.id) === Number(selectedTaskID || 0));
+    const allTaskIDs = currentTasks.map((task) => task?.id);
+    const selectedSourceTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current);
+    const selectedExistsByDirectID = currentTasks.some((task) => Number(task?.id) === Number(selectedTaskID || 0));
+    const selectedExistsBySourceID = selectedSourceTaskID > 0
+      && currentTasks.some((task) => Number(task?.id) === selectedSourceTaskID);
+    const selectedExistsInAllTasks = selectedExistsByDirectID || selectedExistsBySourceID;
+    if (!selectedExistsByDirectID && selectedExistsBySourceID && selectedTaskID) {
+      allTaskIDs.push(selectedTaskID);
+    }
+    const pendingTaskID = Number(pendingSubmitTaskIDRef.current || 0);
+    const preservingTaskID = Number(preservingSavedSelectionTaskIDRef.current || 0);
     // Read save-state from refs so that transitions (e.g. savingDraft true→false)
     // don't re-trigger this effect and cause a spurious mid-save reset.
     const shouldPreserveCurrentSelection = !!(
@@ -2106,29 +2118,29 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         draftTouchedRef.current
         || savingDraftRef.current
         || submittingDraftRef.current
-        || Number(pendingSubmitTaskIDRef.current || 0) === Number(selectedTaskID || 0)
+        || pendingTaskID === Number(selectedTaskID || 0)
+        || (selectedSourceTaskID > 0 && pendingTaskID === selectedSourceTaskID)
+        || preservingTaskID === Number(selectedTaskID || 0)
+        || (selectedSourceTaskID > 0 && preservingTaskID === selectedSourceTaskID)
       )
     );
 
-    if (currentFilteredIDs.length === 0) {
-      if (shouldPreserveCurrentSelection) return;
+    const nextSelection = resolveTaskListSelection({
+      selectedTaskID,
+      filteredTaskIDs: currentFilteredIDs,
+      allTaskIDs,
+      preserveCurrent: shouldPreserveCurrentSelection,
+    });
+
+    if (nextSelection.action === 'clear') {
       setSelectedTaskID(0);
       setDraftWithSnapshot(null);
       draftSourceTaskIDRef.current = 0;
       return;
     }
 
-    const exists = currentFilteredIDs.includes(selectedTaskID);
-    if (!exists && shouldPreserveCurrentSelection) {
-      return;
-    }
-    // Don't reset when selectedTaskID is a negative temp ID — the task is being synced
-    // and onTaskIDRemapped will update it to the real ID shortly.
-    if (!exists && Number(selectedTaskID) < 0) {
-      return;
-    }
-    if (!exists) {
-      setSelectedTaskID(currentFilteredIDs[0]);
+    if (nextSelection.action === 'select') {
+      setSelectedTaskID(nextSelection.selectedTaskID);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredTaskIDsKey, selectedTaskID, setDraftWithSnapshot]);
@@ -3372,6 +3384,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       });
     } finally {
       setSubmittingDraft(false);
+      if (
+        Number(preservingSavedSelectionTaskIDRef.current || 0) === taskID
+        && Number(pendingDraftSubmitRef.current?.taskID || 0) !== taskID
+      ) {
+        preservingSavedSelectionTaskIDRef.current = 0;
+      }
     }
   }, [queryClient, submittingDraft]);
 
@@ -3425,10 +3443,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (!targetTaskID) {
       return;
     }
+    preservingSavedSelectionTaskIDRef.current = targetTaskID;
 
     const editVersionAtStart = draftEditVersionRef.current;
     const built = buildDraftPayload(taskValue, draftValue);
     if (!built?.payload) {
+      preservingSavedSelectionTaskIDRef.current = 0;
       return;
     }
 
@@ -3504,6 +3524,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       return false;
     } finally {
       setSavingDraft(false);
+      if (!submitAfter || Number(pendingDraftSubmitRef.current?.taskID || 0) !== targetTaskID) {
+        preservingSavedSelectionTaskIDRef.current = 0;
+      }
     }
   };
 
@@ -3534,6 +3557,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       if (Date.now() < Number(discardDraftOnUnloadUntilRef.current || 0)) {
         pendingDraftSubmitRef.current = { taskID: 0, payload: null };
         setPendingSubmitTaskID(0);
+        preservingSavedSelectionTaskIDRef.current = 0;
         logDraftSwitchDebug('draft.flush.skipDiscardOnUnload', {
           submit_source: submitSource,
         });
@@ -3606,6 +3630,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             if (Number(pendingDraftSubmitRef.current?.taskID || 0) === targetTaskID) {
               pendingDraftSubmitRef.current = { taskID: 0, payload: null };
               setPendingSubmitTaskID(0);
+              if (Number(preservingSavedSelectionTaskIDRef.current || 0) === targetTaskID) {
+                preservingSavedSelectionTaskIDRef.current = 0;
+              }
             }
             logDraftSwitchDebug('draft.flush.dirtySubmitted', {
               submit_source: submitSource,
@@ -3631,6 +3658,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           if (Number(pendingDraftSubmitRef.current?.taskID || 0) === Number(pendingTaskID || 0)) {
             pendingDraftSubmitRef.current = { taskID: 0, payload: null };
             setPendingSubmitTaskID(0);
+            if (Number(preservingSavedSelectionTaskIDRef.current || 0) === Number(pendingTaskID || 0)) {
+              preservingSavedSelectionTaskIDRef.current = 0;
+            }
           }
           logDraftSwitchDebug('draft.flush.pendingSubmitted', {
             submit_source: submitSource,
