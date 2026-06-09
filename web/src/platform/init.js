@@ -2,13 +2,21 @@ function isTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+function isElectron() {
+  return typeof window !== 'undefined' && Boolean(window.todoElectron);
+}
+
+function isDesktopRuntime() {
+  return isTauri() || isElectron();
+}
+
 // App.jsx 可以 await 这个 Promise，等平台 token 初始化完成再检查 token
 let _resolveReady;
 const _ready = new Promise((resolve) => { _resolveReady = resolve; });
 export const tokenReady = _ready;
 
 export async function initPlatform() {
-  if (!isTauri()) {
+  if (!isDesktopRuntime()) {
     // Web 环境：直接用 localStorage，无需等待
     _resolveReady();
     return;

@@ -64,3 +64,7 @@ src-tauri/target/
 src-tauri/icons/app-icon.png
 src-tauri/Cargo.lock
 src-tauri/gen/
+
+# Electron
+electron/node_modules/
+electron/dist/

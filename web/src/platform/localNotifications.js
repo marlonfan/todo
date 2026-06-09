@@ -32,6 +32,14 @@ export function isTauriRuntime() {
   return isBrowser() && Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri);
 }
 
+export function isElectronRuntime() {
+  return isBrowser() && Boolean(window.todoElectron?.notifications);
+}
+
+function isDesktopNotificationRuntime() {
+  return isTauriRuntime() || isElectronRuntime();
+}
+
 function readBooleanSetting(key, fallback) {
   if (!isBrowser()) return fallback;
   try {
@@ -109,7 +117,26 @@ export function setLocalNotificationRefreshSeconds(seconds) {
 }
 
 async function loadNotificationModule() {
-  if (!isTauriRuntime()) return null;
+  if (!isDesktopNotificationRuntime()) return null;
+  if (isElectronRuntime()) {
+    const electronNotifications = window.todoElectron.notifications;
+    return {
+      Importance: { Default: 3 },
+      Visibility: { Private: 0 },
+      Schedule: {
+        at: (date) => ({ at: date instanceof Date ? date.toISOString() : new Date(date).toISOString() }),
+      },
+      isPermissionGranted: () => electronNotifications.isPermissionGranted(),
+      requestPermission: () => electronNotifications.requestPermission(),
+      sendNotification: (payload) => {
+        void electronNotifications.send(payload).catch((error) => {
+          console.error('Failed to send Electron notification:', error);
+        });
+      },
+      cancel: (ids) => electronNotifications.cancel(ids),
+      createChannel: async () => {},
+    };
+  }
   if (!notificationModulePromise) {
     notificationModulePromise = import('@tauri-apps/plugin-notification');
   }
@@ -178,7 +205,7 @@ export function onLocalNotificationStatusChange(callback) {
 
 export function getLocalNotificationStatus() {
   return {
-    supported: isTauriRuntime(),
+    supported: isDesktopNotificationRuntime(),
     enabled: isLocalNotificationEnabled(),
     refresh_seconds: getLocalNotificationRefreshSeconds(),
     permission: lastPermissionState,
@@ -187,7 +214,7 @@ export function getLocalNotificationStatus() {
 
 async function ensurePermission(options = {}) {
   const { request = false } = options;
-  if (!isTauriRuntime()) {
+  if (!isDesktopNotificationRuntime()) {
     lastPermissionState = 'unsupported';
     return false;
   }
@@ -430,11 +457,11 @@ export async function sendLocalNotificationTest() {
 export async function reconcileLocalNotifications(options = {}) {
   if (!isLocalNotificationEnabled()) {
     await cancelScheduledLocalNotifications();
-    lastPermissionState = isTauriRuntime() ? lastPermissionState : 'unsupported';
+    lastPermissionState = isDesktopNotificationRuntime() ? lastPermissionState : 'unsupported';
     emitStatus();
-    return { scheduled: 0, supported: isTauriRuntime(), enabled: false };
+    return { scheduled: 0, supported: isDesktopNotificationRuntime(), enabled: false };
   }
-  if (!isTauriRuntime()) {
+  if (!isDesktopNotificationRuntime()) {
     lastPermissionState = 'unsupported';
     emitStatus();
     return { scheduled: 0, supported: false, enabled: true };
@@ -524,7 +551,7 @@ async function runQueuedReconcile(options = {}) {
 }
 
 export function scheduleLocalNotificationRefresh(options = {}) {
-  if (!isTauriRuntime()) return;
+  if (!isDesktopNotificationRuntime()) return;
   const delay = options.immediate ? 0 : 300;
   setTimeout(() => {
     void runQueuedReconcile(options);
@@ -536,7 +563,7 @@ export function resetLocalNotificationRefreshTimer() {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
-  if (!isTauriRuntime()) return;
+  if (!isDesktopNotificationRuntime()) return;
   if (!isLocalNotificationEnabled()) return;
   const seconds = getLocalNotificationRefreshSeconds();
   if (seconds <= 0) return;

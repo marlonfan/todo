@@ -1,0 +1,65 @@
+{
+  "name": "todo-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell for Todo.",
+  "author": "marlon",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "node ./scripts/dev.mjs",
+    "start": "electron .",
+    "build": "node ./scripts/build.mjs && electron-builder",
+    "pack": "node ./scripts/build.mjs && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "42.3.3",
+    "electron-builder": "26.15.2"
+  },
+  "build": {
+    "appId": "life.marlon.todo",
+    "productName": "Todo",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web/dist"
+      },
+      {
+        "from": "../src-tauri/icons",
+        "to": "src-tauri/icons"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "../src-tauri/icons/icon.icns",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "../src-tauri/icons/icon.ico",
+      "target": [
+        "nsis",
+        "msi"
+      ]
+    },
+    "linux": {
+      "category": "Office",
+      "icon": "../src-tauri/icons/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  }
+}
