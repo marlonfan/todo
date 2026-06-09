@@ -4,6 +4,7 @@ export function resolveTaskListSelection({
   allTaskIDs,
   equivalentTaskID = 0,
   preserveCurrent = false,
+  suppressEquivalentSelection = false,
 }) {
   const currentFilteredIDs = Array.isArray(filteredTaskIDs) ? filteredTaskIDs : [];
   const selectedID = selectedTaskID || 0;
@@ -25,11 +26,15 @@ export function resolveTaskListSelection({
     return { action: 'clear', selectedTaskID: 0 };
   }
 
+  if (!selectedID) {
+    return { action: 'keep', selectedTaskID: 0 };
+  }
+
   if (selectedExistsInFilteredTasks) {
     return { action: 'keep', selectedTaskID: selectedID };
   }
 
-  if (equivalentExistsInFilteredTasks) {
+  if (!suppressEquivalentSelection && equivalentExistsInFilteredTasks) {
     return { action: 'select', selectedTaskID: equivalentID };
   }
 
@@ -41,5 +46,9 @@ export function resolveTaskListSelection({
     return { action: 'keep', selectedTaskID: selectedID };
   }
 
-  return { action: 'select', selectedTaskID: currentFilteredIDs[0] };
+  if (suppressEquivalentSelection && equivalentIDText) {
+    return { action: 'clear', selectedTaskID: 0 };
+  }
+
+  return { action: 'clear', selectedTaskID: 0 };
 }

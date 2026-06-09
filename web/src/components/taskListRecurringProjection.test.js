@@ -90,7 +90,7 @@ test('upsertProjectedNextOccurrence inserts projected pending occurrence first',
   assert.equal(next[0].optimistic_projected, true);
 });
 
-test('upsertProjectedNextOccurrence deduplicates by instance id and occurrence date', () => {
+test('upsertProjectedNextOccurrence deduplicates and keeps chronological order', () => {
   const existing = [
     {
       task_id: 44,
@@ -133,7 +133,7 @@ test('upsertProjectedNextOccurrence deduplicates by instance id and occurrence d
   }, 'UTC');
 
   assert.equal(next.length, 2);
-  assert.equal(next[0].title, 'fresh projected');
-  assert.equal(next[0].start_time, '2026-06-08T09:00:00.000Z');
-  assert.equal(next[1].task_id, 45);
+  assert.equal(next[0].task_id, 45);
+  assert.equal(next[1].title, 'fresh projected');
+  assert.equal(next[1].start_time, '2026-06-08T09:00:00.000Z');
 });

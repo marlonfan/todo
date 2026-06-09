@@ -76,7 +76,6 @@ import { resolveTaskListSelection } from './taskListSelection';
 import {
   buildNextPendingFromProjectedTask,
   hasOptimisticOccurrenceStatusForTask,
-  upsertProjectedNextOccurrence,
 } from './taskListRecurringProjection';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
@@ -110,6 +109,10 @@ const DRAFT_DESCRIPTION_RENDER_DELAY_MS = 120;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
 const RECURRENCE_INTERVAL_MAX = 99;
 const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
+const PINNED_NEXT_OCCURRENCE_TTL_MS = 4000;
+const TASK_ROW_COMPLETE_FEEDBACK_MS = 140;
+const TASK_ROW_COMPLETE_EXIT_MS = 180;
+const TASK_ROW_INSERT_MS = 220;
 const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled,skipped';
 const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
 const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
@@ -720,6 +723,7 @@ function buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone)
 
 function resolveOccurrenceStatusFromOptimisticMap(
   optimisticMap,
+  serverMap,
   taskID,
   instanceID,
   occurrenceDate,
@@ -731,6 +735,15 @@ function resolveOccurrenceStatusFromOptimisticMap(
   const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
   for (const key of keys) {
     const value = String(map?.[key]?.status || '').trim();
+    if (value) return value;
+  }
+  const remoteMap = serverMap && typeof serverMap === 'object' ? serverMap : null;
+  for (const key of keys) {
+    const value = String(
+      typeof remoteMap?.get === 'function'
+        ? remoteMap.get(key)
+        : remoteMap?.[key]?.status || ''
+    ).trim();
     if (value) return value;
   }
   return fallback;
@@ -763,7 +776,13 @@ function buildDeleteContext(task, timezone) {
   };
 }
 
-function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, occurrenceStatusOptimisticMap, timezone) {
+function buildRecurringInstanceTasksFromOccurrences(
+  occurrenceItems,
+  tasksRaw,
+  occurrenceStatusOptimisticMap,
+  recurringServerStatusMap,
+  timezone
+) {
   const baseByID = new Map();
   (Array.isArray(tasksRaw) ? tasksRaw : []).forEach((task) => {
     const taskID = Number(task?.id || 0);
@@ -791,6 +810,7 @@ function buildRecurringInstanceTasksFromOccurrences(occurrenceItems, tasksRaw, o
     const instanceID = rawInstanceID || fallbackKey;
     const status = resolveOccurrenceStatusFromOptimisticMap(
       occurrenceStatusOptimisticMap,
+      recurringServerStatusMap,
       taskID,
       instanceID,
       occurrenceDate,
@@ -899,6 +919,10 @@ function sortTasksByOption(inputTasks, sortBy, timezone) {
   return cloned;
 }
 
+function buildTaskRowRenderKey(task) {
+  return String(task?.id || '');
+}
+
 const SORT_OPTIONS_DEFAULT = new Set(['due_asc', 'due_desc', 'priority_desc', 'priority_asc']);
 const SORT_OPTIONS_COMPLETED = new Set(['completed_desc', 'created_desc']);
 const SORT_OPTIONS_DELETED = new Set(['deleted_desc', 'created_desc']);
@@ -932,6 +956,7 @@ function sanitizeGroupValue(value) {
 const TaskRow = React.memo(function TaskRow({
   task,
   selected,
+  animationState = '',
   timezone,
   labels,
   timeMode,
@@ -950,7 +975,9 @@ const TaskRow = React.memo(function TaskRow({
     lastX: 0,
     lastY: 0,
   });
-  const isCompleted = task.status === 'completed';
+  const rowAnimation = String(animationState || '').trim();
+  const isCompletingExit = rowAnimation === 'complete-exit';
+  const isCompleted = task.status === 'completed' || isCompletingExit;
   const isSkipped = task.status === 'skipped';
   const isDeleted = task.status === 'cancelled' || isSkipped;
   const isReadOnly = !!task.read_only;
@@ -963,6 +990,13 @@ const TaskRow = React.memo(function TaskRow({
   const displayTime = resolveTaskDisplayTime(task, timeMode);
   const overdue = timeMode === 'primary' && isTaskOverdue(task, timezone);
   const displayTimeLabel = formatDisplayDateWithYear(displayTime, timezone);
+  const rowAnimationClass = rowAnimation === 'complete-exit'
+    ? ' task-row-animate-complete-exit'
+    : rowAnimation === 'complete-feedback'
+    ? ' task-row-animate-complete-feedback'
+    : rowAnimation === 'insert'
+      ? ' task-row-animate-insert'
+      : '';
 
   return (
     <div
@@ -1056,7 +1090,7 @@ const TaskRow = React.memo(function TaskRow({
         });
         onSelectTask(task);
       }}
-      className={`group relative cursor-pointer border-b border-slate-100 px-3.5 py-2.5 transition-colors duration-150 last:border-b-0 md:px-4 md:py-3 ${
+      className={`task-row-shell group relative cursor-pointer border-b border-slate-100 px-3.5 py-2.5 transition-colors duration-150 last:border-b-0 md:px-4 md:py-3${rowAnimationClass} ${
         selected
           ? 'bg-slate-100/70 md:rounded-md'
           : 'bg-white hover:bg-slate-50/80'
@@ -1153,6 +1187,7 @@ const TaskRow = React.memo(function TaskRow({
 }, (prev, next) => (
   prev.task === next.task &&
   prev.selected === next.selected &&
+  prev.animationState === next.animationState &&
   prev.timezone === next.timezone &&
   prev.labels === next.labels &&
   prev.timeMode === next.timeMode &&
@@ -1171,6 +1206,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const timeGranularity = getUserTimeGranularity();
   const { data: tasksRaw = [], isLoading: tasksLoading } = useTasksQuery();
   const { data: categories = [] } = useCategoriesQuery();
+  const [pinnedNextOccurrenceMap, setPinnedNextOccurrenceMap] = useState({});
+  const pinnedNextOccurrenceMapRef = useRef(pinnedNextOccurrenceMap);
+  useEffect(() => {
+    pinnedNextOccurrenceMapRef.current = pinnedNextOccurrenceMap;
+  }, [pinnedNextOccurrenceMap]);
   const [occurrenceStatusOptimisticMap, setOccurrenceStatusOptimisticMap] = useState({});
   const occurrenceStatusOptimisticMapRef = useRef(occurrenceStatusOptimisticMap);
   useEffect(() => {
@@ -1237,6 +1277,29 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const value = recurringSearchPayload?.items;
     return Array.isArray(value) ? value : [];
   }, [recurringSearchPayload]);
+  const recurringServerStatusMap = useMemo(() => {
+    const statusMap = new Map();
+    const ingest = (item) => {
+      const taskID = Number(item?.task_id || item?.taskID || 0);
+      if (!taskID) return;
+      const startLocal = dayjs(item?.start_time || item?.startTime || '').tz(timezone);
+      const fallbackStart = startLocal.isValid() ? startLocal.toISOString() : '';
+      const occurrenceDate = normalizeOccurrenceDate(
+        item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || fallbackStart,
+        timezone,
+      );
+      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
+      const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
+      const status = String(item?.status || 'pending');
+      keys.forEach((key) => {
+        if (!key || statusMap.has(key)) return;
+        statusMap.set(key, status);
+      });
+    };
+    (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach(ingest);
+    (Array.isArray(recurringHistoryItems) ? recurringHistoryItems : []).forEach(ingest);
+    return statusMap;
+  }, [recurringHistoryItems, recurringNextOccurrences, timezone]);
   const recurringNextPendingMap = useMemo(() => {
     const pool = new Map();
     (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach((item) => {
@@ -1254,6 +1317,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const instanceID = rawInstanceID || fallbackKey;
       const status = resolveOccurrenceStatusFromOptimisticMap(
         occurrenceStatusOptimisticMap,
+        recurringServerStatusMap,
         taskID,
         instanceID,
         occurrenceDate,
@@ -1280,46 +1344,25 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       });
     });
     return pool;
-  }, [occurrenceStatusOptimisticMap, recurringNextOccurrences, timezone]);
-  const recurringServerStatusMap = useMemo(() => {
-    const statusMap = new Map();
-    const ingest = (item) => {
-      const taskID = Number(item?.task_id || item?.taskID || 0);
-      if (!taskID) return;
-      const startLocal = dayjs(item?.start_time || item?.startTime || '').tz(timezone);
-      const fallbackStart = startLocal.isValid() ? startLocal.toISOString() : '';
-      const occurrenceDate = normalizeOccurrenceDate(
-        item?.occurrence_date || item?.occurrenceDate || item?.original_date || item?.originalDate || fallbackStart,
-        timezone,
-      );
-      const instanceID = String(item?.instance_id || item?.instanceId || '').trim();
-      const keys = buildOccurrenceStatusKeys(taskID, instanceID, occurrenceDate, timezone);
-      const status = String(item?.status || 'pending');
-      keys.forEach((key) => {
-        if (!key || statusMap.has(key)) return;
-        statusMap.set(key, status);
-      });
-    };
-    (Array.isArray(recurringNextOccurrences) ? recurringNextOccurrences : []).forEach(ingest);
-    (Array.isArray(recurringHistoryItems) ? recurringHistoryItems : []).forEach(ingest);
-    return statusMap;
-  }, [recurringHistoryItems, recurringNextOccurrences, timezone]);
+  }, [occurrenceStatusOptimisticMap, recurringNextOccurrences, recurringServerStatusMap, timezone]);
   const recurringInstanceTasks = useMemo(() => {
     return buildRecurringInstanceTasksFromOccurrences(
       recurringHistoryItems,
       tasksRaw,
       occurrenceStatusOptimisticMap,
+      recurringServerStatusMap,
       timezone,
     );
-  }, [occurrenceStatusOptimisticMap, recurringHistoryItems, tasksRaw, timezone]);
+  }, [occurrenceStatusOptimisticMap, recurringHistoryItems, recurringServerStatusMap, tasksRaw, timezone]);
   const recurringSearchInstanceTasks = useMemo(() => (
     buildRecurringInstanceTasksFromOccurrences(
       recurringSearchItems,
       tasksRaw,
       occurrenceStatusOptimisticMap,
+      recurringServerStatusMap,
       timezone,
     )
-  ), [occurrenceStatusOptimisticMap, recurringSearchItems, tasksRaw, timezone]);
+  ), [occurrenceStatusOptimisticMap, recurringSearchItems, recurringServerStatusMap, tasksRaw, timezone]);
   const tasks = useMemo(() => {
     const base = Array.isArray(tasksRaw) ? tasksRaw : [];
     if (base.length === 0) return [];
@@ -1327,7 +1370,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
       if (!recurrenceRule) return [task];
       const taskID = Number(task?.id || 0);
-      let nextPending = recurringNextPendingMap.get(taskID);
+      let nextPending = pinnedNextOccurrenceMap[String(taskID)]?.nextPending || recurringNextPendingMap.get(taskID);
       if (!nextPending && hasOptimisticOccurrenceStatusForTask(occurrenceStatusOptimisticMap, taskID)) {
         nextPending = buildNextPendingFromProjectedTask({
           task,
@@ -1366,7 +1409,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         deleted_at: nextPending.deletedAt,
       }];
     });
-  }, [occurrenceStatusOptimisticMap, recurringNextPendingMap, recurringServerStatusMap, tasksRaw, timezone]);
+  }, [
+    occurrenceStatusOptimisticMap,
+    pinnedNextOccurrenceMap,
+    recurringNextPendingMap,
+    recurringServerStatusMap,
+    tasksRaw,
+    timezone,
+  ]);
 
   useEffect(() => {
     if (recurringServerStatusMap.size === 0) return;
@@ -1455,6 +1505,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const [isCompactMobile, setIsCompactMobile] = useState(isTaskCompactMobileLayout);
   const [taskSplitRatio, setTaskSplitRatio] = useState(readTaskSplitRatio);
   const [isTaskSplitDragging, setIsTaskSplitDragging] = useState(false);
+  const [taskRowAnimations, setTaskRowAnimations] = useState({});
   const detailPanelRef = useRef(null);
   const detailPanelTriggerRefs = useRef({});
   const taskWorkspaceRef = useRef(null);
@@ -1481,6 +1532,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
   const pendingImmediateSubmitSourceRef = useRef('');
   const preservingSavedSelectionTaskIDRef = useRef(0);
+  const suppressRecurringEquivalentSelectionTaskIDRef = useRef(0);
+  const pinnedNextOccurrenceTimersRef = useRef(new Map());
+  const taskRowAnimationTimersRef = useRef(new Set());
+  const recurringCompleteStageTimersRef = useRef(new Set());
   const selectedTaskSnapshotRef = useRef(null);
   const draftSnapshotRef = useRef(null);
   const isDraftDirtyRef = useRef(false);
@@ -1507,6 +1562,118 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     detailBodyScrollCleanupRef.current?.();
     detailBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
   }, []);
+
+  const scheduleTaskRowAnimation = useCallback((taskID, animation, duration = TASK_ROW_INSERT_MS) => {
+    const rowID = String(taskID || '');
+    if (!rowID || typeof window === 'undefined') return;
+    setTaskRowAnimations((prev) => ({
+      ...(prev || {}),
+      [rowID]: animation,
+    }));
+    const timerID = window.setTimeout(() => {
+      taskRowAnimationTimersRef.current.delete(timerID);
+      setTaskRowAnimations((prev) => {
+        if (!prev || prev[rowID] !== animation) return prev;
+        const next = { ...prev };
+        delete next[rowID];
+        return next;
+      });
+    }, duration);
+    taskRowAnimationTimersRef.current.add(timerID);
+  }, []);
+
+  const pinNextOccurrence = useCallback((taskID, nextPending) => {
+    const rowID = String(taskID || '');
+    if (!rowID || !nextPending) return;
+    const expiresAt = Date.now() + PINNED_NEXT_OCCURRENCE_TTL_MS;
+    const nextMap = {
+      ...(pinnedNextOccurrenceMapRef.current || {}),
+      [rowID]: {
+        nextPending,
+        expiresAt,
+      },
+    };
+    pinnedNextOccurrenceMapRef.current = nextMap;
+    setPinnedNextOccurrenceMap(nextMap);
+    if (typeof window === 'undefined') return;
+    const previousTimer = pinnedNextOccurrenceTimersRef.current.get(rowID);
+    if (previousTimer) {
+      window.clearTimeout(previousTimer);
+    }
+    const timerID = window.setTimeout(() => {
+      pinnedNextOccurrenceTimersRef.current.delete(rowID);
+      setPinnedNextOccurrenceMap((prev) => {
+        const current = prev?.[rowID];
+        if (!current || Number(current.expiresAt || 0) !== expiresAt) return prev;
+        const next = { ...(prev || {}) };
+        delete next[rowID];
+        pinnedNextOccurrenceMapRef.current = next;
+        return next;
+      });
+    }, PINNED_NEXT_OCCURRENCE_TTL_MS);
+    pinnedNextOccurrenceTimersRef.current.set(rowID, timerID);
+  }, []);
+
+  const commitRecurringOccurrenceStatus = useCallback(({
+    taskID,
+    payload,
+    optimisticOccurrenceKeys,
+    nextStatus,
+    projectedNext = null,
+  }) => {
+    const now = Date.now();
+    const nextOptimisticMap = { ...(occurrenceStatusOptimisticMapRef.current || {}) };
+    optimisticOccurrenceKeys.forEach((key) => {
+      if (!key) return;
+      nextOptimisticMap[key] = { status: nextStatus, updatedAt: now };
+    });
+    occurrenceStatusOptimisticMapRef.current = nextOptimisticMap;
+    setOccurrenceStatusOptimisticMap(nextOptimisticMap);
+
+    if (projectedNext) {
+      pinNextOccurrence(taskID, projectedNext);
+      scheduleTaskRowAnimation(
+        `occ_${projectedNext.instanceId}`,
+        'insert',
+        TASK_ROW_INSERT_MS,
+      );
+    }
+
+    void (async () => {
+      try {
+        await updateTaskStatusLocal(queryClient, taskID, payload, {
+          submitMeta: {
+            submittedAt: new Date().toISOString(),
+            submitSource: 'manual',
+          },
+          awaitPersist: true,
+        });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+          queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+        ]);
+      } catch (err) {
+        setOccurrenceStatusOptimisticMap((prev) => {
+          const next = { ...(prev || {}) };
+          let changed = false;
+          optimisticOccurrenceKeys.forEach((key) => {
+            if (!Object.prototype.hasOwnProperty.call(next, key)) return;
+            delete next[key];
+            changed = true;
+          });
+          if (changed) {
+            occurrenceStatusOptimisticMapRef.current = next;
+          }
+          return changed ? next : prev;
+        });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
+          queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+        ]);
+        console.error('Failed to update recurring occurrence status:', err);
+      }
+    })();
+  }, [pinNextOccurrence, queryClient, scheduleTaskRowAnimation]);
 
   const resetTaskPullRefresh = useCallback((delay = 0) => {
     if (taskPullRefreshResetTimerRef.current) {
@@ -1681,6 +1848,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       window.clearTimeout(discardDraftOnUnloadTimerRef.current);
       discardDraftOnUnloadTimerRef.current = 0;
     }
+    pinnedNextOccurrenceTimersRef.current.forEach((timerID) => window.clearTimeout(timerID));
+    pinnedNextOccurrenceTimersRef.current.clear();
+    taskRowAnimationTimersRef.current.forEach((timerID) => window.clearTimeout(timerID));
+    taskRowAnimationTimersRef.current.clear();
+    recurringCompleteStageTimersRef.current.forEach((timerID) => window.clearTimeout(timerID));
+    recurringCompleteStageTimersRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -2388,6 +2561,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         && getEffectiveTaskID(task) === selectedSourceTaskID
       ))
       : null;
+    const shouldSuppressEquivalentSelection = !!(
+      selectedSourceTaskID > 0
+      && Number(suppressRecurringEquivalentSelectionTaskIDRef.current || 0) === selectedSourceTaskID
+      && equivalentFilteredTask
+    );
     const pendingTaskID = Number(pendingSubmitTaskIDRef.current || 0);
     const preservingTaskID = Number(preservingSavedSelectionTaskIDRef.current || 0);
     // Read save-state from refs so that transitions (e.g. savingDraft true→false)
@@ -2412,7 +2590,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       allTaskIDs,
       equivalentTaskID: equivalentFilteredTask?.id || 0,
       preserveCurrent: shouldPreserveCurrentSelection,
+      suppressEquivalentSelection: shouldSuppressEquivalentSelection,
     });
+
+    if (shouldSuppressEquivalentSelection && nextSelection.action !== 'select') {
+      suppressRecurringEquivalentSelectionTaskIDRef.current = 0;
+    }
 
     if (nextSelection.action === 'clear') {
       setSelectedTaskID(0);
@@ -2762,6 +2945,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (task.read_only) return;
     const taskID = Number(task?.source_task_id || task?.task_id || task?.id || 0);
     if (!taskID) return;
+    const isCompletingTask = String(newStatus || '') === 'completed'
+      && String(task?.status || 'pending') !== 'completed';
+    const rowRenderKey = buildTaskRowRenderKey(task);
+    const showCompleteFeedback = () => {
+      if (isCompletingTask) {
+        scheduleTaskRowAnimation(rowRenderKey, 'complete-feedback', TASK_ROW_COMPLETE_FEEDBACK_MS);
+      }
+    };
     try {
       const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
       if (recurrenceRule) {
@@ -2814,7 +3005,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           ]);
           return;
         }
-        const shouldInstantProjectNextOccurrence = (
+        const shouldProjectNextOccurrence = (
           hasOccurrenceContext
           && ['completed', 'cancelled', 'skipped'].includes(String(newStatus || ''))
         );
@@ -2832,65 +3023,59 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
               if (!key) return;
               nextOptimisticMap[key] = { status: newStatus, updatedAt: now };
             });
-            occurrenceStatusOptimisticMapRef.current = nextOptimisticMap;
-            setOccurrenceStatusOptimisticMap(nextOptimisticMap);
 
-            if (shouldInstantProjectNextOccurrence) {
+            let projectedNext = null;
+            if (shouldProjectNextOccurrence) {
+              if (String(selectedTaskSnapshotRef.current?.id || '') === String(task?.id || '')) {
+                suppressRecurringEquivalentSelectionTaskIDRef.current = taskID;
+              }
               const sourceTask = (Array.isArray(tasksRaw) ? tasksRaw : [])
                 .find((item) => Number(item?.id || 0) === taskID) || task;
-              const projectedNext = buildNextPendingFromProjectedTask({
+              projectedNext = buildNextPendingFromProjectedTask({
                 task: sourceTask,
                 optimisticStatusMap: nextOptimisticMap,
                 serverStatusMap: recurringServerStatusMap,
                 timezone,
               });
-              if (projectedNext) {
-                queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
-                  upsertProjectedNextOccurrence(prev, taskID, projectedNext, timezone)
-                ));
-                if (String(selectedTaskSnapshotRef.current?.id || '') === String(task?.id || '')) {
-                  setSelectedTaskID(`occ_${projectedNext.instanceId}`);
-                }
-              }
             }
 
-            void (async () => {
-              try {
-                await updateTaskStatusLocal(queryClient, taskID, payload, {
-                  submitMeta: {
-                    submittedAt: new Date().toISOString(),
-                    submitSource: 'manual',
-                  },
-                  awaitPersist: true,
+            if (isCompletingTask) {
+              scheduleTaskRowAnimation(rowRenderKey, 'complete-exit', TASK_ROW_COMPLETE_EXIT_MS + 80);
+              if (typeof window === 'undefined') {
+                commitRecurringOccurrenceStatus({
+                  taskID,
+                  payload,
+                  optimisticOccurrenceKeys,
+                  nextStatus: newStatus,
+                  projectedNext,
                 });
-                await Promise.all([
-                  queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
-                  queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
-                ]);
-              } catch (err) {
-                setOccurrenceStatusOptimisticMap((prev) => {
-                  const next = { ...(prev || {}) };
-                  let changed = false;
-                  optimisticOccurrenceKeys.forEach((key) => {
-                    if (!Object.prototype.hasOwnProperty.call(next, key)) return;
-                    delete next[key];
-                    changed = true;
+              } else {
+                const timerID = window.setTimeout(() => {
+                  recurringCompleteStageTimersRef.current.delete(timerID);
+                  commitRecurringOccurrenceStatus({
+                    taskID,
+                    payload,
+                    optimisticOccurrenceKeys,
+                    nextStatus: newStatus,
+                    projectedNext,
                   });
-                  if (changed) {
-                    occurrenceStatusOptimisticMapRef.current = next;
-                  }
-                  return changed ? next : prev;
-                });
-                await Promise.all([
-                  queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
-                  queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
-                ]);
-                console.error('Failed to update recurring occurrence status:', err);
+                }, TASK_ROW_COMPLETE_EXIT_MS);
+                recurringCompleteStageTimersRef.current.add(timerID);
               }
-            })();
+              return;
+            }
+
+            commitRecurringOccurrenceStatus({
+              taskID,
+              payload,
+              optimisticOccurrenceKeys,
+              nextStatus: newStatus,
+              projectedNext,
+            });
             return;
           }
         }
+        showCompleteFeedback();
         await updateTaskStatusLocal(queryClient, taskID, hasOccurrenceContext ? payload : newStatus, {
           submitMeta: {
             submittedAt: new Date().toISOString(),
@@ -2903,6 +3088,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
         ]);
       } else {
+        showCompleteFeedback();
         await updateTaskStatusLocal(queryClient, taskID, newStatus, {
           submitMeta: {
             submittedAt: new Date().toISOString(),
@@ -2914,7 +3100,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     } catch (err) {
       console.error('Failed to update task status:', err);
     }
-  }, [queryClient, recurringServerStatusMap, tasksRaw, timezone]);
+  }, [
+    commitRecurringOccurrenceStatus,
+    queryClient,
+    recurringServerStatusMap,
+    scheduleTaskRowAnimation,
+    tasksRaw,
+    timezone,
+  ]);
 
   const handleQuickCreate = async () => {
     const title = quickTitle.trim();
@@ -4339,6 +4532,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const selectedID = task?.virtual_occurrence ? task.id : nextTaskID;
 
     if (!sourceTaskID) return;
+    suppressRecurringEquivalentSelectionTaskIDRef.current = 0;
 
     const requestID = switchTaskRequestRef.current + 1;
     switchTaskRequestRef.current = requestID;
@@ -4639,11 +4833,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         </div>
                       ) : null}
                       <div className="bg-white">
-                        {group.tasks.map((task) => (
+                        {group.tasks.map((task) => {
+                          const rowID = buildTaskRowRenderKey(task);
+                          return (
                           <TaskRow
                             key={task.id}
                             task={task}
                             selected={selectedTaskID === task.id}
+                            animationState={taskRowAnimations[rowID] || ''}
                             timezone={timezone}
                             labels={listLabels}
                             timeMode={rowTimeMode}
@@ -4652,7 +4849,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                             onSelectTask={handleSelectTask}
                             onToggleStatus={handleStatusChange}
                           />
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ))}

@@ -200,6 +200,27 @@ function readOccurrenceDate(item, timezone) {
   );
 }
 
+function readOccurrenceStartSortValue(item) {
+  const parsed = dayjs(item?.start_time || item?.startTime || '');
+  return parsed.isValid() ? parsed.valueOf() : Number.POSITIVE_INFINITY;
+}
+
+function compareOccurrenceItems(left, right, timezone) {
+  const leftStart = readOccurrenceStartSortValue(left);
+  const rightStart = readOccurrenceStartSortValue(right);
+  if (leftStart !== rightStart) return leftStart - rightStart;
+
+  const leftTaskID = readOccurrenceTaskID(left);
+  const rightTaskID = readOccurrenceTaskID(right);
+  if (leftTaskID !== rightTaskID) return leftTaskID - rightTaskID;
+
+  const leftDate = readOccurrenceDate(left, timezone);
+  const rightDate = readOccurrenceDate(right, timezone);
+  if (leftDate !== rightDate) return leftDate.localeCompare(rightDate);
+
+  return readOccurrenceInstanceID(left).localeCompare(readOccurrenceInstanceID(right));
+}
+
 function buildProjectedOccurrenceItem(taskID, nextPending) {
   const numericTaskID = Number(taskID || 0);
   if (!numericTaskID || !nextPending?.instanceId || !nextPending?.occurrenceDate) return null;
@@ -245,5 +266,5 @@ export function upsertProjectedNextOccurrence(currentOccurrences, taskID, nextPe
     return true;
   });
 
-  return [projected, ...filtered];
+  return [projected, ...filtered].sort((left, right) => compareOccurrenceItems(left, right, timezone));
 }
