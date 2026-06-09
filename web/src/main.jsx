@@ -57,7 +57,7 @@ import { initPlatform } from './platform/init'
     });
   }
 
-  // 不阻塞——先渲染，Keychain 读取在后台进行
+  // 不阻塞——先渲染，平台初始化在后台进行
   initPlatform();
 
   initializeSyncEngine(queryClient);

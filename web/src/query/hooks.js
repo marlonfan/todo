@@ -112,6 +112,16 @@ export function usePromptsQuery() {
   });
 }
 
+export function usePromptHistoryQuery() {
+  return useQuery({
+    queryKey: queryKeys.prompts.history,
+    queryFn: async () => {
+      const res = await promptsAPI.listHistory({ limit: 100 });
+      return Array.isArray(res.data) ? res.data : [];
+    },
+  });
+}
+
 export function useCaldavSourcesQuery() {
   return useQuery({
     queryKey: queryKeys.caldav.sources,

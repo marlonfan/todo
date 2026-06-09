@@ -40,3 +40,20 @@ func (r *PromptRepository) Update(prompt *models.Prompt) error {
 func (r *PromptRepository) Delete(id int64) error {
 	return r.db.Delete(&models.Prompt{}, id).Error
 }
+
+func (r *PromptRepository) CreateAskHistory(history *models.PromptAskHistory) error {
+	return r.db.Create(history).Error
+}
+
+func (r *PromptRepository) ListAskHistoryByUser(userID int64, limit int) ([]models.PromptAskHistory, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	var history []models.PromptAskHistory
+	err := r.db.
+		Where("user_id = ?", userID).
+		Order("created_at DESC, id DESC").
+		Limit(limit).
+		Find(&history).Error
+	return history, err
+}

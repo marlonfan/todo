@@ -11,6 +11,7 @@ func Migrate(db *gorm.DB) error {
 		&models.User{},
 		&models.UserAIConfig{},
 		&models.Prompt{},
+		&models.PromptAskHistory{},
 		&models.Category{},
 		&models.Task{},
 		&models.TaskDeleteLog{},

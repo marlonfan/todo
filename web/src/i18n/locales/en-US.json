@@ -243,7 +243,15 @@
     "asking": "Generating...",
     "outputEmpty": "The response will appear here",
     "askFailed": "AI request failed",
-    "aiConfigRequired": "Configure an AI model in Settings first"
+    "aiConfigRequired": "Configure an AI model in Settings first",
+    "history": "History",
+    "noHistory": "Your saved questions will appear here",
+    "historySaveFailed": "Failed to save ask history",
+    "historyStopped": "Stopped",
+    "historyDeletedPrompt": "Deleted Prompt",
+    "historyDetailHint": "This is saved ask history for your account.",
+    "mobileTabsLabel": "Prompt view switcher",
+    "askAgain": "Ask again"
   },
   "notification": {
     "title": "Notification Settings",

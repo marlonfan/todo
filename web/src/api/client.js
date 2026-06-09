@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // --- Platform-agnostic token storage ---
-// In Tauri, inject a Keychain-backed implementation via window.__tokenStore before the app boots:
+// In Tauri, inject a platform implementation via window.__tokenStore before the app boots:
 //   window.__tokenStore = { get, set, remove }
 const defaultTokenStore = {
   get: () => localStorage.getItem('token'),
@@ -175,6 +175,8 @@ export const promptsAPI = {
   create: (data) => apiClient.post('/prompts', data),
   update: (id, data) => apiClient.put(`/prompts/${id}`, data),
   delete: (id) => apiClient.delete(`/prompts/${id}`),
+  listHistory: (params) => apiClient.get('/prompts/history', { params }),
+  createHistory: (data) => apiClient.post('/prompts/history', data),
 };
 
 function withTaskMutationHeaders(options = {}) {

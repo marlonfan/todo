@@ -106,3 +106,43 @@ func (h *PromptHandler) Delete(c *gin.Context) {
 
 	c.JSON(http.StatusNoContent, nil)
 }
+
+func (h *PromptHandler) CreateAskHistory(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	var req models.CreatePromptAskHistoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	history, err := h.promptService.CreateAskHistory(userID, &req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, history)
+}
+
+func (h *PromptHandler) ListAskHistory(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	limit := 100
+	if rawLimit := c.Query("limit"); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid history limit"})
+			return
+		}
+		limit = parsed
+	}
+
+	history, err := h.promptService.ListAskHistory(userID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, history)
+}

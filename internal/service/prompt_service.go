@@ -82,3 +82,44 @@ func (s *PromptService) Delete(userID, promptID int64) error {
 	}
 	return s.promptRepo.Delete(promptID)
 }
+
+func (s *PromptService) CreateAskHistory(userID int64, req *models.CreatePromptAskHistoryRequest) (*models.PromptAskHistory, error) {
+	input := strings.TrimSpace(req.Input)
+	output := strings.TrimSpace(req.Output)
+	if input == "" {
+		return nil, errors.New("prompt ask input is required")
+	}
+	if output == "" {
+		return nil, errors.New("prompt ask output is required")
+	}
+
+	prompt, err := s.promptRepo.GetByIDAndUser(req.PromptID, userID)
+	if err != nil {
+		return nil, errors.New("prompt not found")
+	}
+
+	status := strings.TrimSpace(req.Status)
+	switch status {
+	case "stopped":
+	default:
+		status = "completed"
+	}
+
+	history := &models.PromptAskHistory{
+		UserID:        userID,
+		PromptID:      &prompt.ID,
+		PromptTitle:   prompt.Title,
+		PromptContent: prompt.Content,
+		Input:         input,
+		Output:        output,
+		Status:        status,
+	}
+	if err := s.promptRepo.CreateAskHistory(history); err != nil {
+		return nil, err
+	}
+	return history, nil
+}
+
+func (s *PromptService) ListAskHistory(userID int64, limit int) ([]models.PromptAskHistory, error) {
+	return s.promptRepo.ListAskHistoryByUser(userID, limit)
+}

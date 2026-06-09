@@ -1,34 +1,3 @@
-#[cfg(not(target_os = "android"))]
-mod token_store {
-    use keyring::Entry;
-
-    const SERVICE: &str = "life.marlon.todo";
-    const ACCOUNT: &str = "auth_token";
-
-    pub fn get_token() -> Option<String> {
-        Entry::new(SERVICE, ACCOUNT)
-            .ok()
-            .and_then(|e| e.get_password().ok())
-    }
-
-    pub fn set_token(token: String) -> Result<(), String> {
-        Entry::new(SERVICE, ACCOUNT)
-            .map_err(|e| e.to_string())?
-            .set_password(&token)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn remove_token() -> Result<(), String> {
-        let entry = Entry::new(SERVICE, ACCOUNT).map_err(|e| e.to_string())?;
-        match entry.delete_credential() {
-            Ok(_) => Ok(()),
-            // 不存在也视为成功
-            Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
-
 #[cfg(target_os = "android")]
 mod token_store {
     use std::{fs, path::PathBuf};
@@ -65,7 +34,7 @@ mod token_store {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn get_token() -> Option<String> {
-    token_store::get_token()
+    None
 }
 
 #[cfg(target_os = "android")]
@@ -76,8 +45,8 @@ fn get_token(app: tauri::AppHandle) -> Option<String> {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-fn set_token(token: String) -> Result<(), String> {
-    token_store::set_token(token)
+fn set_token(_token: String) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
@@ -89,7 +58,7 @@ fn set_token(app: tauri::AppHandle, token: String) -> Result<(), String> {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn remove_token() -> Result<(), String> {
-    token_store::remove_token()
+    Ok(())
 }
 
 #[cfg(target_os = "android")]

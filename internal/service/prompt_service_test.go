@@ -15,7 +15,7 @@ func newTestPromptService(t *testing.T) *PromptService {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Prompt{}); err != nil {
+	if err := db.AutoMigrate(&models.Prompt{}, &models.PromptAskHistory{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewPromptService(repository.NewPromptRepository(db))
@@ -71,5 +71,63 @@ func TestPromptServiceRequiresTitleAndContent(t *testing.T) {
 		Content: "   ",
 	}); err == nil {
 		t.Fatalf("expected blank content to fail")
+	}
+}
+
+func TestPromptServiceAskHistoryIsUserScoped(t *testing.T) {
+	service := newTestPromptService(t)
+
+	prompt, err := service.Create(1, &models.CreatePromptRequest{
+		Title:   "Reviewer",
+		Content: "Review the input.",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	history, err := service.CreateAskHistory(1, &models.CreatePromptAskHistoryRequest{
+		PromptID: prompt.ID,
+		Input:    "  Check this plan  ",
+		Output:   "  Looks good.  ",
+		Status:   "stopped",
+	})
+	if err != nil {
+		t.Fatalf("CreateAskHistory returned error: %v", err)
+	}
+	if history.PromptTitle != "Reviewer" {
+		t.Fatalf("expected prompt title snapshot, got %q", history.PromptTitle)
+	}
+	if history.Input != "Check this plan" {
+		t.Fatalf("expected trimmed input, got %q", history.Input)
+	}
+	if history.Output != "Looks good." {
+		t.Fatalf("expected trimmed output, got %q", history.Output)
+	}
+	if history.Status != "stopped" {
+		t.Fatalf("expected stopped status, got %q", history.Status)
+	}
+
+	items, err := service.ListAskHistory(1, 10)
+	if err != nil {
+		t.Fatalf("ListAskHistory returned error: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != history.ID {
+		t.Fatalf("expected one history item, got %#v", items)
+	}
+
+	otherItems, err := service.ListAskHistory(2, 10)
+	if err != nil {
+		t.Fatalf("ListAskHistory for other user returned error: %v", err)
+	}
+	if len(otherItems) != 0 {
+		t.Fatalf("expected no history for other user, got %#v", otherItems)
+	}
+
+	if _, err := service.CreateAskHistory(2, &models.CreatePromptAskHistoryRequest{
+		PromptID: prompt.ID,
+		Input:    "question",
+		Output:   "answer",
+	}); err == nil {
+		t.Fatalf("expected prompt history to require same user prompt")
 	}
 }

@@ -16,6 +16,7 @@ export const queryKeys = {
   },
   prompts: {
     all: ['prompts', 'all'],
+    history: ['prompts', 'history'],
   },
   calendar: {
     events: (start, end, timezone) => ['calendar', 'events', start, end, timezone],

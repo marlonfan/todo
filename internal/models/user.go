@@ -32,6 +32,7 @@ type User struct {
 	Categories     []Category          `json:"categories,omitempty" gorm:"foreignKey:UserID"`
 	Tasks          []Task              `json:"tasks,omitempty" gorm:"foreignKey:UserID"`
 	NotifySettings []UserNotifySetting `json:"notify_settings,omitempty" gorm:"foreignKey:UserID"`
+	PromptHistory  []PromptAskHistory  `json:"prompt_history,omitempty" gorm:"foreignKey:UserID"`
 }
 
 type UserRegisterRequest struct {
