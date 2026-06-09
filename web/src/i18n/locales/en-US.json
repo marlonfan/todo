@@ -299,7 +299,40 @@
     "rebuildRemindersBtn": "Rebuild Reminders",
     "reconcileConfirm": "Are you sure you want to clear all existing reminders and recalculate?",
     "reconcileSuccess": "Reminders rebuilt successfully",
-    "reconcileFailed": "Failed to rebuild reminders"
+    "reconcileFailed": "Failed to rebuild reminders",
+    "local": {
+      "title": "Local Notifications",
+      "hint": "Use the client as the default reminder channel on macOS and Android, with periodic refreshes and immediate updates after task changes. Telegram, ntfy, and Webhook keep working separately.",
+      "status": "Permission status",
+      "unsupported": "Not supported in this environment",
+      "enable": "Enable local notifications",
+      "enabled": "Local notifications enabled",
+      "disabled": "Local notifications disabled",
+      "refreshInterval": "Local notification refresh interval",
+      "refreshDisabled": "Disable periodic refresh",
+      "refresh60": "1 minute",
+      "refresh120": "2 minutes (recommended)",
+      "refresh300": "5 minutes",
+      "refresh600": "10 minutes",
+      "refreshSaved": "Local notification refresh interval saved",
+      "requestPermission": "Allow system notifications",
+      "permissionGranted": "System notifications allowed",
+      "permissionDenied": "System notifications were not allowed",
+      "permissionFailed": "Failed to request system notification permission",
+      "test": "Test local notification",
+      "testSuccess": "Local test notification sent",
+      "testFailed": "Failed to send local test notification",
+      "permission": {
+        "unknown": "Unknown",
+        "unsupported": "Not supported here",
+        "unavailable": "Notification plugin unavailable",
+        "prompt": "Waiting for permission",
+        "default": "Waiting for permission",
+        "granted": "Granted",
+        "denied": "Denied",
+        "error": "Check failed"
+      }
+    }
   },
   "settings": {
     "title": "Settings",

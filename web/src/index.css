@@ -76,10 +76,13 @@ body {
 }
 
 .md-page {
+  min-width: 0;
+  overflow: hidden;
   @apply h-full bg-white;
 }
 
 .md-pane {
+  min-width: 0;
   @apply bg-white;
 }
 
@@ -87,6 +90,7 @@ body {
   position: relative;
   z-index: 3;
   display: flex;
+  flex: 0 0 8px;
   height: 100%;
   width: 8px;
   align-items: stretch;
@@ -101,7 +105,7 @@ body {
 .task-split-resizer::before {
   content: '';
   position: absolute;
-  inset: 0 -6px;
+  inset: 0 -4px;
 }
 
 .task-split-resizer-line {
@@ -3015,6 +3019,7 @@ body {
 
 .task-description-editor-shell {
   position: relative;
+  min-width: 0;
 }
 
 @media (max-width: 900px) and (min-width: 641px) {
@@ -3099,6 +3104,7 @@ body {
   border: none !important;
   background: transparent !important;
   height: 100%;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
 }
@@ -3110,6 +3116,7 @@ body {
 .live-md-toast .vditor-content {
   border: none !important;
   height: 100%;
+  width: 100%;
   background: transparent !important;
   min-width: 0;
   max-width: 100%;
@@ -3121,6 +3128,7 @@ body {
   color: var(--task-md-text);
   line-height: 1.58;
   height: 100%;
+  width: 100%;
   background: transparent !important;
   padding: 0 !important;
   border: none !important;
@@ -3129,6 +3137,10 @@ body {
   scrollbar-color: rgba(148, 174, 198, 0) transparent;
   scrollbar-width: thin;
   transition: scrollbar-color 0.18s ease;
+}
+
+.task-detail-body-scroll {
+  min-width: 0;
 }
 
 .live-md-toast .vditor-ir::-webkit-scrollbar {
@@ -3165,7 +3177,7 @@ body {
   color: var(--task-md-text);
   line-height: 1.58;
   font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", "Arial", sans-serif;
-  padding: 0 !important;
+  padding: 0 0.25rem !important;
   margin: 0 !important;
   min-height: 100%;
   height: auto !important;
@@ -3341,7 +3353,7 @@ body {
 .live-md-toast .vditor-reset ul,
 .live-md-toast .vditor-reset ol {
   margin: 0.34rem 0;
-  padding-left: 1.18rem;
+  padding-left: 1.45rem;
 }
 
 .live-md-toast .vditor-reset ul ul,
@@ -3367,8 +3379,8 @@ body {
 
 .live-md-toast .vditor-reset li.vditor-task {
   list-style: none !important;
-  margin-left: -1.08rem;
-  padding-left: 1.1rem;
+  margin-left: -0.92rem;
+  padding-left: 0.94rem;
   position: relative;
 }
 
@@ -3376,7 +3388,7 @@ body {
   appearance: none;
   width: 0.92rem;
   height: 0.92rem;
-  margin: 0 0.48rem 0 -1.1rem !important;
+  margin: 0 0.48rem 0 -0.94rem !important;
   border: 1.5px solid #c7d2e1;
   border-radius: 0.28rem;
   background: #ffffff;
@@ -3618,7 +3630,10 @@ body {
 .live-md-toast .vditor-ir .vditor-reset > h3::before,
 .live-md-toast .vditor-ir .vditor-reset > h4::before,
 .live-md-toast .vditor-ir .vditor-reset > h5::before,
-.live-md-toast .vditor-ir .vditor-reset > h6::before {
+.live-md-toast .vditor-ir .vditor-reset > h6::before,
+.live-md-toast .vditor-ir div[data-type="link-ref-defs-block"]::before,
+.live-md-toast .vditor-ir div[data-type="footnotes-block"]::before,
+.live-md-toast .vditor-ir .vditor-toc::before {
   content: none !important;
   display: none !important;
 }

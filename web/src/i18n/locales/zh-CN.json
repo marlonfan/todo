@@ -299,7 +299,40 @@
     "rebuildRemindersBtn": "重建提醒",
     "reconcileConfirm": "确定要清除所有现有提醒并重新计算吗？",
     "reconcileSuccess": "提醒重建成功",
-    "reconcileFailed": "提醒重建失败"
+    "reconcileFailed": "提醒重建失败",
+    "local": {
+      "title": "本机通知",
+      "hint": "作为客户端默认提醒通道，在 macOS 和安卓上定期刷新并在任务变动后更新本地排程，不影响 Telegram、ntfy 或 Webhook。",
+      "status": "权限状态",
+      "unsupported": "当前环境不支持",
+      "enable": "启用本机通知",
+      "enabled": "本机通知已启用",
+      "disabled": "本机通知已关闭",
+      "refreshInterval": "本机通知刷新间隔",
+      "refreshDisabled": "关闭定期刷新",
+      "refresh60": "1 分钟",
+      "refresh120": "2 分钟（推荐）",
+      "refresh300": "5 分钟",
+      "refresh600": "10 分钟",
+      "refreshSaved": "本机通知刷新间隔已保存",
+      "requestPermission": "授权系统通知",
+      "permissionGranted": "系统通知已授权",
+      "permissionDenied": "系统通知未授权",
+      "permissionFailed": "系统通知授权失败",
+      "test": "测试本机通知",
+      "testSuccess": "本机测试通知已发送",
+      "testFailed": "本机测试通知发送失败",
+      "permission": {
+        "unknown": "未知",
+        "unsupported": "当前环境不支持",
+        "unavailable": "通知插件不可用",
+        "prompt": "等待授权",
+        "default": "等待授权",
+        "granted": "已授权",
+        "denied": "已拒绝",
+        "error": "检查失败"
+      }
+    }
   },
   "settings": {
     "title": "设置",

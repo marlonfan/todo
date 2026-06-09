@@ -1,7 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { notifyAPI, authAPI } from '../api/client';
+import {
+  getLocalNotificationRefreshSeconds,
+  getLocalNotificationStatus,
+  isLocalNotificationEnabled,
+  onLocalNotificationStatusChange,
+  requestLocalNotificationPermission,
+  scheduleLocalNotificationRefresh,
+  sendLocalNotificationTest,
+  setLocalNotificationEnabled,
+  setLocalNotificationRefreshSeconds,
+} from '../platform/localNotifications';
 import Select from './ui/Select';
+import { Checkbox } from './ui/Checkbox';
 
 function NotificationSettings() {
   const { t } = useTranslation();
@@ -10,6 +22,9 @@ function NotificationSettings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [localEnabled, setLocalEnabled] = useState(isLocalNotificationEnabled());
+  const [localRefreshSeconds, setLocalRefreshSeconds] = useState(getLocalNotificationRefreshSeconds());
+  const [localStatus, setLocalStatus] = useState(getLocalNotificationStatus());
   
   // Form state
   const [selectedChannel, setSelectedChannel] = useState('');
@@ -19,6 +34,9 @@ function NotificationSettings() {
   useEffect(() => {
     fetchSettings();
     fetchChannels();
+    const unlisten = onLocalNotificationStatusChange(setLocalStatus);
+    setLocalStatus(getLocalNotificationStatus());
+    return unlisten;
   }, []);
 
   const fetchSettings = async () => {
@@ -118,6 +136,57 @@ function NotificationSettings() {
       setSuccess(t('notification.reconcileSuccess'));
     } catch (err) {
       setError(err.response?.data?.error || t('notification.reconcileFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLocalNotificationToggle = (enabled) => {
+    setLocalEnabled(enabled);
+    setLocalNotificationEnabled(enabled);
+    setLocalStatus(getLocalNotificationStatus());
+    setSuccess(enabled ? t('notification.local.enabled') : t('notification.local.disabled'));
+  };
+
+  const handleLocalRefreshChange = (nextValue) => {
+    const applied = setLocalNotificationRefreshSeconds(nextValue);
+    setLocalRefreshSeconds(applied);
+    setLocalStatus(getLocalNotificationStatus());
+    setSuccess(t('notification.local.refreshSaved'));
+  };
+
+  const handleRequestLocalPermission = async () => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const granted = await requestLocalNotificationPermission();
+      setLocalStatus(getLocalNotificationStatus());
+      if (!granted) {
+        setError(t('notification.local.permissionDenied'));
+        return;
+      }
+      scheduleLocalNotificationRefresh({ reason: 'permission-granted', immediate: true });
+      setSuccess(t('notification.local.permissionGranted'));
+    } catch (err) {
+      setError(err?.message || t('notification.local.permissionFailed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLocalTest = async () => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      await sendLocalNotificationTest();
+      setLocalStatus(getLocalNotificationStatus());
+      setSuccess(t('notification.local.testSuccess'));
+    } catch (err) {
+      setError(err?.message || t('notification.local.testFailed'));
     } finally {
       setLoading(false);
     }
@@ -252,6 +321,62 @@ function NotificationSettings() {
         </div>
       )}
 
+      <div className="bg-white p-4 border border-gray-200">
+        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-medium mb-2">{t('notification.local.title')}</h3>
+            <p className="text-sm text-gray-600">{t('notification.local.hint')}</p>
+            <p className="mt-2 text-sm text-gray-600">
+              {t('notification.local.status')}: <span className="font-medium">{localStatus.supported ? t(`notification.local.permission.${localStatus.permission}`) : t('notification.local.unsupported')}</span>
+            </p>
+          </div>
+          <label className="flex min-w-0 items-center gap-2 text-sm font-medium text-gray-700 lg:shrink-0">
+            <Checkbox
+              checked={localEnabled}
+              onChange={(e) => handleLocalNotificationToggle(e.target.checked)}
+              disabled={!localStatus.supported}
+            />
+            <span className="whitespace-nowrap">{t('notification.local.enable')}</span>
+          </label>
+        </div>
+
+        <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[minmax(0,240px)_minmax(0,1fr)]">
+          <div className="min-w-0">
+            <label className="form-label">{t('notification.local.refreshInterval')}</label>
+            <Select
+              value={String(localRefreshSeconds)}
+              onChange={(e) => handleLocalRefreshChange(e.target.value)}
+              className="form-select"
+              disabled={!localStatus.supported || !localEnabled}
+            >
+              <option value="0">{t('notification.local.refreshDisabled')}</option>
+              <option value="60">{t('notification.local.refresh60')}</option>
+              <option value="120">{t('notification.local.refresh120')}</option>
+              <option value="300">{t('notification.local.refresh300')}</option>
+              <option value="600">{t('notification.local.refresh600')}</option>
+            </Select>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-end gap-2">
+            <button
+              type="button"
+              onClick={handleRequestLocalPermission}
+              disabled={loading || !localStatus.supported || !localEnabled}
+              className="btn-secondary min-w-0"
+            >
+              {t('notification.local.requestPermission')}
+            </button>
+            <button
+              type="button"
+              onClick={handleLocalTest}
+              disabled={loading || !localStatus.supported || !localEnabled}
+              className="btn-secondary min-w-0"
+            >
+              {t('notification.local.test')}
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Add New Setting */}
       <div className="bg-white p-4 border border-gray-200">
         <h3 className="text-lg font-medium mb-4">{t('notification.addChannel')}</h3>
@@ -278,8 +403,7 @@ function NotificationSettings() {
           {renderConfigFields()}
 
           <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={newSettingDefault}
               onChange={(e) => setNewSettingDefault(e.target.checked)}
             />

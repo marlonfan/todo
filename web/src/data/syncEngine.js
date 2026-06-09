@@ -34,6 +34,11 @@ import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
+import {
+  scheduleLocalNotificationRefresh,
+  startLocalNotificationScheduler,
+  stopLocalNotificationScheduler,
+} from '../platform/localNotifications';
 
 // --- Platform abstraction layer ---
 // Tauri (or any other shell) can override before the app boots via window.__todoPlatform:
@@ -809,6 +814,9 @@ async function runSyncCycle(options = {}) {
       }, 0);
     }
   }
+  if (hasToken()) {
+    scheduleLocalNotificationRefresh({ reason: 'sync-cycle-finished' });
+  }
 }
 
 export function scheduleSync() {
@@ -843,6 +851,7 @@ export async function enqueueTaskOperation(op, options = {}) {
     if (schedule) {
       scheduleSync();
     }
+    scheduleLocalNotificationRefresh({ reason: 'task-mutation-coalesced' });
     return;
   }
 
@@ -858,6 +867,7 @@ export async function enqueueTaskOperation(op, options = {}) {
     if (schedule) {
       scheduleSync();
     }
+    scheduleLocalNotificationRefresh({ reason: 'task-mutation-dropped' });
     return;
   }
 
@@ -871,6 +881,7 @@ export async function enqueueTaskOperation(op, options = {}) {
   if (schedule) {
     scheduleSync();
   }
+  scheduleLocalNotificationRefresh({ reason: 'task-mutation-enqueued' });
 }
 
 export async function forceManualSync() {
@@ -907,6 +918,7 @@ export function initializeSyncEngine(queryClient) {
   hydrateFromLocal().finally(() => {
     runSyncCycle({ silent: true, forceReconcile: true });
   });
+  startLocalNotificationScheduler();
 
   const onOnline = () => {
     if (!isAutoSyncEnabled()) return;
@@ -934,6 +946,7 @@ export function stopSyncEngine() {
   running = false;
   rerunRequested = false;
   queryClientRef = null;
+  stopLocalNotificationScheduler();
 }
 
 export function getConfiguredSyncIntervalSeconds() {

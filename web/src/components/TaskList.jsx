@@ -4660,10 +4660,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     <div className="md-page h-full">
       <div
         ref={taskWorkspaceRef}
-        className="grid h-full grid-cols-1 gap-0"
+        className="grid h-full min-w-0 grid-cols-1 gap-0 overflow-hidden"
         style={taskSplitGridStyle}
       >
-        <section className="md-pane flex h-full min-h-0 flex-col">
+        <section className="md-pane flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
           {showListHeader && (
             <div className="bg-white px-5 pb-4 pt-5">
               <div className="flex min-h-[40px] items-center justify-between gap-3">
@@ -4976,14 +4976,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           </button>
         )}
 
-        <section className={`md-pane h-full min-h-0 flex-col ${isMobileViewport ? 'hidden' : 'flex'}`}>
+        <section className={`md-pane h-full min-h-0 min-w-0 flex-col overflow-hidden ${isMobileViewport ? 'hidden' : 'flex'}`}>
           {!selectedTask || !draft ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-400">
               {t('task.selectTaskHint')}
             </div>
           ) : (
-            <div className="flex h-full min-h-0 flex-col bg-white">
-              <div className="border-b border-slate-100 px-8 pb-5 pt-5">
+            <div className="flex h-full min-h-0 min-w-0 flex-col bg-white">
+              <div className="border-b border-slate-100 px-5 pb-5 pt-5 lg:px-8">
                 <div className="flex min-h-9 items-center justify-between gap-4">
                   <div ref={detailPanelRef} className="relative flex min-w-0 flex-wrap items-center gap-1.5 text-slate-500">
                     <button
@@ -5810,7 +5810,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 </div>
               </div>
 
-              <div ref={bindDetailBodyScroll} className="task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-8 py-6">
+              <div ref={bindDetailBodyScroll} className="task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-auto px-5 py-6 lg:px-8">
                 <div
                   className="task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
                   onClick={(event) => {

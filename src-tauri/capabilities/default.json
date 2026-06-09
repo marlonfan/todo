@@ -4,6 +4,7 @@
   "description": "Default capabilities for the Todo desktop app",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "notification:default"
   ]
 }

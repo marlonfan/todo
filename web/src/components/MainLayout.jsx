@@ -745,7 +745,7 @@ function MainLayout({ user, setUser }) {
   }
 
   return (
-    <div className="app-shell h-screen bg-white flex flex-col md:flex-row">
+    <div className="app-shell flex h-screen min-w-0 flex-col overflow-hidden bg-white md:flex-row">
       {activeSyncConflict && (
         <div className="sync-conflict-toast fixed right-2 top-2 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
           <div className="text-xs font-semibold text-amber-900">{t('task.syncConflictTitle')}</div>
@@ -803,7 +803,7 @@ function MainLayout({ user, setUser }) {
 
       {/* Sidebar */}
       <div
-        className={`sidebar flex flex-col fixed md:static inset-y-0 left-0 z-40 transform transition-transform duration-200
+        className={`sidebar fixed inset-y-0 left-0 z-40 flex flex-col transform transition-transform duration-200 md:static md:shrink-0
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
         <div className="mx-5 mb-5 mt-6 flex h-12 items-center gap-3">
@@ -969,7 +969,7 @@ function MainLayout({ user, setUser }) {
       </div>
 
       {/* Main Content */}
-      <div className="main-workspace relative flex-1 overflow-hidden pb-14 md:pb-0">
+      <div className="main-workspace relative min-w-0 flex-1 overflow-hidden pb-14 md:pb-0">
         {shouldRenderCalendarWorkspace && (
           <div className={`absolute inset-0 ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
             <CalendarView />

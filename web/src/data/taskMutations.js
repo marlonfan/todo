@@ -6,6 +6,7 @@ import {
   upsertTask,
 } from './localStore';
 import { enqueueTaskOperation } from './syncEngine';
+import { scheduleLocalNotificationRefresh } from '../platform/localNotifications';
 import {
   hasBaseTaskPatchPayload,
   isOccurrenceScopedPayload,
@@ -129,6 +130,10 @@ async function invalidateTaskOccurrenceQueries(queryClient) {
     queryClient.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
     queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
   ]);
+}
+
+function scheduleLocalReminderRefresh(reason) {
+  scheduleLocalNotificationRefresh({ reason, immediate: true });
 }
 
 function getCachedCategories(queryClient) {
@@ -401,6 +406,7 @@ export async function createTaskLocal(queryClient, payload, options = {}) {
 
   const snapshot = queryClient.getQueryData(queryKeys.tasks.all);
   setTasksCache(queryClient, (prev) => [optimisticTask, ...prev]);
+  scheduleLocalReminderRefresh('task-created-local');
   runMutationSideEffects('createTaskLocal', async () => {
     await upsertTask(optimisticTask);
     await enqueueTaskOperation({
@@ -456,6 +462,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
   }
 
   if (nextTask) {
+    scheduleLocalReminderRefresh('task-updated-local');
     const persistWork = async () => {
       if (!skipOptimistic && shouldPatchBaseTask) {
         await upsertTask(nextTask);
@@ -587,6 +594,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
       await invalidateTaskOccurrenceQueries(queryClient);
     }
   };
+  scheduleLocalReminderRefresh('task-status-local');
   const rollback = snapshot ? () => setTasksCache(queryClient, snapshot) : undefined;
   if (awaitPersist) {
     await persistWork();
@@ -619,6 +627,7 @@ export async function updateTaskScheduleLocal(queryClient, taskID, payload, opti
     };
     return nextTask;
   }));
+  scheduleLocalReminderRefresh('task-schedule-local');
 
   runMutationSideEffects('updateTaskScheduleLocal', async () => {
     if (nextTask) {
@@ -657,6 +666,7 @@ export async function deleteTaskLocal(queryClient, taskID) {
   const baseRevision = Number(currentTask?.revision || 0);
 
   setTasksCache(queryClient, (prev) => prev.filter((task) => Number(task?.id) !== numericID));
+  scheduleLocalReminderRefresh('task-deleted-local');
   runMutationSideEffects('deleteTaskLocal', async () => {
     await removeTask(numericID);
 
