@@ -20,10 +20,21 @@ export function getToken() {
   return getTokenStore().get();
 }
 
-// In Tauri the WebView origin is tauri://localhost, so relative '/api' won't reach the server.
+function isDesktopRuntime() {
+  if (typeof window === 'undefined') return false;
+  return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri || window.todoElectron);
+}
+
+function getDefaultAPIBaseURL() {
+  if (import.meta.env.VITE_API_BASE_URL) return import.meta.env.VITE_API_BASE_URL;
+  if (isDesktopRuntime()) return 'http://127.0.0.1:8080/api';
+  return '/api';
+}
+
+// In desktop WebViews, relative '/api' may not point at the Go server.
 // Set VITE_API_BASE_URL at build time (e.g. https://todo.marlon.life/api) to override.
 const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
+  baseURL: getDefaultAPIBaseURL(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -60,7 +71,7 @@ function clearAuthAndRedirect() {
   store.remove();
   localStorage.removeItem('user');
   if (typeof window !== 'undefined') {
-    if ('__TAURI_INTERNALS__' in window) {
+    if (isDesktopRuntime()) {
       window.location.hash = '#/login';
       return;
     }
@@ -73,7 +84,7 @@ async function attemptTokenRefresh() {
   const currentToken = store.get();
   if (!currentToken) throw new Error('no token');
   // Use raw axios to avoid triggering our own interceptors
-  const base = import.meta.env.VITE_API_BASE_URL ?? '/api';
+  const base = getDefaultAPIBaseURL();
   const res = await axios.post(`${base}/auth/refresh`, null, {
     headers: {
       'Content-Type': 'application/json',
@@ -88,7 +99,7 @@ async function attemptTokenRefresh() {
 
 function isTauriCrossOriginAPI() {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return false;
-  const base = import.meta.env.VITE_API_BASE_URL ?? '/api';
+  const base = getDefaultAPIBaseURL();
   try {
     const resolved = new URL(base, window.location.origin);
     return resolved.origin !== window.location.origin;

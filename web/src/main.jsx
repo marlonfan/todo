@@ -11,7 +11,9 @@ import { initPlatform } from './platform/init'
 
 (async () => {
   const isTauri = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri);
-  const shouldUseServiceWorker = 'serviceWorker' in navigator && !isTauri && !import.meta.env.DEV;
+  const isElectron = Boolean(window.todoElectron);
+  const isDesktopRuntime = isTauri || isElectron;
+  const shouldUseServiceWorker = 'serviceWorker' in navigator && !isDesktopRuntime && !import.meta.env.DEV;
 
   // Dev servers need fresh modules for HMR, so clear any SW left from older runs.
   if ('serviceWorker' in navigator && import.meta.env.DEV) {
@@ -34,7 +36,7 @@ import { initPlatform } from './platform/init'
     });
   }
 
-  // Service Worker：Tauri 桌面端和 Vite 开发模式不需要
+  // Service Worker：桌面端和 Vite 开发模式不需要
   if (shouldUseServiceWorker) {
     window.addEventListener('load', () => {
       navigator.serviceWorker
@@ -61,7 +63,7 @@ import { initPlatform } from './platform/init'
   initPlatform();
 
   initializeSyncEngine(queryClient);
-  const Router = isTauri ? HashRouter : BrowserRouter;
+  const Router = isDesktopRuntime ? HashRouter : BrowserRouter;
 
   ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
