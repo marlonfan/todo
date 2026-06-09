@@ -1,0 +1,87 @@
+name: Build Electron Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'API base URL'
+        required: false
+        default: 'https://todo.marlon.life/api'
+
+permissions:
+  contents: write
+
+jobs:
+  build-electron:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: Todo-Electron-macOS
+            paths: |
+              electron/dist/*.dmg
+              electron/dist/*.zip
+              electron/dist/*.blockmap
+          - os: windows-latest
+            artifact: Todo-Electron-Windows
+            paths: |
+              electron/dist/*.exe
+              electron/dist/*.msi
+              electron/dist/*.blockmap
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            web/package-lock.json
+            electron/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Install Electron dependencies
+        run: npm ci
+        working-directory: electron
+
+      - name: Build Electron app
+        run: npm run build
+        working-directory: electron
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://todo.marlon.life/api' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          retention-days: 7
+
+  release:
+    needs: build-electron
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
