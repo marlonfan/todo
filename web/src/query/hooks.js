@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { caldavAPI, categoriesAPI, promptsAPI, tasksAPI } from '../api/client';
 import { queryKeys } from './keys';
 import {
@@ -113,12 +113,33 @@ export function usePromptsQuery() {
 }
 
 export function usePromptHistoryQuery() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: queryKeys.prompts.history,
-    queryFn: async () => {
-      const res = await promptsAPI.listHistory({ limit: 100 });
-      return Array.isArray(res.data) ? res.data : [];
+    initialPageParam: 0,
+    queryFn: async ({ pageParam = 0 }) => {
+      const params = { limit: 30 };
+      if (Number(pageParam || 0) > 0) {
+        params.before_id = Number(pageParam);
+      }
+      const res = await promptsAPI.listHistory(params);
+      if (Array.isArray(res.data)) {
+        return {
+          items: res.data,
+          next_cursor: 0,
+          has_more: false,
+        };
+      }
+      return {
+        items: Array.isArray(res?.data?.items) ? res.data.items : [],
+        next_cursor: Number(res?.data?.next_cursor || 0),
+        has_more: Boolean(res?.data?.has_more),
+      };
     },
+    getNextPageParam: (lastPage) => (
+      lastPage?.has_more && Number(lastPage?.next_cursor || 0) > 0
+        ? Number(lastPage.next_cursor)
+        : undefined
+    ),
   });
 }
 

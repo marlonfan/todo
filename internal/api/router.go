@@ -87,6 +87,7 @@ func (r *Router) Setup() *gin.Engine {
 			protected.POST("/prompts", r.promptHandler.Create)
 			protected.GET("/prompts/history", r.promptHandler.ListAskHistory)
 			protected.POST("/prompts/history", r.promptHandler.CreateAskHistory)
+			protected.DELETE("/prompts/history/:id", r.promptHandler.DeleteAskHistory)
 			protected.GET("/prompts/:id", r.promptHandler.Get)
 			protected.PUT("/prompts/:id", r.promptHandler.Update)
 			protected.DELETE("/prompts/:id", r.promptHandler.Delete)

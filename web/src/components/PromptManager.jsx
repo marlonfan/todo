@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Check, Copy, Edit3, FileText, History, MessageSquareText, Plus, Search, Send, Square, Trash2, X } from 'lucide-react';
@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { promptsAPI } from '../api/client';
 import { usePromptHistoryQuery, usePromptsQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
-import { AI_CONFIG_REQUIRED_CODE, generateAIResponse } from '../utils/aiTaskDescription';
+import { AI_CONFIG_REQUIRED_CODE, cleanGeneratedTaskDescription, generateAIResponse } from '../utils/aiTaskDescription';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { TaskAIMarkdownPreview } from './TaskDescriptionAI';
 
@@ -38,7 +38,13 @@ function PromptManager() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { data: prompts = [], isLoading } = usePromptsQuery();
-  const { data: askHistory = [], isLoading: historyLoading } = usePromptHistoryQuery();
+  const {
+    data: askHistoryPages,
+    isLoading: historyLoading,
+    isFetchingNextPage: historyFetchingNextPage,
+    hasNextPage: historyHasNextPage,
+    fetchNextPage: fetchNextHistoryPage,
+  } = usePromptHistoryQuery();
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingPrompt, setEditingPrompt] = useState(null);
   const [query, setQuery] = useState('');
@@ -47,6 +53,8 @@ function PromptManager() {
   const [historyError, setHistoryError] = useState('');
   const [formDialogOpen, setFormDialogOpen] = useState(false);
   const [askDialogOpen, setAskDialogOpen] = useState(false);
+  const [deleteHistoryDialog, setDeleteHistoryDialog] = useState({ open: false, item: null });
+  const [deleteHistorySubmitting, setDeleteHistorySubmitting] = useState(false);
   const [mobileView, setMobileView] = useState('prompts');
   const [askPrompt, setAskPrompt] = useState(null);
   const [selectedHistoryID, setSelectedHistoryID] = useState(0);
@@ -54,6 +62,7 @@ function PromptManager() {
   const [askOutput, setAskOutput] = useState('');
   const [askError, setAskError] = useState('');
   const [asking, setAsking] = useState(false);
+  const [askStreamStatus, setAskStreamStatus] = useState('idle');
   const [askCopied, setAskCopied] = useState(false);
   const askControllerRef = useRef(null);
   const outputScrollCleanupRef = useRef(null);
@@ -64,6 +73,14 @@ function PromptManager() {
     output: '',
     saved: false,
   });
+
+  const askHistory = useMemo(() => (
+    askHistoryPages?.pages?.flatMap((page) => (Array.isArray(page?.items) ? page.items : [])) || []
+  ), [askHistoryPages]);
+  const askHistoryCountLabel = historyHasNextPage ? `${askHistory.length}+` : String(askHistory.length);
+  const visibleAskOutput = useMemo(() => cleanGeneratedTaskDescription(askOutput).trim(), [askOutput]);
+  const showAskProgress = asking && !visibleAskOutput;
+  const askProgressMode = askStreamStatus === 'thinking' ? 'thinking' : 'requesting';
 
   const filteredPrompts = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -91,11 +108,15 @@ function PromptManager() {
   };
 
   useEffect(() => {
-    if (!formDialogOpen && !askDialogOpen) return undefined;
+    if (!formDialogOpen && !askDialogOpen && !deleteHistoryDialog.open) return undefined;
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
+      if (deleteHistoryDialog.open) {
+        closeDeleteHistoryDialog();
+        return;
+      }
       if (formDialogOpen) {
         closeFormDialog();
         return;
@@ -106,7 +127,7 @@ function PromptManager() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [askDialogOpen, formDialogOpen, submitting]);
+  }, [askDialogOpen, deleteHistoryDialog.open, deleteHistorySubmitting, formDialogOpen, submitting]);
 
   const updatePromptsCache = (updater) => {
     queryClient.setQueryData(queryKeys.prompts.all, (prev) => {
@@ -118,9 +139,37 @@ function PromptManager() {
   const updateHistoryCache = (history) => {
     if (!history?.id) return;
     queryClient.setQueryData(queryKeys.prompts.history, (prev) => {
-      const current = Array.isArray(prev) ? prev : [];
-      const withoutSaved = current.filter((item) => Number(item?.id || 0) !== Number(history.id));
-      return [history, ...withoutSaved].slice(0, 100);
+      if (!prev?.pages) {
+        return {
+          pages: [{ items: [history], next_cursor: 0, has_more: false }],
+          pageParams: [0],
+        };
+      }
+      const pages = prev.pages.map((page, index) => {
+        const items = Array.isArray(page?.items) ? page.items : [];
+        const withoutSaved = items.filter((item) => Number(item?.id || 0) !== Number(history.id));
+        return {
+          ...page,
+          items: index === 0 ? [history, ...withoutSaved] : withoutSaved,
+        };
+      });
+      return { ...prev, pages };
+    });
+  };
+
+  const removeHistoryFromCache = (historyID) => {
+    const numericID = Number(historyID || 0);
+    if (!numericID) return;
+    queryClient.setQueryData(queryKeys.prompts.history, (prev) => {
+      if (!prev?.pages) return prev;
+      return {
+        ...prev,
+        pages: prev.pages.map((page) => ({
+          ...page,
+          items: (Array.isArray(page?.items) ? page.items : [])
+            .filter((item) => Number(item?.id || 0) !== numericID),
+        })),
+      };
     });
   };
 
@@ -183,6 +232,47 @@ function PromptManager() {
     resetForm();
   };
 
+  const requestDeleteHistory = (event, item) => {
+    event?.stopPropagation?.();
+    setHistoryError('');
+    setDeleteHistoryDialog({ open: true, item });
+  };
+
+  const closeDeleteHistoryDialog = () => {
+    if (deleteHistorySubmitting) return;
+    setDeleteHistoryDialog({ open: false, item: null });
+  };
+
+  const confirmDeleteHistory = async () => {
+    const historyID = Number(deleteHistoryDialog?.item?.id || 0);
+    if (!historyID || deleteHistorySubmitting) return;
+    setDeleteHistorySubmitting(true);
+    setHistoryError('');
+    try {
+      await promptsAPI.deleteHistory(historyID);
+      removeHistoryFromCache(historyID);
+      if (Number(selectedHistoryID || 0) === historyID) {
+        setSelectedHistoryID(0);
+        if (askDialogOpen) {
+          await closeAskPanel();
+        }
+      }
+      setDeleteHistoryDialog({ open: false, item: null });
+    } catch (err) {
+      setHistoryError(err.response?.data?.error || t('prompt.historyDeleteFailed'));
+    } finally {
+      setDeleteHistorySubmitting(false);
+    }
+  };
+
+  const handleHistoryScroll = useCallback((event) => {
+    if (!historyHasNextPage || historyFetchingNextPage) return;
+    const target = event.currentTarget;
+    if (target.scrollHeight - target.scrollTop - target.clientHeight < 96) {
+      fetchNextHistoryPage();
+    }
+  }, [fetchNextHistoryPage, historyFetchingNextPage, historyHasNextPage]);
+
   const handleSave = async (event) => {
     event.preventDefault();
     const payload = normalizePromptPayload(form);
@@ -238,6 +328,7 @@ function PromptManager() {
     setAskInput('');
     setAskOutput('');
     setAskError('');
+    setAskStreamStatus('idle');
     setAskCopied(false);
   };
 
@@ -275,6 +366,7 @@ function PromptManager() {
     setAskOutput('');
     setAskError('');
     setAskCopied(false);
+    setAskStreamStatus('idle');
     setAsking(false);
     setAskDialogOpen(true);
   };
@@ -295,6 +387,7 @@ function PromptManager() {
     setAskOutput(history?.output || '');
     setAskError('');
     setAskCopied(false);
+    setAskStreamStatus('idle');
     setAsking(false);
     setAskDialogOpen(true);
   };
@@ -304,6 +397,7 @@ function PromptManager() {
     askControllerRef.current?.abort?.();
     askControllerRef.current = null;
     setAsking(false);
+    setAskStreamStatus('idle');
     const output = String(active?.output || askOutput || '').trim();
     if (output) {
       await persistActiveAskIfNeeded('stopped');
@@ -338,6 +432,7 @@ function PromptManager() {
     };
     setSelectedHistoryID(0);
     setAsking(true);
+    setAskStreamStatus('requesting');
     setAskOutput('');
     setAskError('');
     setHistoryError('');
@@ -348,6 +443,11 @@ function PromptManager() {
         systemPrompt: askPrompt.content,
         userInput: input,
         signal: controller.signal,
+        onStatus: (status) => {
+          if (status === 'thinking') {
+            setAskStreamStatus('thinking');
+          }
+        },
         onDelta: (next) => {
           streamedContent = next;
           activeAskRef.current = {
@@ -356,6 +456,9 @@ function PromptManager() {
           };
           flushSync(() => {
             setAskOutput(next);
+            if (cleanGeneratedTaskDescription(next).trim()) {
+              setAskStreamStatus('answering');
+            }
           });
         },
       });
@@ -366,6 +469,7 @@ function PromptManager() {
         output: finalContent,
       };
       setAskOutput(finalContent);
+      setAskStreamStatus('idle');
       await persistActiveAskIfNeeded('completed');
     } catch (err) {
       if (err?.name === 'AbortError') {
@@ -374,9 +478,11 @@ function PromptManager() {
           setAskOutput(output);
           await persistActiveAskIfNeeded('stopped');
         }
+        setAskStreamStatus('idle');
         return;
       }
       activeAskRef.current = { prompt: null, input: '', output: '', saved: false };
+      setAskStreamStatus('idle');
       setAskError(
         err?.code === AI_CONFIG_REQUIRED_CODE
           ? t('prompt.aiConfigRequired')
@@ -521,17 +627,39 @@ function PromptManager() {
           ref={bindScroll}
           className={`prompt-output-body editor-scrollbar-overlay${asking ? ' task-ai-result--streaming' : ''}`}
         >
-          <TaskAIMarkdownPreview
-            value={askOutput}
-            fallback={asking ? t('prompt.asking') : t('prompt.outputEmpty')}
-          />
+          {showAskProgress ? (
+            <div className="prompt-thinking-state" role="status" aria-live="polite">
+              <div className={`prompt-thinking-mark prompt-thinking-mark--${askProgressMode}`} aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="prompt-thinking-copy">
+                <div className="prompt-thinking-title">
+                  {askProgressMode === 'thinking' ? t('prompt.thinking') : t('prompt.requesting')}
+                </div>
+                <div className="prompt-thinking-subtitle">
+                  {askProgressMode === 'thinking' ? t('prompt.thinkingHint') : t('prompt.requestingHint')}
+                </div>
+              </div>
+              <div className="prompt-thinking-bar" aria-hidden="true" />
+            </div>
+          ) : (
+            <TaskAIMarkdownPreview
+              value={askOutput}
+              fallback={asking ? t('prompt.asking') : t('prompt.outputEmpty')}
+            />
+          )}
         </div>
       </div>
     </form>
   );
 
   const renderHistoryList = (className = '') => (
-    <div className={`prompt-history-list editor-scrollbar-overlay ${className}`}>
+    <div
+      className={`prompt-history-list editor-scrollbar-overlay ${className}`}
+      onScroll={handleHistoryScroll}
+    >
       {historyError && (
         <div className="prompt-status prompt-status--error">
           {historyError}
@@ -549,20 +677,45 @@ function PromptManager() {
         </div>
       )}
       {askHistory.map((item) => (
-        <button
+        <div
           key={item.id}
-          type="button"
-          onClick={() => openHistory(item)}
           className={`prompt-history-item ${Number(selectedHistoryID || 0) === Number(item.id) ? 'prompt-history-item--active' : ''}`}
         >
-          <span className="prompt-history-title">{item.prompt_title || t('prompt.historyDeletedPrompt')}</span>
-          <span className="prompt-history-input">{item.input}</span>
-          <span className="prompt-history-time">
-            {formatDateTime(item.created_at)}
-            {item.status === 'stopped' ? ` · ${t('prompt.historyStopped')}` : ''}
-          </span>
-        </button>
+          <button
+            type="button"
+            onClick={() => openHistory(item)}
+            className="prompt-history-content"
+          >
+            <span className="prompt-history-title">{item.prompt_title || t('prompt.historyDeletedPrompt')}</span>
+            <span className="prompt-history-input">{item.input}</span>
+            <span className="prompt-history-time">
+              {formatDateTime(item.created_at)}
+              {item.status === 'stopped' ? ` · ${t('prompt.historyStopped')}` : ''}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={(event) => requestDeleteHistory(event, item)}
+            className="prompt-history-delete"
+            aria-label={t('prompt.deleteHistory')}
+            title={t('prompt.deleteHistory')}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       ))}
+      {historyFetchingNextPage && (
+        <div className="prompt-history-more">{t('common.loading')}</div>
+      )}
+      {!historyLoading && historyHasNextPage && !historyFetchingNextPage && askHistory.length > 0 && (
+        <button
+          type="button"
+          className="prompt-history-load-more"
+          onClick={() => fetchNextHistoryPage()}
+        >
+          {t('prompt.historyLoadMore')}
+        </button>
+      )}
     </div>
   );
 
@@ -603,7 +756,7 @@ function PromptManager() {
             className={`prompt-mobile-tab ${mobileView === 'history' ? 'prompt-mobile-tab--active' : ''}`}
           >
             {t('prompt.history')}
-            <span className="prompt-mobile-tab-count">{askHistory.length}</span>
+            <span className="prompt-mobile-tab-count">{askHistoryCountLabel}</span>
           </button>
         </div>
       </div>
@@ -615,7 +768,7 @@ function PromptManager() {
               <History className="h-4 w-4 text-slate-500" />
               <span className="truncate text-sm font-semibold text-slate-900">{t('prompt.history')}</span>
             </div>
-            <span className="text-xs text-slate-400">{askHistory.length}</span>
+            <span className="text-xs text-slate-400">{askHistoryCountLabel}</span>
           </div>
           {renderHistoryList()}
         </aside>
@@ -657,7 +810,7 @@ function PromptManager() {
               <History className="h-4 w-4 text-slate-500" />
               <span className="truncate text-sm font-semibold text-slate-900">{t('prompt.history')}</span>
             </div>
-            <span className="text-xs text-slate-400">{askHistory.length}</span>
+            <span className="text-xs text-slate-400">{askHistoryCountLabel}</span>
           </div>
           {renderHistoryList('prompt-history-list--mobile')}
         </section>
@@ -758,6 +911,50 @@ function PromptManager() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {deleteHistoryDialog.open && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 p-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeDeleteHistoryDialog();
+          }}
+        >
+          <div className="prompt-confirm-dialog">
+            <div className="prompt-confirm-icon">
+              <Trash2 className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="prompt-confirm-title">{t('prompt.deleteHistoryTitle')}</div>
+              <div className="prompt-confirm-copy">
+                {t('prompt.deleteHistoryConfirm')}
+              </div>
+              {deleteHistoryDialog.item?.input && (
+                <div className="prompt-confirm-preview">
+                  {deleteHistoryDialog.item.input}
+                </div>
+              )}
+              <div className="prompt-confirm-actions">
+                <button
+                  type="button"
+                  onClick={closeDeleteHistoryDialog}
+                  disabled={deleteHistorySubmitting}
+                  className="prompt-dialog-button prompt-dialog-button--ghost"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteHistory}
+                  disabled={deleteHistorySubmitting}
+                  className="prompt-dialog-button prompt-dialog-button--danger"
+                >
+                  {deleteHistorySubmitting ? t('task.submitting') : t('common.delete')}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

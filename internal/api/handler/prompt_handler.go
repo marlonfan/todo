@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"todo-app/internal/api/middleware"
 	"todo-app/internal/models"
 	"todo-app/internal/service"
@@ -129,7 +130,7 @@ func (h *PromptHandler) ListAskHistory(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 
 	limit := 100
-	if rawLimit := c.Query("limit"); rawLimit != "" {
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
 		parsed, err := strconv.Atoi(rawLimit)
 		if err != nil || parsed <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid history limit"})
@@ -138,11 +139,38 @@ func (h *PromptHandler) ListAskHistory(c *gin.Context) {
 		limit = parsed
 	}
 
-	history, err := h.promptService.ListAskHistory(userID, limit)
+	beforeID := int64(0)
+	if rawBeforeID := strings.TrimSpace(c.Query("before_id")); rawBeforeID != "" {
+		parsed, err := strconv.ParseInt(rawBeforeID, 10, 64)
+		if err != nil || parsed < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid history cursor"})
+			return
+		}
+		beforeID = parsed
+	}
+
+	history, err := h.promptService.ListAskHistory(userID, beforeID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, history)
+}
+
+func (h *PromptHandler) DeleteAskHistory(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	historyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid history ID"})
+		return
+	}
+
+	if err := h.promptService.DeleteAskHistory(userID, historyID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusNoContent, nil)
 }

@@ -120,6 +120,29 @@ func (s *PromptService) CreateAskHistory(userID int64, req *models.CreatePromptA
 	return history, nil
 }
 
-func (s *PromptService) ListAskHistory(userID int64, limit int) ([]models.PromptAskHistory, error) {
-	return s.promptRepo.ListAskHistoryByUser(userID, limit)
+func (s *PromptService) ListAskHistory(userID, beforeID int64, limit int) (*models.PromptAskHistoryListResponse, error) {
+	items, hasMore, err := s.promptRepo.ListAskHistoryByUser(userID, beforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	nextCursor := int64(0)
+	if hasMore && len(items) > 0 {
+		nextCursor = items[len(items)-1].ID
+	}
+	return &models.PromptAskHistoryListResponse{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	}, nil
+}
+
+func (s *PromptService) DeleteAskHistory(userID, historyID int64) error {
+	deleted, err := s.promptRepo.DeleteAskHistoryByUser(historyID, userID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return errors.New("prompt ask history not found")
+	}
+	return nil
 }

@@ -177,6 +177,7 @@ export const promptsAPI = {
   delete: (id) => apiClient.delete(`/prompts/${id}`),
   listHistory: (params) => apiClient.get('/prompts/history', { params }),
   createHistory: (data) => apiClient.post('/prompts/history', data),
+  deleteHistory: (id) => apiClient.delete(`/prompts/history/${id}`),
 };
 
 function withTaskMutationHeaders(options = {}) {

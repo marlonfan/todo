@@ -87,6 +87,11 @@ test('cleanGeneratedTaskDescription unwraps markdown fences', () => {
   assert.equal(cleanGeneratedTaskDescription('```\n- unlabeled step\n```'), '- unlabeled step');
 });
 
+test('cleanGeneratedTaskDescription leaves only visible response text', () => {
+  assert.equal(cleanGeneratedTaskDescription('<think>hidden thoughts</think>').trim(), '');
+  assert.equal(cleanGeneratedTaskDescription('<think>hidden thoughts</think>\nVisible').trim(), 'Visible');
+});
+
 test('generateAIResponse preserves streamed text and emits incremental deltas', async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
@@ -178,12 +183,15 @@ test('generateAIResponse streams OpenAI-compatible alternate delta fields withou
 
   try {
     const snapshots = [];
+    const statuses = [];
     const result = await generateAIResponse({
       systemPrompt: 'system',
       userInput: 'user',
+      onStatus: (status) => statuses.push(status),
       onDelta: (content) => snapshots.push(content),
     });
 
+    assert.deepEqual(statuses, ['thinking']);
     assert.deepEqual(snapshots, ['- Token', '- Token\n完成']);
     assert.equal(result, '- Token\n完成');
   } finally {
@@ -282,14 +290,70 @@ test('generateAIResponse hides streamed think blocks from visible output', async
 
   try {
     const snapshots = [];
+    const statuses = [];
     const result = await generateAIResponse({
       systemPrompt: 'system',
       userInput: 'user',
+      onStatus: (status) => statuses.push(status),
       onDelta: (content) => snapshots.push(content),
     });
 
+    assert.deepEqual(statuses, ['thinking']);
     assert.deepEqual(snapshots, ['Visible', 'Visible\n- Item']);
     assert.equal(result, 'Visible\n- Item');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalWindow === 'undefined') {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test('generateAIResponse reports Anthropic thinking before visible text', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (key === AI_CONFIG_STORAGE_KEY ? JSON.stringify({
+        protocol: AI_PROTOCOL_ANTHROPIC,
+        baseURL: 'https://ai.example.test/v1',
+        apiKey: 'test-key',
+        modelID: 'test-model',
+      }) : null),
+    },
+  };
+  globalThis.fetch = async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hidden"}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Visible"}}\n\n',
+    ];
+    return new Response(new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const statuses = [];
+    const snapshots = [];
+    const result = await generateAIResponse({
+      systemPrompt: 'system',
+      userInput: 'user',
+      onStatus: (status) => statuses.push(status),
+      onDelta: (content) => snapshots.push(content),
+    });
+
+    assert.deepEqual(statuses, ['thinking']);
+    assert.deepEqual(snapshots, ['Visible']);
+    assert.equal(result, 'Visible');
   } finally {
     globalThis.fetch = originalFetch;
     if (typeof originalWindow === 'undefined') {

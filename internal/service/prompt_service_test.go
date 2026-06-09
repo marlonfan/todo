@@ -107,20 +107,20 @@ func TestPromptServiceAskHistoryIsUserScoped(t *testing.T) {
 		t.Fatalf("expected stopped status, got %q", history.Status)
 	}
 
-	items, err := service.ListAskHistory(1, 10)
+	items, err := service.ListAskHistory(1, 0, 10)
 	if err != nil {
 		t.Fatalf("ListAskHistory returned error: %v", err)
 	}
-	if len(items) != 1 || items[0].ID != history.ID {
-		t.Fatalf("expected one history item, got %#v", items)
+	if len(items.Items) != 1 || items.Items[0].ID != history.ID {
+		t.Fatalf("expected one history item, got %#v", items.Items)
 	}
 
-	otherItems, err := service.ListAskHistory(2, 10)
+	otherItems, err := service.ListAskHistory(2, 0, 10)
 	if err != nil {
 		t.Fatalf("ListAskHistory for other user returned error: %v", err)
 	}
-	if len(otherItems) != 0 {
-		t.Fatalf("expected no history for other user, got %#v", otherItems)
+	if len(otherItems.Items) != 0 {
+		t.Fatalf("expected no history for other user, got %#v", otherItems.Items)
 	}
 
 	if _, err := service.CreateAskHistory(2, &models.CreatePromptAskHistoryRequest{
@@ -129,5 +129,74 @@ func TestPromptServiceAskHistoryIsUserScoped(t *testing.T) {
 		Output:   "answer",
 	}); err == nil {
 		t.Fatalf("expected prompt history to require same user prompt")
+	}
+}
+
+func TestPromptServiceAskHistoryPaginationAndDelete(t *testing.T) {
+	service := newTestPromptService(t)
+
+	prompt, err := service.Create(1, &models.CreatePromptRequest{
+		Title:   "Reviewer",
+		Content: "Review the input.",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		history, err := service.CreateAskHistory(1, &models.CreatePromptAskHistoryRequest{
+			PromptID: prompt.ID,
+			Input:    "question",
+			Output:   "answer",
+		})
+		if err != nil {
+			t.Fatalf("CreateAskHistory returned error: %v", err)
+		}
+		ids = append(ids, history.ID)
+	}
+
+	firstPage, err := service.ListAskHistory(1, 0, 2)
+	if err != nil {
+		t.Fatalf("ListAskHistory first page returned error: %v", err)
+	}
+	if len(firstPage.Items) != 2 {
+		t.Fatalf("expected first page to contain 2 items, got %d", len(firstPage.Items))
+	}
+	if !firstPage.HasMore || firstPage.NextCursor == 0 {
+		t.Fatalf("expected first page to expose a next cursor, got %#v", firstPage)
+	}
+	if firstPage.Items[0].ID != ids[2] || firstPage.Items[1].ID != ids[1] {
+		t.Fatalf("expected newest-first history order, got %#v", firstPage.Items)
+	}
+
+	secondPage, err := service.ListAskHistory(1, firstPage.NextCursor, 2)
+	if err != nil {
+		t.Fatalf("ListAskHistory second page returned error: %v", err)
+	}
+	if len(secondPage.Items) != 1 || secondPage.Items[0].ID != ids[0] {
+		t.Fatalf("expected second page to contain oldest item, got %#v", secondPage.Items)
+	}
+	if secondPage.HasMore || secondPage.NextCursor != 0 {
+		t.Fatalf("expected second page to be terminal, got %#v", secondPage)
+	}
+
+	if err := service.DeleteAskHistory(2, ids[1]); err == nil {
+		t.Fatalf("expected deleting another user's history to fail")
+	}
+	if err := service.DeleteAskHistory(1, ids[1]); err != nil {
+		t.Fatalf("DeleteAskHistory returned error: %v", err)
+	}
+	afterDelete, err := service.ListAskHistory(1, 0, 10)
+	if err != nil {
+		t.Fatalf("ListAskHistory after delete returned error: %v", err)
+	}
+	if len(afterDelete.Items) != 2 {
+		t.Fatalf("expected two history rows after delete, got %d", len(afterDelete.Items))
+	}
+	for _, item := range afterDelete.Items {
+		if item.ID == ids[1] {
+			t.Fatalf("deleted history item still returned: %#v", afterDelete.Items)
+		}
 	}
 }
