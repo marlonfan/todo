@@ -11,6 +11,7 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const result = spawnSync(npm, ['run', 'build:desktop'], {
   cwd: webDir,
   env: process.env,
+  shell: process.platform === 'win32',
   stdio: 'inherit',
 });
 
