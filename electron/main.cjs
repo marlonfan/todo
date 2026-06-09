@@ -205,6 +205,7 @@ function registerIPC() {
 }
 
 app.setName('Todo');
+Menu.setApplicationMenu(Menu.buildFromTemplate([]));
 if (isWindows) {
   app.setAppUserModelId('life.marlon.todo');
 }

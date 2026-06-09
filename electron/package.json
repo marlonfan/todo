@@ -53,6 +53,10 @@
         "msi"
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "linux": {
       "category": "Office",
       "icon": "../src-tauri/icons/icon.png",
