@@ -2,6 +2,8 @@ const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, nativeImage, shel
 const path = require('node:path');
 
 const isMac = process.platform === 'darwin';
+const isWindows = process.platform === 'win32';
+const keepsRunningInTray = isMac || isWindows;
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_DEV);
 const devURL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
 
@@ -47,7 +49,7 @@ function showMainWindow() {
 }
 
 function createTray() {
-  if (tray || !isMac) return;
+  if (tray || !keepsRunningInTray) return;
 
   tray = new Tray(getTrayIcon());
   tray.setToolTip('Todo');
@@ -65,7 +67,14 @@ function createTray() {
       },
     },
   ]));
-  tray.on('click', () => {
+  if (isMac) {
+    tray.on('click', () => {
+      tray.popUpContextMenu();
+    });
+  } else {
+    tray.on('click', showMainWindow);
+  }
+  tray.on('right-click', () => {
     tray.popUpContextMenu();
   });
   tray.on('double-click', showMainWindow);
@@ -93,7 +102,7 @@ function createWindow() {
   });
 
   mainWindow.on('close', (event) => {
-    if (isMac && !isQuitting) {
+    if (keepsRunningInTray && !isQuitting) {
       event.preventDefault();
       mainWindow.hide();
     }
@@ -196,7 +205,7 @@ function registerIPC() {
 }
 
 app.setName('Todo');
-if (process.platform === 'win32') {
+if (isWindows) {
   app.setAppUserModelId('life.marlon.todo');
 }
 
@@ -226,7 +235,7 @@ app.on('before-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (!isMac) {
+  if (!keepsRunningInTray) {
     app.quit();
   }
 });
