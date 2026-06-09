@@ -67,9 +67,11 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
+          if-no-files-found: error
           retention-days: 7
 
   release:
+    name: Publish GitHub release
     needs: build-electron
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')

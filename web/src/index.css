@@ -4069,6 +4069,33 @@ body {
   touch-action: pan-y;
 }
 
+.task-list-pull-content {
+  padding-bottom: 0;
+}
+
+@media (max-width: 767px) {
+  .app-shell {
+    height: 100dvh;
+  }
+
+  .main-workspace {
+    min-height: 0;
+  }
+
+  .main-workspace > .absolute.inset-0 {
+    min-height: 0;
+  }
+
+  .task-list-scroll {
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .task-list-pull-content {
+    padding-bottom: calc(7.25rem + env(safe-area-inset-bottom));
+  }
+}
+
 .task-pull-refresh svg {
   color: #0f766e;
   transition: transform 0.16s ease;

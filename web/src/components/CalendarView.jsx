@@ -1457,7 +1457,7 @@ function CalendarView() {
 
   return (
     <div className="calendar-shell md-page relative flex h-full flex-col [&_button:focus]:outline-none [&_button:focus-visible]:outline-none">
-      <div className="calendar-topbar sticky top-0 z-30 bg-white/95 backdrop-blur">
+      <div className="calendar-topbar sticky top-0 z-[90] bg-white/95 backdrop-blur">
         <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
           <div className="inline-flex items-center gap-2">
             <div className="calendar-nav-group h-9">
@@ -1506,7 +1506,7 @@ function CalendarView() {
                 <ChevronDown className={`h-3.5 w-3.5 transition-transform ${viewDropdownOpen ? 'rotate-180' : ''}`} strokeWidth={2.1} />
               </button>
               {viewDropdownOpen && (
-                <div className="calendar-view-menu absolute left-0 top-10 z-40 min-w-[7.5rem] overflow-hidden py-1">
+                <div className="calendar-view-menu absolute left-0 top-10 z-[95] min-w-[7.5rem] overflow-hidden py-1">
                   {viewOptions.map((option) => (
                     <button
                       key={option.value}
