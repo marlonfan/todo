@@ -55,6 +55,14 @@ test-results/
 web/playwright-report/
 web/test-results/
 
+# Android
+android/
+release-apk/
+*.apk
+tauri-*.png
+tauri-window*.xml
+/package-lock.json
+
 # Config (keep example)
 config.yaml
 !config.yaml.example
