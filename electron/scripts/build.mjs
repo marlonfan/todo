@@ -7,10 +7,14 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const webDir = path.join(repoRoot, 'web');
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const apiBaseURL = process.env.VITE_API_BASE_URL || 'https://todo.marlon.life/api';
 
 const result = spawnSync(npm, ['run', 'build:desktop'], {
   cwd: webDir,
-  env: process.env,
+  env: {
+    ...process.env,
+    VITE_API_BASE_URL: apiBaseURL,
+  },
   shell: process.platform === 'win32',
   stdio: 'inherit',
 });

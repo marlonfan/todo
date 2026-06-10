@@ -5428,7 +5428,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   )}
 
                   {detailPanel === 'recurrence' && (
-                      <div className="task-quick-popover task-quick-popover-scroll md-popover fixed z-20 w-[18.25rem]" style={detailPanelFloatingStyle}>
+                      <div className="task-quick-popover task-quick-popover-scroll task-recurrence-popover md-popover fixed z-20 w-[18.25rem]" style={detailPanelFloatingStyle}>
                         <div className="task-quick-header">
                           <div className="task-quick-title">{t('task.repeat')}</div>
                           <div className="task-quick-toggle">
@@ -5464,7 +5464,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         </div>
 
                         {draft.recurrence_enabled && (
-                          <div className="space-y-2">
+                          <div className="task-quick-content space-y-2">
                             <div className="task-quick-menu">
                               {[
                                 { value: 'daily', label: t('task.daily') },

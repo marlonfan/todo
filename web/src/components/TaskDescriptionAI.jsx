@@ -247,6 +247,7 @@ function TaskDescriptionAI({
         disabled={!generating && (disabled || !task)}
         className="task-ai-trigger"
         title={generating ? t('task.aiDescriptionStop') : t('task.aiDescriptionTitle')}
+        aria-label={generating ? t('task.aiDescriptionStop') : t('task.aiDescriptionAction')}
       >
         {generating ? <X className="h-4 w-4" /> : <Wand2 className="h-4 w-4" />}
         <span>{generating ? t('task.aiDescriptionStop') : t('task.aiDescriptionAction')}</span>

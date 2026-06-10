@@ -2431,7 +2431,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                   )}
 
                   {basicPanel === 'recurrence' && (
-                    <div className="task-quick-popover task-quick-popover-scroll absolute left-0 top-10 z-20 w-[min(18.25rem,calc(100vw-3.5rem))]">
+                    <div className="task-quick-popover task-quick-popover-scroll task-recurrence-popover absolute left-0 top-10 z-20 w-[min(18.25rem,calc(100vw-3.5rem))]">
                       <div className="task-quick-header">
                         <div className="task-quick-title">{t('task.repeat')}</div>
                         <div className="task-quick-toggle">
@@ -2462,7 +2462,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                       </div>
 
                       {showRecurrence && (
-                        <div className="space-y-2">
+                        <div className="task-quick-content space-y-2">
                           <div className="task-quick-menu">
                             {[
                               { value: 'daily', label: t('task.daily') },

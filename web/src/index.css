@@ -2060,6 +2060,12 @@ body {
   color: #a6b3c3;
 }
 
+.prompt-ask-textarea:read-only {
+  background: #f8fafc;
+  color: #334155;
+  cursor: text;
+}
+
 .prompt-dialog-footer {
   display: flex;
   align-items: center;
@@ -2655,8 +2661,8 @@ body {
 .task-ai-description {
   position: absolute;
   z-index: 25;
-  top: 0.35rem;
-  right: 1.65rem;
+  top: 0.45rem;
+  right: 0.18rem;
   display: flex;
   justify-content: flex-end;
   pointer-events: none;
@@ -2664,20 +2670,22 @@ body {
 
 .task-ai-description--compact {
   top: 0.35rem;
-  right: 1.65rem;
+  right: 0.18rem;
 }
 
 .task-ai-trigger {
   display: inline-flex;
-  min-height: 1.95rem;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
   align-items: center;
   justify-content: center;
-  gap: 0.42rem;
+  gap: 0;
   border: 1px solid #bfdbfe;
   border-radius: 999px;
   background: rgba(239, 246, 255, 0.92);
   color: #1d4ed8;
-  padding: 0 0.68rem;
+  padding: 0;
   font-size: 0.78rem;
   font-weight: 700;
   line-height: 1;
@@ -2690,6 +2698,11 @@ body {
     border-color 0.16s ease,
     color 0.16s ease,
     transform 0.16s ease;
+  transform: translateX(42%);
+}
+
+.task-ai-trigger span {
+  display: none;
 }
 
 .task-ai-trigger:hover {
@@ -2699,7 +2712,7 @@ body {
 }
 
 .task-ai-trigger:active {
-  transform: translateY(1px);
+  transform: translateX(42%) translateY(1px);
 }
 
 .task-ai-trigger:disabled {
@@ -3020,6 +3033,41 @@ body {
 .task-description-editor-shell {
   position: relative;
   min-width: 0;
+  overflow: visible !important;
+}
+
+.task-recurrence-popover .task-quick-menu {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.24rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 0.04rem 0.06rem;
+  scrollbar-width: none;
+}
+
+.task-recurrence-popover .task-quick-menu::-webkit-scrollbar {
+  display: none;
+}
+
+.task-recurrence-popover .task-quick-menu .task-quick-option {
+  width: auto;
+  min-height: 1.72rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0 0.58rem;
+}
+
+.task-recurrence-popover .task-quick-menu .task-quick-option-icon,
+.task-recurrence-popover .task-quick-menu .task-quick-option-check {
+  display: none;
+}
+
+.task-recurrence-popover .task-quick-menu .task-quick-option-label {
+  flex: 0 0 auto;
+  font-size: 0.74rem;
 }
 
 @media (max-width: 900px) and (min-width: 641px) {
@@ -3030,14 +3078,14 @@ body {
 
 @media (max-width: 640px) {
   .task-ai-popover {
-    position: fixed;
-    left: 0.75rem;
-    right: 0.75rem;
-    top: auto;
-    bottom: 0.75rem;
-    width: auto;
-    max-height: min(34rem, calc(100dvh - 1.5rem));
-    overflow: hidden;
+    position: absolute;
+    right: -0.18rem;
+    left: auto;
+    top: calc(100% + 0.52rem);
+    bottom: auto;
+    width: min(25rem, calc(100vw - 1.5rem));
+    max-height: min(28rem, calc(100dvh - 9rem));
+    overflow: auto;
     border-radius: 20px;
     box-shadow: 0 24px 70px -36px rgba(15, 23, 42, 0.62);
   }

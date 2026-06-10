@@ -562,7 +562,7 @@ function PromptManager() {
           onChange={(event) => setAskInput(event.target.value)}
           className="prompt-ask-textarea"
           placeholder={t('prompt.askInputPlaceholder')}
-          disabled={asking || Boolean(selectedHistory)}
+          readOnly={asking || Boolean(selectedHistory)}
         />
         <div className="prompt-ask-controls">
           {asking ? (

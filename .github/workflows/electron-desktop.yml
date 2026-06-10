@@ -10,6 +10,20 @@ on:
         description: 'API base URL'
         required: false
         default: 'https://todo.marlon.life/api'
+      release_tag:
+        description: 'Release tag for manual runs. Leave empty to use electron-v<version>-<run_number>.'
+        required: false
+        default: ''
+      draft:
+        description: 'Create the GitHub release as a draft'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Mark the GitHub release as a prerelease'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -23,14 +37,10 @@ jobs:
             artifact: Todo-Electron-macOS
             paths: |
               electron/dist/*.dmg
-              electron/dist/*.zip
-              electron/dist/*.blockmap
           - os: windows-latest
             artifact: Todo-Electron-Windows
             paths: |
               electron/dist/*.exe
-              electron/dist/*.msi
-              electron/dist/*.blockmap
 
     runs-on: ${{ matrix.os }}
 
@@ -74,9 +84,29 @@ jobs:
     name: Publish GitHub release
     needs: build-electron
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.release_tag }}"
+            if [[ -z "${tag}" ]]; then
+              version="$(node -p "require('./electron/package.json').version")"
+              tag="electron-v${version}-${GITHUB_RUN_NUMBER}"
+            fi
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "name=Todo Desktop ${tag}" >> "${GITHUB_OUTPUT}"
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -86,4 +116,10 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: ${{ steps.release.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.draft || false }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease || false }}
+          fail_on_unmatched_files: true
           files: release-assets/*

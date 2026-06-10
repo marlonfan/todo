@@ -12,6 +12,7 @@ let tray = null;
 let isQuitting = false;
 const scheduledNotifications = new Map();
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAC_TRAY_TEMPLATE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAAAfElEQVR4nO3VUQrAIAwDUO9/aXeCimlTU1gC/jiID6e4lvOT7MsxCtOKQhGtOBaGgmJjyqioDFm4FaTuoR5IgwyK5m+vt0FSkKzLoGxJ5uGkPB8GZUGVHvmhRnaxHYT+VriQgaGCdvANwdBBjFHKKAwb9SSyhU8ZB3Ke5QM4aGimfd1r3QAAAABJRU5ErkJggg==';
 
 function resolveResourcePath(...segments) {
   if (app.isPackaged) {
@@ -31,12 +32,142 @@ function getIconPath() {
 }
 
 function getTrayIcon() {
-  const trayIconPath = resolveResourcePath('src-tauri', 'icons', '32x32.png');
+  if (isMac) {
+    const image = nativeImage.createFromDataURL(`data:image/png;base64,${MAC_TRAY_TEMPLATE_PNG_BASE64}`);
+    if (!image.isEmpty()) {
+      image.setTemplateImage(true);
+      return image;
+    }
+  }
+
+  const trayIconPath = resolveResourcePath('src-tauri', 'icons', isMac ? '64x64.png' : '32x32.png');
   const image = nativeImage.createFromPath(trayIconPath);
-  if (isMac && !image.isEmpty()) {
-    image.setTemplateImage(true);
+  if (image.isEmpty()) {
+    return image;
+  }
+  if (isMac) {
+    const resized = image.resize({ width: 18, height: 18 });
+    resized.setTemplateImage(true);
+    return resized;
   }
   return image;
+}
+
+function setDockIcon() {
+  if (!isMac || !app.dock) return;
+  const image = nativeImage.createFromPath(getIconPath());
+  if (!image.isEmpty()) {
+    app.dock.setIcon(image);
+  }
+}
+
+function buildApplicationMenu() {
+  if (!isMac) {
+    return Menu.buildFromTemplate([
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'delete' },
+          { type: 'separator' },
+          { role: 'selectAll' },
+        ],
+      },
+    ]);
+  }
+
+  return Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        {
+          label: '显示 Todo',
+          accelerator: 'CommandOrControl+Shift+T',
+          click: showMainWindow,
+        },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: '文件',
+      submenu: [
+        {
+          label: '关闭窗口',
+          accelerator: 'Command+W',
+          click: () => {
+            const focusedWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+            if (focusedWindow) {
+              focusedWindow.close();
+            }
+          },
+        },
+      ],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'delete' },
+        { type: 'separator' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        {
+          label: '显示 Todo',
+          click: showMainWindow,
+        },
+      ],
+    },
+  ]);
+}
+
+function buildTextEditingContextMenu(params) {
+  const template = [];
+
+  if (params.isEditable) {
+    template.push(
+      { role: 'undo', enabled: params.editFlags.canUndo },
+      { role: 'redo', enabled: params.editFlags.canRedo },
+      { type: 'separator' },
+      { role: 'cut', enabled: params.editFlags.canCut },
+      { role: 'copy', enabled: params.editFlags.canCopy },
+      { role: 'paste', enabled: params.editFlags.canPaste },
+      { role: 'delete', enabled: params.editFlags.canDelete },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: params.editFlags.canSelectAll },
+    );
+  } else if (params.selectionText) {
+    template.push(
+      { role: 'copy', enabled: params.editFlags.canCopy },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: params.editFlags.canSelectAll },
+    );
+  }
+
+  return template.length > 0 ? Menu.buildFromTemplate(template) : null;
 }
 
 function showMainWindow() {
@@ -111,6 +242,13 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const menu = buildTextEditingContextMenu(params);
+    if (menu) {
+      menu.popup({ window: mainWindow });
+    }
   });
 
   if (isDev) {
@@ -205,7 +343,7 @@ function registerIPC() {
 }
 
 app.setName('Todo');
-Menu.setApplicationMenu(Menu.buildFromTemplate([]));
+Menu.setApplicationMenu(buildApplicationMenu());
 if (isWindows) {
   app.setAppUserModelId('life.marlon.todo');
 }
@@ -218,6 +356,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     registerIPC();
+    setDockIcon();
     createTray();
     createWindow();
 
