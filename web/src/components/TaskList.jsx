@@ -101,83 +101,47 @@ import {
   DropdownMenuTrigger,
 } from './ui/DropdownMenu';
 
-const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
-const ORDINAL_WEEKDAY_RE = /^(-?\d)(MO|TU|WE|TH|FR|SA|SU)$/;
-const DRAFT_IDLE_SUBMIT_MS = 3000;
-const DRAFT_TEXT_AUTOSAVE_MS = 2500;
-const DRAFT_DESCRIPTION_RENDER_DELAY_MS = 120;
-const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
-const RECURRENCE_INTERVAL_MAX = 99;
-const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
-const PINNED_NEXT_OCCURRENCE_TTL_MS = 4000;
-const TASK_ROW_COMPLETE_FEEDBACK_MS = 140;
-const TASK_ROW_COMPLETE_EXIT_MS = 180;
-const TASK_ROW_INSERT_MS = 220;
-const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled,skipped';
-const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
-const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
-const DELETE_DIALOG_KIND_TASK = 'task';
-const DETAIL_PANELS_REQUIRING_CONFIRM = new Set(['time', 'recurrence']);
-const DETAIL_PANEL_FLOATING_WIDTH_REMS = {
-  activity: 30,
-  priority: 12.25,
-  category: 14.75,
-  recurrence: 18.25,
-};
-const TASK_PULL_REFRESH_TRIGGER_PX = 58;
-const TASK_PULL_REFRESH_MAX_PX = 76;
-const TASK_PULL_REFRESH_HOLD_PX = 54;
-const TASK_PULL_REFRESH_RESISTANCE = 0.46;
-const TASK_COMPACT_MOBILE_BREAKPOINT = 768;
-const TASK_DETAIL_SPLIT_MIN_WIDTH = 800;
-const TASK_SPLIT_STORAGE_KEY = 'todo:taskListDetailSplitRatio';
-const TASK_SPLIT_DEFAULT_RATIO = 0.55;
-const TASK_SPLIT_MIN_LIST_WIDTH = 320;
-const TASK_SPLIT_MIN_DETAIL_WIDTH = 340;
-const TASK_SPLIT_DIVIDER_WIDTH = 8;
-const TASK_SPLIT_KEYBOARD_STEP = 0.03;
-const TIME_PANEL_DRAFT_FIELDS = ['all_day', 'start_time', 'end_time'];
-const RECURRENCE_PANEL_DRAFT_FIELDS = [
-  'recurrence_enabled',
-  'recurrence_type',
-  'recurrence_interval',
-  'recurrence_days',
-  'recurrence_date',
-  'recurrence_lunar_month',
-  'recurrence_lunar_day',
-  'recurrence_lunar_is_leap_month',
-];
-
-function clampNumber(value, min, max) {
-  const safeMin = Number.isFinite(min) ? min : 0;
-  const safeMax = Math.max(safeMin, Number.isFinite(max) ? max : safeMin);
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) return safeMin;
-  return Math.min(Math.max(parsed, safeMin), safeMax);
-}
-
-function readTaskSplitRatio() {
-  if (typeof window === 'undefined') return TASK_SPLIT_DEFAULT_RATIO;
-  const stored = window.localStorage?.getItem(TASK_SPLIT_STORAGE_KEY);
-  return clampNumber(stored, 0.25, 0.75) || TASK_SPLIT_DEFAULT_RATIO;
-}
-
-function writeTaskSplitRatio(ratio) {
-  if (typeof window === 'undefined') return;
-  window.localStorage?.setItem(TASK_SPLIT_STORAGE_KEY, String(clampNumber(ratio, 0.25, 0.75).toFixed(4)));
-}
-
-function isTaskCompactMobileLayout() {
-  if (typeof window === 'undefined') return false;
-  return window.innerWidth < TASK_COMPACT_MOBILE_BREAKPOINT;
-}
-
-function shouldUseTaskModalLayout(workspaceWidth) {
-  if (isTaskCompactMobileLayout()) return true;
-  const measuredWidth = Number(workspaceWidth || 0);
-  if (measuredWidth > 0) return measuredWidth < TASK_DETAIL_SPLIT_MIN_WIDTH;
-  return false;
-}
+import {
+  WEEKDAY_ONLY_RE,
+  ORDINAL_WEEKDAY_RE,
+  DRAFT_IDLE_SUBMIT_MS,
+  DRAFT_TEXT_AUTOSAVE_MS,
+  DRAFT_DESCRIPTION_RENDER_DELAY_MS,
+  DEFAULT_WORKDAY_KEYS,
+  RECURRENCE_INTERVAL_MAX,
+  OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS,
+  PINNED_NEXT_OCCURRENCE_TTL_MS,
+  TASK_ROW_COMPLETE_FEEDBACK_MS,
+  TASK_ROW_COMPLETE_EXIT_MS,
+  TASK_ROW_INSERT_MS,
+  RECURRING_SEARCH_STATUSES,
+  DELETE_DIALOG_KIND_RECURRING_CHOICE,
+  DELETE_DIALOG_KIND_RECURRING_SERIES,
+  DELETE_DIALOG_KIND_TASK,
+  DETAIL_PANELS_REQUIRING_CONFIRM,
+  DETAIL_PANEL_FLOATING_WIDTH_REMS,
+  TASK_PULL_REFRESH_TRIGGER_PX,
+  TASK_PULL_REFRESH_MAX_PX,
+  TASK_PULL_REFRESH_HOLD_PX,
+  TASK_PULL_REFRESH_RESISTANCE,
+  TASK_COMPACT_MOBILE_BREAKPOINT,
+  TASK_DETAIL_SPLIT_MIN_WIDTH,
+  TASK_SPLIT_STORAGE_KEY,
+  TASK_SPLIT_DEFAULT_RATIO,
+  TASK_SPLIT_MIN_LIST_WIDTH,
+  TASK_SPLIT_MIN_DETAIL_WIDTH,
+  TASK_SPLIT_DIVIDER_WIDTH,
+  TASK_SPLIT_KEYBOARD_STEP,
+  TIME_PANEL_DRAFT_FIELDS,
+  RECURRENCE_PANEL_DRAFT_FIELDS,
+} from './taskListConstants';
+import {
+  clampNumber,
+  readTaskSplitRatio,
+  writeTaskSplitRatio,
+  isTaskCompactMobileLayout,
+  shouldUseTaskModalLayout,
+} from './taskListSplit';
 
 function isDraftSwitchDebugEnabled() {
   if (typeof window === 'undefined') return false;
