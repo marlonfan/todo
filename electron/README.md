@@ -1,6 +1,6 @@
 # Todo Electron Desktop
 
-Electron implementation of the existing Tauri desktop shell.
+Electron desktop shell for the Todo app.
 
 ## What It Covers
 
@@ -10,9 +10,7 @@ Electron implementation of the existing Tauri desktop shell.
 - System notifications through an Electron IPC bridge.
 - Hash routing for desktop builds loaded from `file://`.
 - Reuses the existing React frontend in `web/`.
-- Reuses existing Tauri icon assets from `src-tauri/icons/`.
-
-Android-specific Tauri token storage is intentionally not implemented.
+- Bundles its own icon assets in `electron/icons/`.
 
 ## Development
 

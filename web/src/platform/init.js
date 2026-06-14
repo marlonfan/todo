@@ -1,13 +1,9 @@
-function isTauri() {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
-
 function isElectron() {
   return typeof window !== 'undefined' && Boolean(window.todoElectron);
 }
 
 function isDesktopRuntime() {
-  return isTauri() || isElectron();
+  return isElectron();
 }
 
 // App.jsx 可以 await 这个 Promise，等平台 token 初始化完成再检查 token
@@ -36,16 +32,6 @@ export async function initPlatform() {
       localStorage.removeItem(STORAGE_KEY);
     },
   };
-
-  // 迁移：读取上一版本写入的旧 key
-  if (!_token) {
-    const legacy = localStorage.getItem('__tauri_auth_token__');
-    if (legacy) {
-      _token = legacy;
-      localStorage.setItem(STORAGE_KEY, _token);
-      localStorage.removeItem('__tauri_auth_token__');
-    }
-  }
 
   // 通知等待方：token 已就绪
   _resolveReady();

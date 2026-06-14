@@ -41,7 +41,7 @@ import {
 } from '../platform/localNotifications';
 
 // --- Platform abstraction layer ---
-// Tauri (or any other shell) can override before the app boots via window.__todoPlatform:
+// Electron (or any other shell) can override before the app boots via window.__todoPlatform:
 //   window.__todoPlatform = { setInterval, onOnline, onVisibilityChange, isVisible }
 //
 // setInterval(fn, ms)       → returns a cancel function () => void

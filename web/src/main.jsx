@@ -10,9 +10,7 @@ import { initializeSyncEngine } from './data/syncEngine'
 import { initPlatform } from './platform/init'
 
 (async () => {
-  const isTauri = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri);
-  const isElectron = Boolean(window.todoElectron);
-  const isDesktopRuntime = isTauri || isElectron;
+  const isDesktopRuntime = Boolean(window.todoElectron);
   const shouldUseServiceWorker = 'serviceWorker' in navigator && !isDesktopRuntime && !import.meta.env.DEV;
 
   // Dev servers need fresh modules for HMR, so clear any SW left from older runs.

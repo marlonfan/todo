@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // --- Platform-agnostic token storage ---
-// In Tauri, inject a platform implementation via window.__tokenStore before the app boots:
+// In desktop shells (Electron), inject a platform implementation via window.__tokenStore before the app boots:
 //   window.__tokenStore = { get, set, remove }
 const defaultTokenStore = {
   get: () => localStorage.getItem('token'),
@@ -22,7 +22,7 @@ export function getToken() {
 
 function isDesktopRuntime() {
   if (typeof window === 'undefined') return false;
-  return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri || window.todoElectron);
+  return Boolean(window.todoElectron);
 }
 
 function getDefaultAPIBaseURL() {
@@ -97,8 +97,8 @@ async function attemptTokenRefresh() {
   return newToken;
 }
 
-function isTauriCrossOriginAPI() {
-  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return false;
+function isCrossOriginDesktopAPI() {
+  if (!isDesktopRuntime()) return false;
   const base = getDefaultAPIBaseURL();
   try {
     const resolved = new URL(base, window.location.origin);
@@ -120,7 +120,7 @@ function shouldRetryWithoutTaskMutationHeaders(error) {
   const config = error?.config;
   if (!config?.__todoTaskMutationHeaders || config._retriedWithoutTaskMutationHeaders) return false;
   if (error?.response) return false;
-  return isTauriCrossOriginAPI();
+  return isCrossOriginDesktopAPI();
 }
 
 // Response interceptor for error handling

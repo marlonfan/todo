@@ -21,14 +21,21 @@ function resolveResourcePath(...segments) {
   return path.join(__dirname, '..', ...segments);
 }
 
+function resolveIconPath(...segments) {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'icons', ...segments);
+  }
+  return path.join(__dirname, 'icons', ...segments);
+}
+
 function getIconPath() {
   if (process.platform === 'win32') {
-    return resolveResourcePath('src-tauri', 'icons', 'icon.ico');
+    return resolveIconPath('icon.ico');
   }
   if (isMac) {
-    return resolveResourcePath('src-tauri', 'icons', 'icon.icns');
+    return resolveIconPath('icon.icns');
   }
-  return resolveResourcePath('src-tauri', 'icons', 'icon.png');
+  return resolveIconPath('icon.png');
 }
 
 function getTrayIcon() {
@@ -40,7 +47,7 @@ function getTrayIcon() {
     }
   }
 
-  const trayIconPath = resolveResourcePath('src-tauri', 'icons', isMac ? '64x64.png' : '32x32.png');
+  const trayIconPath = resolveIconPath(isMac ? '64x64.png' : '32x32.png');
   const image = nativeImage.createFromPath(trayIconPath);
   if (image.isEmpty()) {
     return image;

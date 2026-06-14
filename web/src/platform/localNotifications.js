@@ -12,11 +12,9 @@ const DEFAULT_LOOKAHEAD_DAYS = 30;
 const MAX_SCHEDULED_NOTIFICATIONS = 64;
 const REMINDER_GROUP = 'todo-local-reminders';
 const NOTIFICATION_CHANNEL_ID = 'todo-reminders';
-const NOTIFICATION_CHANNEL_NAME = 'Todo reminders';
 const ID_NAMESPACE = 0x5a170000;
 const ID_MASK = 0x000fffff;
 
-let notificationModulePromise = null;
 let refreshTimer = null;
 let started = false;
 let reconcileRunning = false;
@@ -28,16 +26,12 @@ function isBrowser() {
   return typeof window !== 'undefined';
 }
 
-export function isTauriRuntime() {
-  return isBrowser() && Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.isTauri);
-}
-
 export function isElectronRuntime() {
   return isBrowser() && Boolean(window.todoElectron?.notifications);
 }
 
 function isDesktopNotificationRuntime() {
-  return isTauriRuntime() || isElectronRuntime();
+  return isElectronRuntime();
 }
 
 function readBooleanSetting(key, fallback) {
@@ -118,35 +112,22 @@ export function setLocalNotificationRefreshSeconds(seconds) {
 
 async function loadNotificationModule() {
   if (!isDesktopNotificationRuntime()) return null;
-  if (isElectronRuntime()) {
-    const electronNotifications = window.todoElectron.notifications;
-    return {
-      Importance: { Default: 3 },
-      Visibility: { Private: 0 },
-      Schedule: {
-        at: (date) => ({ at: date instanceof Date ? date.toISOString() : new Date(date).toISOString() }),
-      },
-      isPermissionGranted: () => electronNotifications.isPermissionGranted(),
-      requestPermission: () => electronNotifications.requestPermission(),
-      sendNotification: (payload) => {
-        void electronNotifications.send(payload).catch((error) => {
-          console.error('Failed to send Electron notification:', error);
-        });
-      },
-      cancel: (ids) => electronNotifications.cancel(ids),
-      createChannel: async () => {},
-    };
-  }
-  if (!notificationModulePromise) {
-    notificationModulePromise = import('@tauri-apps/plugin-notification');
-  }
-  try {
-    return await notificationModulePromise;
-  } catch (error) {
-    console.error('Failed to load Tauri notification plugin:', error);
-    notificationModulePromise = null;
-    return null;
-  }
+  const electronNotifications = window.todoElectron.notifications;
+  return {
+    Importance: { Default: 3 },
+    Visibility: { Private: 0 },
+    Schedule: {
+      at: (date) => ({ at: date instanceof Date ? date.toISOString() : new Date(date).toISOString() }),
+    },
+    isPermissionGranted: () => electronNotifications.isPermissionGranted(),
+    requestPermission: () => electronNotifications.requestPermission(),
+    sendNotification: (payload) => {
+      void electronNotifications.send(payload).catch((error) => {
+        console.error('Failed to send Electron notification:', error);
+      });
+    },
+    cancel: (ids) => electronNotifications.cancel(ids),
+  };
 }
 
 function parseScheduleState(raw) {
@@ -418,27 +399,11 @@ export async function cancelScheduledLocalNotifications() {
   await writeScheduleState({ ids: [], items: [] });
 }
 
-async function ensureAndroidChannel(plugin) {
-  if (!plugin?.createChannel) return;
-  try {
-    await plugin.createChannel({
-      id: NOTIFICATION_CHANNEL_ID,
-      name: NOTIFICATION_CHANNEL_NAME,
-      description: 'Task reminders from Todo',
-      importance: plugin.Importance?.Default ?? 3,
-      visibility: plugin.Visibility?.Private ?? 0,
-    });
-  } catch (error) {
-    console.error('Failed to create notification channel:', error);
-  }
-}
-
 export async function sendLocalNotificationTest() {
   const plugin = await loadNotificationModule();
   if (!plugin) throw new Error('local notifications are not available');
   const granted = await ensurePermission({ request: true });
   if (!granted) throw new Error('notification permission was not granted');
-  await ensureAndroidChannel(plugin);
   plugin.sendNotification({
     id: buildNotificationID(`test|${Date.now()}`),
     channelId: NOTIFICATION_CHANNEL_ID,
@@ -478,7 +443,6 @@ export async function reconcileLocalNotifications(options = {}) {
     return { scheduled: 0, supported: true, enabled: true, permission: lastPermissionState };
   }
 
-  await ensureAndroidChannel(plugin);
   const current = await readScheduleState();
   const candidates = await fetchReminderSources();
   const nextIDs = candidates.map((item) => item.id);

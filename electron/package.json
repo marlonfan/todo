@@ -33,13 +33,13 @@
         "to": "web/dist"
       },
       {
-        "from": "../src-tauri/icons",
-        "to": "src-tauri/icons"
+        "from": "icons",
+        "to": "icons"
       }
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "../src-tauri/icons/icon.icns",
+      "icon": "icons/icon.icns",
       "identity": null,
       "target": [
         "dmg",
@@ -47,7 +47,7 @@
       ]
     },
     "win": {
-      "icon": "../src-tauri/icons/icon.ico",
+      "icon": "icons/icon.ico",
       "target": [
         "nsis",
         "msi"
@@ -59,7 +59,7 @@
     },
     "linux": {
       "category": "Office",
-      "icon": "../src-tauri/icons/icon.png",
+      "icon": "icons/icon.png",
       "target": [
         "AppImage",
         "deb"
