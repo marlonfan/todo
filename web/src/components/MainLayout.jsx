@@ -1,13 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import CalendarView from './CalendarView';
-import TaskList, { TaskListView } from './TaskList';
-import CategoryManager from './CategoryManager';
-import PromptManager from './PromptManager';
-import Settings from './Settings';
-import SearchDialog from './SearchDialog';
 import {
   IconCalendar,
   IconClock,
@@ -42,6 +36,14 @@ import {
   subscribeSyncConflicts,
 } from '../state/syncConflictCenter';
 import { formatDateTime } from '../utils/time';
+
+const CalendarView = lazy(() => import('./CalendarView'));
+const TaskList = lazy(() => import('./TaskList'));
+const TaskListView = lazy(() => import('./TaskList').then((module) => ({ default: module.TaskListView })));
+const CategoryManager = lazy(() => import('./CategoryManager'));
+const PromptManager = lazy(() => import('./PromptManager'));
+const Settings = lazy(() => import('./Settings'));
+const SearchDialog = lazy(() => import('./SearchDialog'));
 
 function normalizeMobileDefaultTab(value) {
   if (value === 'calendar' || value === 'settings') return value;
@@ -497,9 +499,9 @@ function MainLayout({ user, setUser }) {
       case 'tasks_calendar_categories_settings':
         return [baseTabs.tasks, baseTabs.calendar, baseTabs.categories, baseTabs.prompts, baseTabs.settings];
       case 'tasks_inbox_calendar_settings':
-        return [baseTabs.inbox, baseTabs.search, baseTabs.calendar, baseTabs.settings];
+        return [baseTabs.inbox, baseTabs.prompts, baseTabs.search, baseTabs.calendar, baseTabs.settings];
       default:
-        return [baseTabs.tasks, baseTabs.search, baseTabs.calendar, baseTabs.settings];
+        return [baseTabs.tasks, baseTabs.prompts, baseTabs.search, baseTabs.calendar, baseTabs.settings];
     }
   }, [mobilePrefs.tabPreset, t]);
 
@@ -549,6 +551,11 @@ function MainLayout({ user, setUser }) {
   const navItemClass = (active) => `md-nav-item ${active ? 'md-nav-item-active' : 'md-nav-item-idle'}`;
   const appInitial = String(t('app.name') || 'T').trim().slice(0, 1).toUpperCase();
   const userAvatarURL = String(user?.avatar_url || '').trim();
+  const workspaceFallback = (
+    <div className="flex h-full min-h-0 items-center justify-center bg-white text-sm text-slate-500">
+      {t('common.loading')}
+    </div>
+  );
   const hideMobileHeader = location.pathname === '/';
   const taskPanelLocationRef = useRef(
     location.pathname === '/tasks'
@@ -988,22 +995,24 @@ function MainLayout({ user, setUser }) {
 
       {/* Main Content */}
       <div className="main-workspace relative min-w-0 flex-1 overflow-hidden pb-14 md:pb-0">
-        {shouldRenderCalendarWorkspace && (
-          <div className={`absolute inset-0 ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
-            <CalendarView />
-          </div>
-        )}
-        {shouldRenderTaskWorkspace && (
-          <div className={`absolute inset-0 ${showTaskWorkspace ? 'z-10' : 'hidden'}`}>
-            <TaskListView routeLocation={taskPanelLocationRef.current} />
-          </div>
-        )}
+        <Suspense fallback={workspaceFallback}>
+          {shouldRenderCalendarWorkspace && (
+            <div className={`absolute inset-0 ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
+              <CalendarView />
+            </div>
+          )}
+          {shouldRenderTaskWorkspace && (
+            <div className={`absolute inset-0 ${showTaskWorkspace ? 'z-10' : 'hidden'}`}>
+              <TaskListView routeLocation={taskPanelLocationRef.current} />
+            </div>
+          )}
 
-        <Routes>
-          <Route path="/search" element={<TaskList forcedView="search" />} />
-          <Route path="/categories" element={<CategoryManager />} />
-          <Route path="/prompts" element={<PromptManager />} />
-        </Routes>
+          <Routes>
+            <Route path="/search" element={<TaskList forcedView="search" />} />
+            <Route path="/categories" element={<CategoryManager />} />
+            <Route path="/prompts" element={<PromptManager />} />
+          </Routes>
+        </Suspense>
       </div>
 
       <div className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-20 border-t border-border bg-white md:hidden">
@@ -1180,11 +1189,15 @@ function MainLayout({ user, setUser }) {
         </div>
       )}
 
-      <SearchDialog
-        open={!!searchDialog.open}
-        initialQuery={searchDialog.query || ''}
-        onClose={() => closeSearchDialog()}
-      />
+      {searchDialog.open && (
+        <Suspense fallback={null}>
+          <SearchDialog
+            open
+            initialQuery={searchDialog.query || ''}
+            onClose={() => closeSearchDialog()}
+          />
+        </Suspense>
+      )}
       {settingsOpen && (
         <div
           className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 p-3 backdrop-blur-[1px]"
@@ -1202,12 +1215,14 @@ function MainLayout({ user, setUser }) {
             aria-label={t('settings.title')}
             tabIndex={-1}
           >
-            <Settings
-              modal
-              user={user}
-              setUser={setUser}
-              onClose={() => setSettingsOpen(false)}
-            />
+            <Suspense fallback={workspaceFallback}>
+              <Settings
+                modal
+                user={user}
+                setUser={setUser}
+                onClose={() => setSettingsOpen(false)}
+              />
+            </Suspense>
           </div>
         </div>
       )}

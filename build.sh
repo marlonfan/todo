@@ -6,7 +6,7 @@ echo "Building Todo App..."
 # Build frontend
 echo "Building frontend..."
 cd web
-npm install
+npm ci --no-audit --no-fund
 npm run build
 cd ..
 

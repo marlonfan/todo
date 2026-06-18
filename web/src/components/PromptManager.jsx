@@ -501,23 +501,30 @@ function PromptManager() {
       key={prompt.id}
       className={`prompt-card ${readPromptID(askPrompt?.id) === readPromptID(prompt.id) && !selectedHistory ? 'prompt-card--active' : ''}`}
     >
-      <div className="prompt-card-head">
-        <span className="prompt-card-icon">
-          <Bot className="h-4 w-4" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="prompt-card-title">{prompt.title}</h3>
-          {formatDateTime(prompt.updated_at) && (
-            <div className="prompt-card-meta">
-              {t('prompt.updatedAt', { time: formatDateTime(prompt.updated_at) })}
-            </div>
-          )}
+      <button
+        type="button"
+        onClick={() => openAskPanel(prompt)}
+        className="prompt-card-primary"
+        aria-label={`${t('prompt.askAction')}: ${prompt.title}`}
+      >
+        <div className="prompt-card-head">
+          <span className="prompt-card-icon">
+            <Bot className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="prompt-card-title">{prompt.title}</h3>
+            {formatDateTime(prompt.updated_at) && (
+              <div className="prompt-card-meta">
+                {t('prompt.updatedAt', { time: formatDateTime(prompt.updated_at) })}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
 
-      <p className="prompt-card-content">
-        {prompt.content}
-      </p>
+        <p className="prompt-card-content">
+          {prompt.content}
+        </p>
+      </button>
 
       <div className="prompt-card-actions">
         <button
@@ -526,7 +533,7 @@ function PromptManager() {
           className="prompt-card-ask"
         >
           <MessageSquareText className="h-4 w-4" />
-          {t('prompt.askAction')}
+          <span className="prompt-card-ask-label">{t('prompt.askAction')}</span>
         </button>
         <button
           type="button"
@@ -723,7 +730,7 @@ function PromptManager() {
     <div className="prompt-page h-full bg-white">
       <div className="prompt-page-header">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
+          <div className="prompt-page-heading">
             <h2 className="text-xl font-semibold text-slate-950">{t('nav.prompts')}</h2>
             <p className="mt-1 text-sm text-slate-500">{t('prompt.pageHint')}</p>
           </div>
