@@ -262,7 +262,7 @@ function NotificationSettings() {
                 placeholder={t('notification.ntfy.tokenPlaceholder')}
                 className="form-input"
               />
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 {t('notification.ntfy.tokenHint')}
               </p>
             </div>
@@ -321,16 +321,16 @@ function NotificationSettings() {
         </div>
       )}
 
-      <div className="bg-white p-4 border border-gray-200">
+      <div className="bg-card p-4 border border-border">
         <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex-1">
             <h3 className="text-lg font-medium mb-2">{t('notification.local.title')}</h3>
-            <p className="text-sm text-gray-600">{t('notification.local.hint')}</p>
-            <p className="mt-2 text-sm text-gray-600">
+            <p className="text-sm text-muted-foreground">{t('notification.local.hint')}</p>
+            <p className="mt-2 text-sm text-muted-foreground">
               {t('notification.local.status')}: <span className="font-medium">{localStatus.supported ? t(`notification.local.permission.${localStatus.permission}`) : t('notification.local.unsupported')}</span>
             </p>
           </div>
-          <label className="flex min-w-0 items-center gap-2 text-sm font-medium text-gray-700 lg:shrink-0">
+          <label className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground lg:shrink-0">
             <Checkbox
               checked={localEnabled}
               onChange={(e) => handleLocalNotificationToggle(e.target.checked)}
@@ -378,7 +378,7 @@ function NotificationSettings() {
       </div>
 
       {/* Add New Setting */}
-      <div className="bg-white p-4 border border-gray-200">
+      <div className="bg-card p-4 border border-border">
         <h3 className="text-lg font-medium mb-4">{t('notification.addChannel')}</h3>
         
         <div className="space-y-4">
@@ -402,7 +402,7 @@ function NotificationSettings() {
 
           {renderConfigFields()}
 
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm text-foreground">
             <Checkbox
               checked={newSettingDefault}
               onChange={(e) => setNewSettingDefault(e.target.checked)}
@@ -430,17 +430,17 @@ function NotificationSettings() {
       </div>
 
       {/* Existing Settings */}
-      <div className="bg-white border border-gray-200">
-        <div className="p-4 border-b border-gray-200">
+      <div className="bg-card border border-border">
+        <div className="p-4 border-b border-border">
           <h3 className="font-medium">{t('settings.notifications')}</h3>
         </div>
         
         {settings.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">
+          <div className="p-8 text-center text-muted-foreground">
             {t('notification.noSettings')}
           </div>
         ) : (
-          <ul className="divide-y divide-gray-200">
+          <ul className="divide-y divide-border">
             {settings.map((setting) => (
               <li key={setting.id} className="p-4">
                 <div className="flex items-center justify-between">
@@ -449,12 +449,12 @@ function NotificationSettings() {
                       <span>{getChannelIcon(setting.channel)}</span>
                       <span className="font-medium capitalize">{setting.channel}</span>
                       {setting.is_default && (
-                        <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded">
+                        <span className="bg-accent text-primary text-xs px-2 py-0.5 rounded">
                           {t('common.default')}
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 text-sm text-gray-600">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       {Object.entries(setting.config).map(([key, value]) => {
                         if (key === 'token') return null;
                         return (
@@ -467,7 +467,7 @@ function NotificationSettings() {
                         );
                       })}
                       {setting.config.token && (
-                        <div className="text-xs text-gray-400">
+                        <div className="text-xs text-muted-foreground">
                           {t('notification.authEnabled')}
                         </div>
                       )}
@@ -486,7 +486,7 @@ function NotificationSettings() {
                     <button
                       onClick={() => handleTest(setting.channel, setting.config)}
                       disabled={loading}
-                      className="text-blue-600 hover:text-blue-800 text-sm"
+                      className="text-primary hover:text-primary text-sm"
                     >
                       {t('notification.test')}
                     </button>
@@ -505,9 +505,9 @@ function NotificationSettings() {
       </div>
 
       {/* Rebuild Reminders */}
-      <div className="bg-white border border-gray-200 p-4">
+      <div className="bg-card border border-border p-4">
         <h3 className="text-lg font-medium mb-2">{t('notification.rebuildReminders')}</h3>
-        <p className="text-sm text-gray-600 mb-4">{t('notification.rebuildRemindersHint')}</p>
+        <p className="text-sm text-muted-foreground mb-4">{t('notification.rebuildRemindersHint')}</p>
         <button
           onClick={handleReconcileReminders}
           disabled={loading}

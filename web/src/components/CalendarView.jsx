@@ -1399,7 +1399,7 @@ function CalendarView() {
         <div className={`min-w-0 py-0.5 ${isCompactMobile ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'}`} title={arg.event.title}>
           <span className={`block min-w-0 truncate leading-tight ${completed ? 'line-through opacity-80' : ''}`}>
             {arg.event.title}
-            {suffix ? <span className="text-slate-500">{suffix}</span> : null}
+            {suffix ? <span className="text-muted-foreground">{suffix}</span> : null}
           </span>
         </div>
       );
@@ -1410,7 +1410,7 @@ function CalendarView() {
         title={arg.event.title}
       >
         {hasTimeText && (
-          <span className="shrink-0 text-[10px] font-medium text-slate-500">
+          <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
             {arg.timeText}
           </span>
         )}
@@ -1457,7 +1457,7 @@ function CalendarView() {
 
   return (
     <div className="calendar-shell md-page relative flex h-full flex-col [&_button:focus]:outline-none [&_button:focus-visible]:outline-none">
-      <div className="calendar-topbar sticky top-0 z-[90] bg-white/95 backdrop-blur">
+      <div className="calendar-topbar sticky top-0 z-[90] bg-card/95 backdrop-blur">
         <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
           <div className="inline-flex items-center gap-2">
             <div className="calendar-nav-group h-9">
@@ -1530,11 +1530,11 @@ function CalendarView() {
           </div>
 
           <div className={`min-w-0 flex-1 px-2 text-center ${isCompactMobile ? 'hidden' : ''}`}>
-            <h2 className="truncate text-sm font-semibold tracking-tight text-slate-800 md:text-base">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground md:text-base">
               {currentViewTitle || t('nav.calendar')}
             </h2>
             {!isCompactMobile && (
-              <p className="truncate text-[11px] text-slate-500">
+              <p className="truncate text-[11px] text-muted-foreground">
                 {t('settings.timezone')}: {timezone === 'Asia/Shanghai' ? t('settings.timezoneCST') : timezone}
               </p>
             )}
@@ -1569,7 +1569,7 @@ function CalendarView() {
       <div className={`relative min-h-0 flex-1 ${isCompactMobile ? '' : 'overflow-auto'}`}>
         <div
           ref={desktopViewportRef}
-          className="h-full overflow-hidden bg-white"
+          className="h-full overflow-hidden bg-card"
           style={{ touchAction: 'auto' }}
         >
           <div className="h-full">
@@ -1608,7 +1608,7 @@ function CalendarView() {
       )}
 
       {!hasCalendarDataLoaded && calendarLoading && events.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-40">
+        <div className="absolute inset-0 flex items-center justify-center bg-card/50 z-40">
           <div className="text-lg">{t('common.loading')}</div>
         </div>
       )}
@@ -1623,7 +1623,7 @@ function CalendarView() {
       )}
 
       {readonlyEventOpen && readonlyEventDetail && typeof document !== 'undefined' && createPortal(
-        <div className="calendar-readonly-event-overlay fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-[1px]" onClick={handleReadonlyBackdropClick}>
+        <div className="calendar-readonly-event-overlay fixed inset-0 z-[100] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[1px]" onClick={handleReadonlyBackdropClick}>
           <div
             className="readonly-event-card mobile-scrollbar-hidden w-full max-w-[42rem] overflow-hidden"
             onClick={(event) => event.stopPropagation()}
@@ -1729,7 +1729,7 @@ function CalendarView() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border px-3 py-2">
-              <h3 className="text-sm font-semibold text-slate-800">
+              <h3 className="text-sm font-semibold text-foreground">
                 {moreEventsDateLabel} · {t('task.taskCount', { count: moreEvents.length })}
               </h3>
               <button
@@ -1747,15 +1747,15 @@ function CalendarView() {
                     <button
                       key={event.id}
                       type="button"
-                      className="mb-1 block w-full rounded-md border border-[hsl(var(--blue-border))] border-l-2 border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue-strong))] px-2.5 py-1.5 text-left transition-colors hover:bg-[hsl(var(--soft-blue))]"
+                      className="mb-1 block w-full rounded-md border border-[hsl(var(--border))] border-l-2 border-l-[hsl(var(--primary))] bg-[hsl(var(--accent))] px-2.5 py-1.5 text-left transition-colors hover:bg-[hsl(var(--muted))]"
                       onClick={() => {
                         requestCloseMoreEventsModal();
                         openTaskFromCalendarEvent(event);
                       }}
                       title={event.title}
                     >
-                      <div className="truncate text-xs font-medium text-slate-800">{event.title}</div>
-                      <div className="text-[11px] text-slate-500">{t('task.allDay') || 'All day'}</div>
+                      <div className="truncate text-xs font-medium text-foreground">{event.title}</div>
+                      <div className="text-[11px] text-muted-foreground">{t('task.allDay') || 'All day'}</div>
                     </button>
                   );
                 }
@@ -1765,20 +1765,20 @@ function CalendarView() {
                   <button
                     key={event.id}
                     type="button"
-                    className="mb-1 block w-full rounded-md border border-[hsl(var(--blue-border))] border-l-2 border-l-[hsl(var(--neutral-blue))] bg-[hsl(var(--soft-blue-strong))] px-2.5 py-1.5 text-left transition-colors hover:bg-[hsl(var(--soft-blue))]"
+                    className="mb-1 block w-full rounded-md border border-[hsl(var(--border))] border-l-2 border-l-[hsl(var(--primary))] bg-[hsl(var(--accent))] px-2.5 py-1.5 text-left transition-colors hover:bg-[hsl(var(--muted))]"
                     onClick={() => {
                       requestCloseMoreEventsModal();
                       openTaskFromCalendarEvent(event);
                     }}
                     title={event.title}
                   >
-                    <div className="truncate text-xs font-medium text-slate-800">{event.title}</div>
-                    <div className="text-[11px] text-slate-500">{endLabel ? `${startLabel} - ${endLabel}` : startLabel}</div>
+                    <div className="truncate text-xs font-medium text-foreground">{event.title}</div>
+                    <div className="text-[11px] text-muted-foreground">{endLabel ? `${startLabel} - ${endLabel}` : startLabel}</div>
                   </button>
                 );
               })}
               {moreEvents.length === 0 && (
-                <div className="px-2 py-6 text-center text-xs text-slate-500">{t('calendar.noEvents')}</div>
+                <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('calendar.noEvents')}</div>
               )}
             </div>
           </div>

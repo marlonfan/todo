@@ -260,7 +260,7 @@ function TaskDescriptionAI({
               <span className="task-ai-icon">
                 <Bot className="h-4 w-4" />
               </span>
-              <span className="truncate text-sm font-semibold text-slate-900">{t('task.aiDescriptionTitle')}</span>
+              <span className="truncate text-sm font-semibold text-foreground">{t('task.aiDescriptionTitle')}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <button

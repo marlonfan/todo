@@ -4,6 +4,7 @@ import { BrowserRouter, HashRouter } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import './i18n'  // 引入 i18n 配置
 import App from './App.jsx'
+import '@fontsource-variable/inter';
 import './index.css'
 import { queryClient } from './query/client'
 import { initializeSyncEngine } from './data/syncEngine'

@@ -46,9 +46,9 @@ function PWAInstallCard() {
   const ios = typeof window !== 'undefined' && isIOSDevice();
 
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-      <p className="text-sm font-medium text-slate-700">{t('settings.pwaTitle')}</p>
-      <p className="mt-1 text-xs text-slate-500">{t('settings.pwaHint')}</p>
+    <div className="rounded-md border border-border bg-muted p-3">
+      <p className="text-sm font-medium text-foreground-strong">{t('settings.pwaTitle')}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{t('settings.pwaHint')}</p>
       {deferredPrompt ? (
         <button
           type="button"
@@ -62,9 +62,9 @@ function PWAInstallCard() {
           {t('settings.pwaInstall')}
         </button>
       ) : ios ? (
-        <p className="mt-2 text-xs text-slate-600">{t('settings.pwaIOSHint')}</p>
+        <p className="mt-2 text-xs text-muted-foreground">{t('settings.pwaIOSHint')}</p>
       ) : (
-        <p className="mt-2 text-xs text-slate-500">{t('settings.pwaWaiting')}</p>
+        <p className="mt-2 text-xs text-muted-foreground">{t('settings.pwaWaiting')}</p>
       )}
     </div>
   );

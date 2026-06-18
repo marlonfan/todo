@@ -33,11 +33,11 @@ function Login({ setUser }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--blue-surface))] px-4">
+    <div className="min-h-screen flex items-center justify-center bg-[hsl(var(--card))] px-4">
       <div className="md-card w-full max-w-md space-y-7 p-8">
         <div>
-          <h2 className="text-3xl font-bold text-center text-slate-900">{t('app.name')}</h2>
-          <p className="mt-2 text-center text-slate-600">{t('auth.loginTitle')}</p>
+          <h2 className="text-3xl font-bold text-center text-foreground">{t('app.name')}</h2>
+          <p className="mt-2 text-center text-muted-foreground">{t('auth.loginTitle')}</p>
         </div>
 
         {error && (
@@ -82,9 +82,9 @@ function Login({ setUser }) {
         </form>
 
         <div className="text-center">
-          <p className="text-slate-600">
+          <p className="text-muted-foreground">
             {t('auth.noAccount')}{' '}
-            <Link to="/register" className="text-blue-600 hover:text-blue-800">
+            <Link to="/register" className="text-primary hover:text-primary">
               {t('auth.register')}
             </Link>
           </p>

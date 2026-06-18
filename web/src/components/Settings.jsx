@@ -881,7 +881,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   ];
 
   return (
-    <div className={`settings-page ${modal ? 'flex h-full min-h-0 overflow-hidden bg-white' : 'md-page flex h-full flex-col'}`}>
+    <div className={`settings-page ${modal ? 'flex h-full min-h-0 overflow-hidden bg-card' : 'md-page flex h-full flex-col'}`}>
       {saveToast && (
         <div className="fixed right-4 top-4 z-[70]">
           <div
@@ -896,8 +896,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
         </div>
       )}
       {modal ? (
-        <aside className="hidden w-56 shrink-0 border-r border-slate-200 bg-slate-50/80 px-3 py-5 md:block">
-          <div className="mb-4 px-2 text-base font-semibold text-slate-950">{t('settings.title')}</div>
+        <aside className="hidden w-56 shrink-0 border-r border-border bg-muted/80 px-3 py-5 md:block">
+          <div className="mb-4 px-2 text-base font-semibold text-foreground">{t('settings.title')}</div>
           <nav className="space-y-1">
             {settingsNavItems.map((item) => {
               const ItemIcon = item.icon;
@@ -909,8 +909,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   onClick={() => setActiveTab(item.key)}
                   className={`flex h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm transition-colors ${
                     active
-                      ? 'bg-white text-slate-950 shadow-sm'
-                      : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-card/70 hover:text-foreground'
                   }`}
                 >
                   <ItemIcon className="h-4 w-4 shrink-0" />
@@ -921,7 +921,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           </nav>
         </aside>
       ) : (
-        <div className="hidden border-b border-blue-100 bg-white/90 p-4 md:block">
+        <div className="hidden border-b border-accent bg-card/90 p-4 md:block">
           <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
         </div>
       )}
@@ -931,13 +931,13 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           {modal && (
             <div className="mb-5 flex items-center justify-between gap-3 md:mb-6">
               <div>
-                <h2 className="text-xl font-semibold text-slate-950">{settingsNavItems.find((item) => item.key === activeTab)?.label || t('settings.title')}</h2>
-                <p className="mt-1 text-sm text-slate-500">{t('settings.modalHint')}</p>
+                <h2 className="text-xl font-semibold text-foreground">{settingsNavItems.find((item) => item.key === activeTab)?.label || t('settings.title')}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{t('settings.modalHint')}</p>
               </div>
               <button
                 type="button"
                 onClick={onClose}
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground-strong"
                 aria-label={t('common.close')}
               >
                 <X className="h-5 w-5" />
@@ -1011,10 +1011,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
           {activeTab === 'account' && (
             <div className="space-y-4 p-1 md:p-0">
-              <div className="rounded-xl bg-slate-50 p-5">
+              <div className="rounded-xl bg-muted p-5">
                 <div className="flex flex-col items-center text-center">
                   <div className="relative">
-                    <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full bg-blue-600 text-2xl font-semibold text-white shadow-sm">
+                    <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full bg-primary text-2xl font-semibold text-white shadow-sm">
                       {avatarURL ? (
                         <img src={avatarURL} alt={t('settings.avatar')} className="h-full w-full object-cover" />
                       ) : (
@@ -1022,10 +1022,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       )}
                     </div>
                   </div>
-                  <div className="mt-3 text-base font-semibold text-slate-950">{profileUser.username || cachedUser.username}</div>
-                  <div className="mt-1 text-sm text-slate-500">{profileUser.email || cachedUser.email}</div>
+                  <div className="mt-3 text-base font-semibold text-foreground">{profileUser.username || cachedUser.username}</div>
+                  <div className="mt-1 text-sm text-muted-foreground">{profileUser.email || cachedUser.email}</div>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700">
+                    <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-white hover:bg-primary-strong">
                       <input
                         type="file"
                         accept="image/*"
@@ -1040,29 +1040,29 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                         type="button"
                         disabled={avatarBusy}
                         onClick={handleRemoveAvatar}
-                        className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                        className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground-strong hover:bg-muted disabled:opacity-60"
                       >
                         {t('settings.removeAvatar')}
                       </button>
                     )}
                   </div>
-                  <p className="mt-2 text-xs text-slate-500">{t('settings.avatarHint')}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">{t('settings.avatarHint')}</p>
                 </div>
               </div>
 
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <Shield className="h-4 w-4 text-slate-500" />
+              <div className="rounded-xl bg-muted p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Shield className="h-4 w-4 text-muted-foreground" />
                   {t('settings.accountInfo')}
                 </div>
-                <div className="mt-3 divide-y divide-slate-200 rounded-xl bg-white">
+                <div className="mt-3 divide-y divide-border rounded-xl bg-card">
                   <div className="flex items-center justify-between px-4 py-3 text-sm">
-                    <span className="text-slate-600">{t('auth.username')}</span>
-                    <span className="font-medium text-slate-900">{profileUser.username || cachedUser.username}</span>
+                    <span className="text-muted-foreground">{t('auth.username')}</span>
+                    <span className="font-medium text-foreground">{profileUser.username || cachedUser.username}</span>
                   </div>
                   <div className="flex items-center justify-between px-4 py-3 text-sm">
-                    <span className="text-slate-600">{t('auth.email')}</span>
-                    <span className="font-medium text-slate-900">{profileUser.email || cachedUser.email}</span>
+                    <span className="text-muted-foreground">{t('auth.email')}</span>
+                    <span className="font-medium text-foreground">{profileUser.email || cachedUser.email}</span>
                   </div>
                 </div>
               </div>
@@ -1073,8 +1073,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                     <KeyRound className="h-4 w-4" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-950">{t('settings.changePassword')}</div>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">{t('settings.changePasswordHint')}</p>
+                    <div className="text-sm font-semibold text-foreground">{t('settings.changePassword')}</div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('settings.changePasswordHint')}</p>
                   </div>
                 </div>
                 <div className="settings-password-fields">
@@ -1127,7 +1127,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   })}
                 </div>
                 <div className="settings-password-footer">
-                  <p className="text-xs leading-5 text-slate-500">{t('settings.passwordRequirementHint')}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">{t('settings.passwordRequirementHint')}</p>
                   <button
                     type="submit"
                     disabled={passwordBusy}
@@ -1148,15 +1148,15 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
               <div className="space-y-6">
                 <PWAInstallCard />
 
-                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="rounded-xl border border-border bg-card p-4">
                   <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 gap-3">
-                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-600">
+                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
                         <Power className="h-4 w-4" />
                       </div>
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold text-slate-900">{t('settings.startupLaunch')}</div>
-                        <p className="mt-1 text-sm leading-5 text-slate-500">
+                        <div className="text-sm font-semibold text-foreground">{t('settings.startupLaunch')}</div>
+                        <p className="mt-1 text-sm leading-5 text-muted-foreground">
                           {startupStatus.supported
                             ? t('settings.startupLaunchHint')
                             : t('settings.startupLaunchUnavailable')}
@@ -1174,12 +1174,12 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       aria-checked={Boolean(startupStatus.enabled)}
                       disabled={!startupStatus.supported || startupBusy}
                       onClick={() => handleStartupToggle(!startupStatus.enabled)}
-                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-50 ${
-                        startupStatus.enabled ? 'bg-blue-600' : 'bg-slate-300'
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${
+                        startupStatus.enabled ? 'bg-primary' : 'bg-muted'
                       }`}
                     >
                       <span
-                        className={`inline-block h-5 w-5 translate-y-[1px] rounded-full bg-white shadow-sm transition-transform ${
+                        className={`inline-block h-5 w-5 translate-y-[1px] rounded-full bg-card shadow-sm transition-transform ${
                           startupStatus.enabled ? 'translate-x-5' : 'translate-x-[1px]'
                         }`}
                       />
@@ -1189,7 +1189,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
                 {/* Language */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     {t('settings.language')}
                   </label>
                   <Select
@@ -1204,7 +1204,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
                 {/* Timezone */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     {t('settings.timezone')}
                   </label>
                   <Select
@@ -1218,13 +1218,13 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       </option>
                     ))}
                   </Select>
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-muted-foreground mt-1">
                     {t('settings.timezoneHint')}
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     {t('settings.calendarDefaultView')}
                   </label>
                   <Select
@@ -1239,7 +1239,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                     <input
                       type="checkbox"
                       checked={defaultReminderEnabled}
@@ -1250,7 +1250,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     {t('settings.defaultReminderMinutes')}
                   </label>
                   <Select
@@ -1267,7 +1267,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     {t('settings.defaultTaskStartTime')}
                   </label>
                   <input
@@ -1280,13 +1280,13 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     {t('settings.defaultTimeGranularity')}
                   </label>
                   <Select
                     value={defaultTimeGranularity}
                     onChange={(e) => handleTimeGranularityChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     {ALLOWED_TIME_GRANULARITIES.map((minutes) => (
                       <option key={minutes} value={minutes}>
@@ -1296,11 +1296,11 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   </Select>
                 </div>
 
-                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                  <p className="mb-3 text-sm font-medium text-gray-700">{t('settings.naturalTimeDefaults')}</p>
+                <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                  <p className="mb-3 text-sm font-medium text-foreground">{t('settings.naturalTimeDefaults')}</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">{t('settings.defaultMorningTime')}</label>
+                      <label className="block text-sm text-muted-foreground mb-1">{t('settings.defaultMorningTime')}</label>
                       <input
                         type="time"
                         value={defaultMorningTime}
@@ -1310,7 +1310,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">{t('settings.defaultNoonTime')}</label>
+                      <label className="block text-sm text-muted-foreground mb-1">{t('settings.defaultNoonTime')}</label>
                       <input
                         type="time"
                         value={defaultNoonTime}
@@ -1320,7 +1320,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">{t('settings.defaultAfternoonTime')}</label>
+                      <label className="block text-sm text-muted-foreground mb-1">{t('settings.defaultAfternoonTime')}</label>
                       <input
                         type="time"
                         value={defaultAfternoonTime}
@@ -1330,7 +1330,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">{t('settings.defaultEveningTime')}</label>
+                      <label className="block text-sm text-muted-foreground mb-1">{t('settings.defaultEveningTime')}</label>
                       <input
                         type="time"
                         value={defaultEveningTime}
@@ -1343,7 +1343,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                     <input
                       type="checkbox"
                       checked={showCategoryEmoji}
@@ -1354,7 +1354,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                     <input
                       type="checkbox"
                       checked={showChineseHolidays}
@@ -1364,11 +1364,11 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   </label>
                 </div>
 
-                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                  <p className="mb-3 text-sm font-medium text-gray-700">{t('settings.mobileNavigation')}</p>
+                <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                  <p className="mb-3 text-sm font-medium text-foreground">{t('settings.mobileNavigation')}</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileDefaultTab')}</label>
+                      <label className="block text-sm text-muted-foreground mb-1">{t('settings.mobileDefaultTab')}</label>
                       <Select
                         value={mobileDefaultTab}
                         onChange={(e) => handleMobileDefaultTabChange(e.target.value)}
@@ -1381,7 +1381,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                     </div>
                     {mobileDefaultTab === 'tasks' && (
                       <div>
-                        <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileDefaultTaskView')}</label>
+                        <label className="block text-sm text-muted-foreground mb-1">{t('settings.mobileDefaultTaskView')}</label>
                         <Select
                           value={mobileDefaultTaskView}
                           onChange={(e) => handleMobileDefaultTaskViewChange(e.target.value)}
@@ -1400,7 +1400,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                       </div>
                     )}
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">{t('settings.mobileTabPreset')}</label>
+                      <label className="block text-sm text-muted-foreground mb-1">{t('settings.mobileTabPreset')}</label>
                       <Select
                         value={mobileTabPreset}
                         onChange={(e) => handleMobileTabPresetChange(e.target.value)}
@@ -1420,8 +1420,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           {activeTab === 'ai' && (
             <div className="space-y-5 p-6">
               <div>
-                <h3 className="text-lg font-medium text-gray-900">{t('settings.aiSettings')}</h3>
-                <p className="mt-1 text-sm text-gray-500">{t('settings.aiSettingsHint')}</p>
+                <h3 className="text-lg font-medium text-foreground">{t('settings.aiSettings')}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{t('settings.aiSettingsHint')}</p>
               </div>
 
               <div className="settings-ai-card">
@@ -1476,7 +1476,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                         {showAIKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">{t('settings.aiLocalStorageHint')}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('settings.aiLocalStorageHint')}</p>
                   </div>
                 </div>
               </div>
@@ -1484,8 +1484,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
               <div className="settings-ai-card">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
-                    <h4 className="text-sm font-semibold text-slate-900">{t('settings.aiPromptTitle')}</h4>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">{t('settings.aiPromptHint')}</p>
+                    <h4 className="text-sm font-semibold text-foreground">{t('settings.aiPromptTitle')}</h4>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('settings.aiPromptHint')}</p>
                   </div>
                   <button
                     type="button"
@@ -1504,8 +1504,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
               </div>
 
               <div className="settings-ai-card">
-                <h4 className="text-sm font-semibold text-slate-900">{t('settings.aiUserProfileTitle')}</h4>
-                <p className="mt-1 text-xs leading-5 text-slate-500">{t('settings.aiUserProfileHint')}</p>
+                <h4 className="text-sm font-semibold text-foreground">{t('settings.aiUserProfileTitle')}</h4>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('settings.aiUserProfileHint')}</p>
                 <textarea
                   value={aiConfig.userProfile}
                   onChange={(e) => updateAIConfigDraft({ userProfile: e.target.value })}
@@ -1513,7 +1513,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   rows={5}
                   placeholder={t('settings.aiUserProfilePlaceholder')}
                 />
-                <label className="mt-4 flex items-start gap-2 text-sm font-medium text-slate-700">
+                <label className="mt-4 flex items-start gap-2 text-sm font-medium text-foreground-strong">
                   <input
                     type="checkbox"
                     checked={aiConfig.allowTaskContext}
@@ -1522,7 +1522,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   />
                   <span>
                     {t('settings.aiAllowTaskContext')}
-                    <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
+                    <span className="mt-1 block text-xs font-normal leading-5 text-muted-foreground">
                       {t('settings.aiAllowTaskContextHint')}
                     </span>
                   </span>
@@ -1549,15 +1549,15 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           {activeTab === 'sync' && (
             <div className="space-y-6 p-6">
               <div>
-                <h3 className="text-lg font-medium text-gray-900">{t('settings.syncSettings')}</h3>
-                <p className="mt-1 text-sm text-gray-500">{t('settings.syncSettingsHint')}</p>
+                <h3 className="text-lg font-medium text-foreground">{t('settings.syncSettings')}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{t('settings.syncSettingsHint')}</p>
               </div>
 
-              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
-                <p className="text-sm text-gray-700">
+              <div className="rounded-xl border border-accent bg-accent/40 p-4">
+                <p className="text-sm text-foreground">
                   {t('settings.syncPendingCount')}: <span className="font-medium">{syncStatus.pendingCount}</span>
                 </p>
-                <p className="mt-1 text-sm text-gray-700">
+                <p className="mt-1 text-sm text-foreground">
                   {t('settings.syncLastPull')}: <span className="font-medium">{formatSyncTime(syncStatus.lastPullAt)}</span>
                 </p>
                 {syncStatus.lastError && (
@@ -1567,9 +1567,9 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 )}
               </div>
 
-              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
-                <p className="text-sm font-medium text-gray-700">Auto sync interval</p>
-                <p className="mt-1 text-sm text-gray-500">Longer interval avoids overlapping slow calendar/task pulls.</p>
+              <div className="rounded-xl border border-accent bg-accent/40 p-4">
+                <p className="text-sm font-medium text-foreground">Auto sync interval</p>
+                <p className="mt-1 text-sm text-muted-foreground">Longer interval avoids overlapping slow calendar/task pulls.</p>
                 <Select
                   value={String(syncIntervalSeconds)}
                   onChange={(e) => handleSyncIntervalChange(e.target.value)}
@@ -1584,9 +1584,9 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </Select>
               </div>
 
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-4">
-                <h4 className="text-sm font-semibold text-blue-900">{t('settings.syncNowTitle')}</h4>
-                <p className="mt-1 text-sm text-blue-800">{t('settings.syncNowHint')}</p>
+              <div className="rounded-md border border-accent bg-accent p-4">
+                <h4 className="text-sm font-semibold text-primary">{t('settings.syncNowTitle')}</h4>
+                <p className="mt-1 text-sm text-primary">{t('settings.syncNowHint')}</p>
                 <button
                   type="button"
                   onClick={handleManualSync}
@@ -1616,10 +1616,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           {activeTab === 'caldav' && (
             <div className="space-y-4 p-6">
               <div>
-                <h3 className="text-lg font-medium text-gray-900">{t('settings.caldav.title')}</h3>
-                <p className="mt-1 text-sm text-gray-500">{t('settings.caldav.hint')}</p>
+                <h3 className="text-lg font-medium text-foreground">{t('settings.caldav.title')}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{t('settings.caldav.hint')}</p>
                 {caldavEditingSourceID ? (
-                  <p className="mt-2 text-xs font-medium text-blue-700">
+                  <p className="mt-2 text-xs font-medium text-primary">
                     {t('settings.caldav.editingHint', { id: caldavEditingSourceID })}
                   </p>
                 ) : null}
@@ -1683,11 +1683,11 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
               </div>
 
               {caldavCalendars.length > 0 && (
-                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                  <p className="mb-2 text-sm font-medium text-gray-700">{t('settings.caldav.selectCalendars')}</p>
+                <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                  <p className="mb-2 text-sm font-medium text-foreground">{t('settings.caldav.selectCalendars')}</p>
                   <div className="space-y-2">
                     {caldavCalendars.map((item, idx) => (
-                      <label key={`${item.calendar_url}-${idx}`} className="flex items-center gap-2 text-sm text-gray-700">
+                      <label key={`${item.calendar_url}-${idx}`} className="flex items-center gap-2 text-sm text-foreground">
                         <input
                           type="checkbox"
                           checked={!!item.selected}
@@ -1705,23 +1705,23 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
               )}
 
-              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                <p className="mb-2 text-sm font-medium text-gray-700">{t('settings.caldav.configuredSources')}</p>
+              <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                <p className="mb-2 text-sm font-medium text-foreground">{t('settings.caldav.configuredSources')}</p>
                 {caldavSources.length === 0 ? (
-                  <p className="text-sm text-gray-500">{t('settings.caldav.noSource')}</p>
+                  <p className="text-sm text-muted-foreground">{t('settings.caldav.noSource')}</p>
                 ) : (
                   <div className="space-y-2">
                     {caldavSources.map((source) => (
-                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-blue-100 bg-white px-3 py-2">
+                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent bg-card px-3 py-2">
                         <div>
-                          <div className="text-sm font-medium text-gray-900">{source.name}</div>
-                          <div className="text-xs text-gray-500">{source.base_url}</div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-sm font-medium text-foreground">{source.name}</div>
+                          <div className="text-xs text-muted-foreground">{source.base_url}</div>
+                          <div className="text-xs text-muted-foreground">
                             {t('settings.caldav.calendarConfiguredCount', {
                               count: Array.isArray(source.calendars) ? source.calendars.length : 0,
                             })}
                           </div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-muted-foreground">
                             {source.last_sync_at
                               ? t('settings.caldav.lastSync', { time: new Date(source.last_sync_at).toLocaleString() })
                               : t('settings.caldav.neverSynced')}

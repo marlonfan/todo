@@ -1,3 +1,5 @@
+import animate from "tailwindcss-animate";
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: ["class"],
@@ -41,6 +43,26 @@ export default {
           DEFAULT: "hsl(var(--card) / <alpha-value>)",
           foreground: "hsl(var(--card-foreground) / <alpha-value>)",
         },
+        // surface 语义分层：让 bg-surface / bg-surface-muted 等可消费
+        surface: {
+          DEFAULT: "hsl(var(--background) / <alpha-value>)",
+          card: "hsl(var(--card) / <alpha-value>)",
+          popover: "hsl(var(--popover) / <alpha-value>)",
+          muted: "hsl(var(--muted) / <alpha-value>)",
+          accent: "hsl(var(--accent) / <alpha-value>)",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning) / <alpha-value>)",
+          foreground: "hsl(var(--warning-foreground) / <alpha-value>)",
+        },
+        success: {
+          DEFAULT: "hsl(var(--success) / <alpha-value>)",
+          foreground: "hsl(var(--success-foreground) / <alpha-value>)",
+        },
+        "primary-strong": "hsl(var(--primary-strong) / <alpha-value>)",
+        "foreground-strong": "hsl(var(--foreground-strong) / <alpha-value>)",
+        "border-strong": "hsl(var(--border-strong) / <alpha-value>)",
+        "ring-focus": "hsl(var(--ring-focus) / <alpha-value>)",
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -49,8 +71,11 @@ export default {
       },
       boxShadow: {
         soft: "0 8px 30px rgba(15, 23, 42, 0.06)",
+        sm: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
       },
     },
   },
-  plugins: [],
+  plugins: [animate],
 }

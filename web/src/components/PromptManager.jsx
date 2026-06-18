@@ -625,10 +625,10 @@ function PromptManager() {
 
       <div className="prompt-output-panel">
         <div className="prompt-output-header">
-          <span className="text-sm font-semibold text-slate-800">{t('prompt.output')}</span>
+          <span className="text-sm font-semibold text-foreground">{t('prompt.output')}</span>
           <div className="flex items-center gap-2">
             {asking && (
-              <span className="text-xs font-medium text-blue-600">{t('prompt.streaming')}</span>
+              <span className="text-xs font-medium text-primary">{t('prompt.streaming')}</span>
             )}
             {selectedHistory?.status === 'stopped' && !asking && (
               <span className="prompt-history-status">{t('prompt.historyStopped')}</span>
@@ -694,7 +694,7 @@ function PromptManager() {
       )}
       {!historyLoading && askHistory.length === 0 && (
         <div className="prompt-history-empty">
-          <MessageSquareText className="h-7 w-7 text-slate-300" />
+          <MessageSquareText className="h-7 w-7 text-muted-foreground" />
           <span>{t('prompt.noHistory')}</span>
         </div>
       )}
@@ -742,15 +742,15 @@ function PromptManager() {
   );
 
   return (
-    <div className="prompt-page h-full bg-white">
+    <div className="prompt-page h-full bg-card">
       <div className="prompt-page-header">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="prompt-page-heading">
-            <h2 className="text-xl font-semibold text-slate-950">{t('nav.prompts')}</h2>
-            <p className="mt-1 text-sm text-slate-500">{t('prompt.pageHint')}</p>
+            <h2 className="text-xl font-semibold text-foreground">{t('nav.prompts')}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{t('prompt.pageHint')}</p>
           </div>
           <div className="prompt-search">
-            <Search className="h-4 w-4 text-slate-400" />
+            <Search className="h-4 w-4 text-muted-foreground" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -787,10 +787,10 @@ function PromptManager() {
         <aside className="prompt-history-panel">
           <div className="prompt-panel-head">
             <div className="flex min-w-0 items-center gap-2">
-              <History className="h-4 w-4 text-slate-500" />
-              <span className="truncate text-sm font-semibold text-slate-900">{t('prompt.history')}</span>
+              <History className="h-4 w-4 text-muted-foreground" />
+              <span className="truncate text-sm font-semibold text-foreground">{t('prompt.history')}</span>
             </div>
-            <span className="text-xs text-slate-400">{askHistoryCountLabel}</span>
+            <span className="text-xs text-muted-foreground">{askHistoryCountLabel}</span>
           </div>
           {renderHistoryList()}
         </aside>
@@ -810,9 +810,9 @@ function PromptManager() {
 
           {!isLoading && prompts.length === 0 && (
             <div className="prompt-empty">
-              <FileText className="mx-auto h-10 w-10 text-blue-400" />
-              <div className="mt-3 text-base font-semibold text-slate-800">{t('prompt.noPrompts')}</div>
-              <div className="mt-1 text-sm text-slate-500">{t('prompt.noPromptsHint')}</div>
+              <FileText className="mx-auto h-10 w-10 text-primary" />
+              <div className="mt-3 text-base font-semibold text-foreground">{t('prompt.noPrompts')}</div>
+              <div className="mt-1 text-sm text-muted-foreground">{t('prompt.noPromptsHint')}</div>
             </div>
           )}
 
@@ -829,10 +829,10 @@ function PromptManager() {
         <section className={`prompt-mobile-history-panel ${mobileView === 'history' ? 'prompt-mobile-history-panel--active' : ''}`}>
           <div className="prompt-panel-head">
             <div className="flex min-w-0 items-center gap-2">
-              <History className="h-4 w-4 text-slate-500" />
-              <span className="truncate text-sm font-semibold text-slate-900">{t('prompt.history')}</span>
+              <History className="h-4 w-4 text-muted-foreground" />
+              <span className="truncate text-sm font-semibold text-foreground">{t('prompt.history')}</span>
             </div>
-            <span className="text-xs text-slate-400">{askHistoryCountLabel}</span>
+            <span className="text-xs text-muted-foreground">{askHistoryCountLabel}</span>
           </div>
           {renderHistoryList('prompt-history-list--mobile', bindMobileHistoryScroll)}
         </section>
@@ -865,10 +865,10 @@ function PromptManager() {
                   {editingPrompt ? <Edit3 className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-slate-900">
+                  <div className="truncate text-sm font-semibold text-foreground">
                     {editingPrompt ? t('prompt.editPrompt') : t('prompt.newPrompt')}
                   </div>
-                  <div className="text-xs text-slate-500">{t('prompt.formDialogHint')}</div>
+                  <div className="text-xs text-muted-foreground">{t('prompt.formDialogHint')}</div>
                 </div>
               </div>
               <button
@@ -994,8 +994,8 @@ function PromptManager() {
                   <MessageSquareText className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-slate-900">{askPrompt.title}</div>
-                  <div className="text-xs text-slate-500">
+                  <div className="truncate text-sm font-semibold text-foreground">{askPrompt.title}</div>
+                  <div className="text-xs text-muted-foreground">
                     {selectedHistory ? t('prompt.historyDetailHint') : t('prompt.askDialogHint')}
                   </div>
                 </div>

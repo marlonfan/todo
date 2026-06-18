@@ -21,10 +21,19 @@ import {
   LUNAR_TIMEZONE,
   nextLocalInputFromLunarSelection,
   parseLunarYearlyRule,
-  solarDateFromLunarSelection,
 } from '../utils/lunar';
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import { getLunarInfo } from '../utils/holidays';
+import {
+  buildCategorySummaryLabel,
+  normalizeByDayList,
+  clampMonthlyDate,
+  clampRecurrenceInterval,
+  clampCustomRecurrenceInterval,
+  isWeeklyRecurrenceType,
+  isMonthlyRecurrenceType,
+  isCustomRecurrenceTypeValue,
+} from '../utils/quickEditor';
 import {
   clearCurrentDraggedTaskID,
   shouldSelectTaskRowFromPointerRelease,
@@ -60,6 +69,8 @@ import {
   IconTag,
 } from './icons/TaskIcons';
 import LiveMarkdownEditor from './LiveMarkdownEditor';
+import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
+import { RecurrencePanel } from './task/RecurrencePanel';
 import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
@@ -436,17 +447,6 @@ function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, luna
   return `${dateFmt(start)}-${dateFmt(end)}`;
 }
 
-function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, fallbackLabel) {
-  const ids = Array.isArray(selectedCategoryIDs) ? selectedCategoryIDs.map(String) : [];
-  if (ids.length === 0) return fallbackLabel;
-  const selected = categories.filter((cat) => ids.includes(String(cat.id)));
-  if (selected.length === 0) return `${fallbackLabel}+${ids.length}`;
-  const first = selected[0];
-  const firstLabel = showEmoji && first?.emoji ? `${first.emoji}${first.name}` : String(first?.name || fallbackLabel);
-  if (selected.length === 1) return firstLabel;
-  return `${firstLabel}+${selected.length - 1}`;
-}
-
 function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, recurrenceMeta = null) {
   if (!enabled) return t('task.repeatOff');
   if (recurrenceType === 'lunar') {
@@ -479,44 +479,6 @@ function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, r
   if (recurrenceType === 'monthly') return t('task.monthly');
   if (recurrenceType === 'yearly') return t('task.yearly');
   return t('task.daily');
-}
-
-function normalizeByDayList(rawList) {
-  if (!Array.isArray(rawList)) return [];
-  return rawList
-    .map((day) => String(day || '').trim().toUpperCase())
-    .filter((day) => day.length > 0);
-}
-
-function clampMonthlyDate(value, fallback = 1) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(31, Math.max(1, parsed));
-}
-
-function clampRecurrenceInterval(value, fallback = 1) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(RECURRENCE_INTERVAL_MAX, Math.max(1, parsed));
-}
-
-function clampCustomRecurrenceInterval(value) {
-  return Math.max(2, clampRecurrenceInterval(value, 2));
-}
-
-function isWeeklyRecurrenceType(value) {
-  const type = String(value || 'daily');
-  return type === 'weekly' || type === 'biweekly' || type === 'custom_weekly';
-}
-
-function isMonthlyRecurrenceType(value) {
-  const type = String(value || 'daily');
-  return type === 'monthly' || type === 'custom_monthly';
-}
-
-function isCustomRecurrenceTypeValue(value) {
-  const type = String(value || 'daily');
-  return type === 'biweekly' || type === 'custom_weekly' || type === 'custom_monthly' || type === 'lunar';
 }
 
 function getRecurrenceIntervalForType(recurrenceType, interval = 1) {
@@ -984,13 +946,13 @@ const TaskRow = React.memo(function TaskRow({
   const overdue = timeMode === 'primary' && isTaskOverdue(task, timezone);
   const displayTimeLabel = formatDisplayDateWithYear(displayTime, timezone);
   const titleStateClass = isCompleted
-    ? 'text-slate-400 line-through decoration-slate-300'
+    ? 'text-muted-foreground line-through decoration-slate-300'
     : isDeleted
-      ? 'text-slate-500'
-      : 'text-slate-900';
+      ? 'text-muted-foreground'
+      : 'text-foreground';
   const deletedStatusTone = isSkipped
     ? 'border-violet-200 bg-violet-50 text-violet-700'
-    : 'border-slate-200 bg-slate-100 text-slate-600';
+    : 'border-border bg-muted text-muted-foreground';
   const rowAnimationClass = rowAnimation === 'complete-exit'
     ? ' task-row-animate-complete-exit'
     : rowAnimation === 'complete-feedback'
@@ -1101,10 +1063,10 @@ const TaskRow = React.memo(function TaskRow({
         });
         onSelectTask(task);
       }}
-      className={`task-row-shell group relative cursor-pointer border-b border-slate-100 px-3.5 py-2.5 transition-colors duration-150 last:border-b-0 md:px-4 md:py-3${rowAnimationClass} ${
+      className={`task-row-shell group relative cursor-pointer border-b border-border px-3.5 py-2.5 transition-colors duration-150 last:border-b-0 md:px-4 md:py-3${rowAnimationClass} ${
         selected
-          ? 'bg-slate-100/70 md:rounded-md'
-          : 'bg-white hover:bg-slate-50/80'
+          ? 'bg-muted/70 md:rounded-md'
+          : 'bg-card hover:bg-muted/80'
       }`}
     >
       <div className="flex items-center gap-2.5">
@@ -1119,8 +1081,8 @@ const TaskRow = React.memo(function TaskRow({
           }}
           className={`grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition-colors ${
             isCompleted
-              ? 'border-blue-600 bg-blue-600 text-white'
-              : 'border-slate-300 bg-white text-transparent hover:border-blue-500 hover:bg-blue-50'
+              ? 'border-primary bg-primary text-white'
+              : 'border-border-strong bg-card text-transparent hover:border-primary hover:bg-accent'
           } disabled:cursor-not-allowed disabled:opacity-45`}
         >
           <span className="text-[10px] leading-none">✓</span>
@@ -1130,7 +1092,7 @@ const TaskRow = React.memo(function TaskRow({
         </h3>
         <div className="hidden shrink-0 items-center gap-2 text-xs sm:flex">
           {isReadOnly && (
-            <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>
+            <span className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground">CalDAV</span>
           )}
           {isDeleted && (
             <button
@@ -1140,7 +1102,7 @@ const TaskRow = React.memo(function TaskRow({
                 onToggleStatus(task, 'pending');
               }}
               disabled={isReadOnly}
-              className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-700"
+              className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-primary"
               title={labels.markPending}
             >
               ↺
@@ -1163,10 +1125,10 @@ const TaskRow = React.memo(function TaskRow({
             </span>
           ))}
           {task.categories?.length > 2 && (
-            <span className="text-slate-400">+{task.categories.length - 2}</span>
+            <span className="text-muted-foreground">+{task.categories.length - 2}</span>
           )}
           {displayTimeLabel && (
-            <span className={overdue ? 'font-medium text-rose-600' : 'text-slate-400'}>
+            <span className={overdue ? 'font-medium text-rose-600' : 'text-muted-foreground'}>
               {displayTimeLabel}
             </span>
           )}
@@ -1174,9 +1136,9 @@ const TaskRow = React.memo(function TaskRow({
       </div>
 
       {/* Mobile: time and tags on second line */}
-      <div className="mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs text-slate-500 sm:hidden">
+      <div className="mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs text-muted-foreground sm:hidden">
         {displayTimeLabel && (
-          <span className={overdue ? 'font-medium text-rose-600' : 'text-slate-500'}>
+          <span className={overdue ? 'font-medium text-rose-600' : 'text-muted-foreground'}>
             {displayTimeLabel}
           </span>
         )}
@@ -1185,7 +1147,7 @@ const TaskRow = React.memo(function TaskRow({
             {isSkipped ? labels.statusSkipped : labels.statusCancelled}
           </span>
         )}
-        {isReadOnly && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
+        {isReadOnly && <span className="rounded-sm bg-muted px-1.5 py-0.5 text-muted-foreground">CalDAV</span>}
         <span title={priority.title} className={priority.className}>{priority.text}</span>
         {task.categories?.slice(0, 2).map((cat) => (
           <span
@@ -1198,7 +1160,7 @@ const TaskRow = React.memo(function TaskRow({
           </span>
         ))}
         {task.categories?.length > 2 && (
-          <span className="text-slate-400">+{task.categories.length - 2}</span>
+          <span className="text-muted-foreground">+{task.categories.length - 2}</span>
         )}
       </div>
     </div>
@@ -1220,13 +1182,13 @@ function TaskListSkeleton() {
   return (
     <div className="space-y-2 px-3 py-4 md:px-5" aria-hidden="true">
       {Array.from({ length: 7 }).map((_, index) => (
-        <div key={index} className="flex items-center gap-3 rounded-md border-b border-slate-100 bg-white px-1 py-2.5 md:px-0">
-          <div className="h-4 w-4 shrink-0 rounded-[5px] bg-slate-200" />
+        <div key={index} className="flex items-center gap-3 rounded-md border-b border-border bg-card px-1 py-2.5 md:px-0">
+          <div className="h-4 w-4 shrink-0 rounded-[5px] bg-muted" />
           <div className="min-w-0 flex-1 space-y-2">
-            <div className={`h-3.5 rounded-full bg-slate-200 ${index % 3 === 0 ? 'w-7/12' : index % 3 === 1 ? 'w-10/12' : 'w-5/12'}`} />
+            <div className={`h-3.5 rounded-full bg-muted ${index % 3 === 0 ? 'w-7/12' : index % 3 === 1 ? 'w-10/12' : 'w-5/12'}`} />
             <div className="flex gap-2">
-              <div className="h-2.5 w-14 rounded-full bg-slate-100" />
-              <div className="h-2.5 w-20 rounded-full bg-slate-100" />
+              <div className="h-2.5 w-14 rounded-full bg-muted" />
+              <div className="h-2.5 w-20 rounded-full bg-muted" />
             </div>
           </div>
         </div>
@@ -1249,8 +1211,8 @@ function TaskListEmptyState({ view, searchKeyword, canCreateTask, onCreateTask, 
         <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-sky-100 bg-sky-50 text-sky-700 shadow-sm">
           {isSearch ? <IconSearch className="h-6 w-6" /> : <IconCheck className="h-6 w-6" />}
         </div>
-        <h2 className="mt-4 text-base font-semibold text-slate-900">{title}</h2>
-        <p className="mt-1 text-sm leading-6 text-slate-500">{hint}</p>
+        <h2 className="mt-4 text-base font-semibold text-foreground">{title}</h2>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{hint}</p>
         {canCreateTask && (
           <button
             type="button"
@@ -2744,12 +2706,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       ? 'bg-rose-50 text-rose-700'
       : draftPriorityTone === 'medium'
         ? 'bg-sky-50 text-sky-700'
-        : 'bg-slate-100 text-slate-700'
+        : 'bg-muted text-foreground-strong'
     : draftPriorityTone === 'high'
       ? 'text-rose-600 hover:bg-rose-50'
       : draftPriorityTone === 'medium'
         ? 'text-sky-600 hover:bg-sky-50'
-        : 'text-slate-500 hover:bg-slate-100';
+        : 'text-muted-foreground hover:bg-muted';
   const draftPriorityTitle = draftPriorityTone === 'high'
     ? t('task.priorityHigh')
     : draftPriorityTone === 'medium'
@@ -2768,7 +2730,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     ? 'bg-sky-50 text-sky-700'
     : (hasDraftParsedTimeHint || hasDraftTimeValue)
       ? 'text-sky-600 hover:bg-sky-50'
-      : 'text-slate-500 hover:bg-slate-100';
+      : 'text-muted-foreground hover:bg-muted';
   const draftTimeButtonTitle = hasDraftParsedTimeHint ? draftParsePreview : draftTimeSummaryLabel;
   const activityPanelFloatingStyle = useMemo(
     () => getDetailPanelFloatingStyle(detailPanelTriggerRefs.current?.activity, 'activity'),
@@ -2785,7 +2747,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     ? 'bg-indigo-50 text-indigo-700'
     : hasDraftCategoryValue
       ? 'text-indigo-600 hover:bg-indigo-50'
-      : 'text-slate-500 hover:bg-slate-100';
+      : 'text-muted-foreground hover:bg-muted';
   const draftRecurrenceSummaryLabel = buildRecurrenceSummaryLabel(
     !!draft?.recurrence_enabled,
     draft?.recurrence_type || 'daily',
@@ -2800,15 +2762,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     },
   );
   const draftRecurrenceButtonClass = detailPanel === 'recurrence'
-    ? 'bg-slate-100 text-slate-700'
+    ? 'bg-muted text-foreground-strong'
     : draft?.recurrence_enabled
       ? 'text-emerald-600 hover:bg-emerald-50'
-      : 'text-slate-500 hover:bg-slate-100';
+      : 'text-muted-foreground hover:bg-muted';
   const detailPanelFloatingStyle = useMemo(
     () => getDetailPanelFloatingStyle(detailPanelTriggerRefs.current?.[detailPanel], detailPanel),
     [detailPanel]
   );
-  const isDraftCustomRecurrenceType = isCustomRecurrenceTypeValue(draft?.recurrence_type || 'daily');
   const draftStatus = draft?.status || selectedTask?.status || 'pending';
   const selectedTaskDraftForAI = useMemo(() => {
     if (!selectedTask || !draft) return selectedTask;
@@ -2825,16 +2786,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       categories: categories.filter((cat) => (draft.category_ids || []).map(String).includes(String(cat.id))),
     };
   }, [categories, draft, draftPriorityValue, draftStatus, selectedTask]);
-  const draftRecurrenceLunarPickerDate = (
-    solarDateFromLunarSelection({
-      year: draftRecurrenceLunarYear,
-      month: Number.parseInt(draft?.recurrence_lunar_month, 10) || 1,
-      day: Number.parseInt(draft?.recurrence_lunar_day, 10) || 1,
-      isLeapMonth: !!draft?.recurrence_lunar_is_leap_month,
-    })
-    || splitDatePart(draft?.start_time || '')
-    || dayjs().tz(timezone).format('YYYY-MM-DD')
-  );
 
   useEffect(() => {
     setDraftParsePreview('');
@@ -3274,6 +3225,105 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
   };
 
+  // RecurrencePanel 的 adapter：组件单字段 onChange → TaskList draft。
+  // 复现原 recurrence 浮层里切 type/enabled 时的多字段副作用（保持 TaskList 语义）。
+  const handleRecurrenceFieldChange = (field, value) => {
+    if (field === 'enabled') {
+      if (value === false) {
+        handleDraftFieldChange('recurrence_enabled', false);
+        handleDraftFieldChange('recurrence_type', 'daily');
+        handleDraftFieldChange('recurrence_interval', 1);
+        handleDraftFieldChange('recurrence_days', []);
+        handleDraftFieldChange('recurrence_date', 1);
+      } else {
+        handleDraftFieldChange('recurrence_enabled', true);
+        if (isWeeklyRecurrenceType(draft.recurrence_type || 'daily') && (draft.recurrence_days || []).length === 0) {
+          handleDraftFieldChange('recurrence_days', workDayKeys);
+        }
+      }
+      return;
+    }
+    if (field === 'type') {
+      handleDraftFieldChange('recurrence_type', value);
+      if (value === 'daily' || value === 'weekly' || value === 'monthly' || value === 'yearly') {
+        handleDraftFieldChange('recurrence_interval', 1);
+        if (isWeeklyRecurrenceType(value) && (draft.recurrence_days || []).length === 0) {
+          handleDraftFieldChange('recurrence_days', workDayKeys);
+        }
+        if (!isWeeklyRecurrenceType(value)) {
+          handleDraftFieldChange('recurrence_days', []);
+        }
+        if (value === 'monthly') {
+          const start = parseLocalInput(draft.start_time || '');
+          if (start) {
+            handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
+          }
+        }
+      } else if (value === 'biweekly') {
+        handleDraftFieldChange('recurrence_interval', 2);
+        if ((draft.recurrence_days || []).length === 0) {
+          handleDraftFieldChange('recurrence_days', workDayKeys);
+        }
+      } else if (value === 'custom_weekly') {
+        handleDraftFieldChange('recurrence_interval', clampCustomRecurrenceInterval(draft.recurrence_interval));
+        if ((draft.recurrence_days || []).length === 0) {
+          handleDraftFieldChange('recurrence_days', workDayKeys);
+        }
+      } else if (value === 'custom_monthly') {
+        handleDraftFieldChange('recurrence_interval', clampCustomRecurrenceInterval(draft.recurrence_interval));
+        handleDraftFieldChange('recurrence_days', []);
+        const start = parseLocalInput(draft.start_time || '');
+        if (start) {
+          handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
+        }
+      } else if (value === 'lunar') {
+        handleDraftFieldChange('recurrence_interval', 1);
+        handleDraftFieldChange('recurrence_days', []);
+        const fallback = parseLunarYearlyRule(
+          { freq: 'lunar_yearly' },
+          draft.start_time || getDefaultStartInputValue(timezone),
+        ) || {
+          year: dayjs().tz(LUNAR_TIMEZONE).year(),
+          month: 1,
+          day: 1,
+          isLeapMonth: false,
+        };
+        setDraftRecurrenceLunarYear(fallback.year);
+        handleDraftFieldChange('recurrence_lunar_month', fallback.month);
+        handleDraftFieldChange('recurrence_lunar_day', fallback.day);
+        handleDraftFieldChange('recurrence_lunar_is_leap_month', fallback.isLeapMonth);
+      }
+      return;
+    }
+    if (field === 'interval') {
+      handleDraftFieldChange('recurrence_interval', value);
+      return;
+    }
+    if (field === 'days') {
+      handleDraftFieldChange('recurrence_days', value);
+      return;
+    }
+    if (field === 'date') {
+      handleDraftFieldChange('recurrence_date', value);
+      return;
+    }
+    if (field === 'lunarYear') {
+      setDraftRecurrenceLunarYear(value);
+      return;
+    }
+    if (field === 'lunarMonth') {
+      handleDraftFieldChange('recurrence_lunar_month', value);
+      return;
+    }
+    if (field === 'lunarDay') {
+      handleDraftFieldChange('recurrence_lunar_day', value);
+      return;
+    }
+    if (field === 'lunarIsLeapMonth') {
+      handleDraftFieldChange('recurrence_lunar_is_leap_month', value);
+    }
+  };
+
   const handleDraftStartDateTimeChange = (nextValue) => {
     const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
@@ -3385,7 +3435,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     { key: 'SU', label: t('calendar.weekday.su') },
   ];
   const workDayKeys = DEFAULT_WORKDAY_KEYS;
-  const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 
   const buildDraftPayload = useCallback((taskValue, draftValue) => {
     if (!taskValue || !draftValue) return null;
@@ -4767,11 +4816,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       >
         <section className="md-pane flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
           {showListHeader && (
-            <div className="bg-white px-5 pb-4 pt-5">
+            <div className="bg-card px-5 pb-4 pt-5">
               <div className="flex min-h-[40px] items-center justify-between gap-3">
                 <div className="hidden min-w-0 md:block">
-                  <h2 className="truncate text-xl font-semibold text-slate-950">{viewTitle}</h2>
-                  <p className="mt-0.5 text-xs text-slate-400">{t('task.taskCount', { count: filteredTasks.length })}</p>
+                  <h2 className="truncate text-xl font-semibold text-foreground">{viewTitle}</h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{t('task.taskCount', { count: filteredTasks.length })}</p>
                 </div>
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   {canShowSortGroup && !isCompactMobile && (
@@ -4783,7 +4832,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                             variant="ghost"
                             size="icon"
                             data-testid="task-sort-toggle-button"
-                            className="text-slate-500 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950"
+                            className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-0 data-[state=open]:bg-muted data-[state=open]:text-foreground"
                             title={t('common.filter')}
                           >
                             <IconSort className="h-4 w-4" />
@@ -4813,9 +4862,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                             size="icon"
                             className={`${
                               effectiveGroupBy !== 'none'
-                                ? 'bg-slate-100 text-slate-950'
-                                : 'text-slate-500 hover:text-slate-950'
-                            } hover:bg-slate-100 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-950`}
+                                ? 'bg-muted text-foreground'
+                                : 'text-muted-foreground hover:text-foreground'
+                            } hover:bg-muted focus-visible:ring-0 data-[state=open]:bg-muted data-[state=open]:text-foreground`}
                             title={t('task.groupNone')}
                           >
                             <IconGroup className="h-4 w-4" />
@@ -4856,18 +4905,18 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 <div className="mt-4">
                   {view === 'search' && (
                     <div className="md-input-row min-h-[42px]">
-                      <IconSearch className="h-4 w-4 text-slate-400" />
+                      <IconSearch className="h-4 w-4 text-muted-foreground" />
                       <input
                         value={searchKeyword}
                         onChange={(event) => setSearchKeyword(event.target.value)}
                         placeholder={t('task.searchPlaceholder')}
-                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                        className="w-full border-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                       />
                     </div>
                   )}
                   {canQuickCreate && (
                     <div className="md-input-row hidden min-h-[42px] md:flex">
-                      <Plus className="h-4 w-4 text-slate-300" />
+                      <Plus className="h-4 w-4 text-muted-foreground" />
                       <input
                         value={quickTitle}
                         onChange={(event) => setQuickTitle(event.target.value)}
@@ -4878,7 +4927,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                           }
                         }}
                         placeholder={t('task.quickAddPlaceholder')}
-                        className="w-full border-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                        className="w-full border-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                       />
                     </div>
                   )}
@@ -4889,7 +4938,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
           <div
             ref={bindTaskListScroll}
-            className="task-list-scroll editor-scrollbar-overlay mobile-scrollbar-hidden relative flex-1 overflow-auto bg-white md:bg-white"
+            className="task-list-scroll editor-scrollbar-overlay mobile-scrollbar-hidden relative flex-1 overflow-auto bg-card md:bg-card"
           >
             {(isCompactMobile || isMobileViewport) && (
               <div
@@ -4932,12 +4981,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   {taskGroups.map((group) => (
                     <div key={group.key} className="space-y-1">
                       {group.title ? (
-                        <div className="sticky top-0 z-[2] flex items-center gap-2 bg-white/95 px-4 py-2 text-base font-semibold text-slate-900 backdrop-blur md:px-5 md:bg-white/95">
+                        <div className="sticky top-0 z-[2] flex items-center gap-2 bg-card/95 px-4 py-2 text-base font-semibold text-foreground backdrop-blur md:px-5 md:bg-card/95">
                           <span>{group.title}</span>
-                          <span className="text-sm font-normal text-slate-400">{group.tasks.length}</span>
+                          <span className="text-sm font-normal text-muted-foreground">{group.tasks.length}</span>
                         </div>
                       ) : null}
-                      <div className="bg-white">
+                      <div className="bg-card">
                         {group.tasks.map((task) => {
                           const rowID = buildTaskRowRenderKey(task);
                           return (
@@ -4968,7 +5017,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             <div ref={listToolbarPanelRef} className="fixed bottom-20 right-3 z-30 flex flex-col items-end gap-2 md:hidden">
               {listToolbarPanel === 'sort' && (
                 <div className="md-popover w-52">
-                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {t('common.filter')}
                   </div>
                   <div className="space-y-1">
@@ -4984,7 +5033,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
                           sortBy === option.value
                             ? 'bg-sky-50 text-sky-700'
-                            : 'text-slate-600 hover:bg-slate-50'
+                            : 'text-muted-foreground hover:bg-muted'
                         }`}
                       >
                         {option.label}
@@ -4996,7 +5045,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
               {listToolbarPanel === 'group' && (
                 <div className="md-popover w-52">
-                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {t('task.groupNone')}
                   </div>
                   <div className="space-y-1">
@@ -5011,7 +5060,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
                           effectiveGroupBy === option.value
                             ? 'bg-indigo-50 text-indigo-700'
-                            : 'text-slate-600 hover:bg-slate-50'
+                            : 'text-muted-foreground hover:bg-muted'
                         }`}
                       >
                         {option.label}
@@ -5026,10 +5075,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   <button
                     type="button"
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
-                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-blue-100 bg-white shadow-sm ${
+                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-accent bg-card shadow-sm ${
                       listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
                         ? 'text-indigo-700 ring-2 ring-indigo-100'
-                        : 'text-slate-600'
+                        : 'text-muted-foreground'
                     }`}
                     title={t('task.groupNone')}
                   >
@@ -5039,10 +5088,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     type="button"
                     data-testid="task-sort-toggle-button"
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
-                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-blue-100 bg-white shadow-sm ${
+                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-accent bg-card shadow-sm ${
                       listToolbarPanel === 'sort'
                         ? 'text-sky-700 ring-2 ring-sky-100'
-                        : 'text-slate-600'
+                        : 'text-muted-foreground'
                     }`}
                     title={t('common.filter')}
                   >
@@ -5083,14 +5132,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
         <section className={`md-pane h-full min-h-0 min-w-0 flex-col overflow-hidden ${isMobileViewport ? 'hidden' : 'flex'}`}>
           {!selectedTask || !draft ? (
-            <div className="flex h-full items-center justify-center text-sm text-slate-400">
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {t('task.selectTaskHint')}
             </div>
           ) : (
-            <div className="flex h-full min-h-0 min-w-0 flex-col bg-white">
-              <div className="border-b border-slate-100 px-5 pb-5 pt-5 lg:px-8">
+            <div className="flex h-full min-h-0 min-w-0 flex-col bg-card">
+              <div className="border-b border-border px-5 pb-5 pt-5 lg:px-8">
                 <div className="flex min-h-9 items-center justify-between gap-4">
-                  <div ref={detailPanelRef} className="relative flex min-w-0 flex-wrap items-center gap-1.5 text-slate-500">
+                  <div ref={detailPanelRef} className="relative flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
                     <button
                       type="button"
                       aria-pressed={draftStatus === 'completed'}
@@ -5098,14 +5147,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       onClick={() => handleStatusChange(selectedTask, draftStatus === 'completed' ? 'pending' : 'completed')}
                       className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] border transition-colors ${
                         draftStatus === 'completed'
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : 'border-slate-300 bg-white text-transparent hover:border-blue-500 hover:bg-blue-50'
+                          ? 'border-primary bg-primary text-white'
+                          : 'border-border-strong bg-card text-transparent hover:border-primary hover:bg-accent'
                       } disabled:cursor-not-allowed disabled:opacity-45`}
                       title={draftStatus === 'completed' ? t('task.statusPending') : t('task.statusCompleted')}
                     >
                       <span className="text-[10px] leading-none">✓</span>
                     </button>
-                    <span className="h-4 w-px bg-slate-200" />
+                    <span className="h-4 w-px bg-muted" />
                     <div className="relative min-w-0">
                       <button
                         type="button"
@@ -5339,8 +5388,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       }}
                       className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
                         showActivityPanel
-                          ? 'bg-slate-100 text-slate-700'
-                          : 'text-slate-500 hover:bg-slate-100'
+                          ? 'bg-muted text-foreground-strong'
+                          : 'text-muted-foreground hover:bg-muted'
                       }`}
                       title={t('task.activityTitle')}
                     >
@@ -5389,7 +5438,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   </div>
                   <div className="flex shrink-0 items-center gap-2 text-xs">
                     {selectedTask.read_only && (
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">CalDAV Read-only</span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">CalDAV Read-only</span>
                     )}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -5397,7 +5446,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-0 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700"
+                          className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground-strong focus-visible:ring-0 data-[state=open]:bg-muted data-[state=open]:text-foreground-strong"
                           title={t('common.more')}
                         >
                           <MoreHorizontal className="h-4 w-4" />
@@ -5459,14 +5508,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       }
                       setDraftParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
                     }}
-                    className={`w-full border-none bg-transparent px-0 text-[1.55rem] font-semibold leading-9 text-slate-950 outline-none placeholder:text-slate-300 sm:text-[1.65rem] ${
+                    className={`w-full border-none bg-transparent px-0 text-[1.55rem] font-semibold leading-9 text-foreground outline-none placeholder:text-muted-foreground sm:text-[1.65rem] ${
                       selectedIsSeriesTemplateContext ? 'pr-20' : ''
                     }`}
                     placeholder={t('task.title')}
                   />
                   {selectedIsSeriesTemplateContext && (
                     <span
-                      className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-400"
+                      className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[11px] font-medium text-muted-foreground"
                       title={t('task.editingSeriesTemplateHint')}
                     >
                       {t('task.editingSeriesTemplateInline')}
@@ -5475,483 +5524,85 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 </div>
                 <div className="relative">
                   {detailPanel === 'priority' && (
-                    <div className="task-quick-popover md-popover fixed z-20 w-[12.25rem]" style={detailPanelFloatingStyle}>
-                      <div className="task-quick-menu">
-                        {[
-                          { value: '1', label: t('task.priorityHigh'), tone: 'high' },
-                          { value: '0', label: t('task.priorityMedium'), tone: 'medium' },
-                          { value: '-1', label: t('task.priorityLow'), tone: 'low' },
-                        ].map((priorityOption) => {
-                          const active = String(draftPriorityValue) === priorityOption.value;
-                          return (
-                            <button
-                              key={priorityOption.value}
-                              type="button"
-                              onClick={() => {
-                                handleDraftFieldChange('priority', priorityOption.value, {
-                                  submitNow: true,
-                                  submitSource: 'realtime_priority',
-                                });
-                                setDetailPanel('');
-                              }}
-                              aria-pressed={active}
-                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                            >
-                              <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
-                                <IconFlag className="h-4 w-4" />
-                              </span>
-                              <span className="task-quick-option-label">{priorityOption.label}</span>
-                              <IconCheck className="task-quick-option-check h-4 w-4" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    <PriorityPanel
+                      value={draftPriorityValue}
+                      className="md-popover fixed z-20 w-[12.25rem]"
+                      style={detailPanelFloatingStyle}
+                      onChange={(nextPriority) => {
+                        handleDraftFieldChange('priority', nextPriority, {
+                          submitNow: true,
+                          submitSource: 'realtime_priority',
+                        });
+                      }}
+                      onClose={() => setDetailPanel('')}
+                    />
                   )}
 
                   {detailPanel === 'category' && (
-                    <div className="task-quick-popover task-quick-popover-scroll md-popover fixed z-20 w-[14.75rem]" style={detailPanelFloatingStyle}>
-                      <div className="task-quick-menu">
-                        {categories.map((cat) => {
-                          const active = draft.category_ids.includes(String(cat.id));
-                          return (
-                            <button
-                              key={cat.id}
-                              type="button"
-                              onClick={() => {
-                                toggleDraftCategory(cat.id);
-                                setDetailPanel('');
-                              }}
-                              aria-pressed={active}
-                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                            >
-                              <span className="task-quick-option-icon">
-                                {showCategoryEmoji && cat.emoji ? (
-                                  <span className="task-quick-category-emoji">{cat.emoji}</span>
-                                ) : (
-                                  <span className="task-quick-category-swatch" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                                )}
-                              </span>
-                              <span className="task-quick-option-label">{cat.name}</span>
-                              <IconCheck className="task-quick-option-check h-4 w-4" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {categories.length === 0 && (
-                        <p className="task-quick-empty">{t('category.noCategories')}</p>
-                      )}
-                    </div>
+                    <CategoryPanel
+                      categories={categories}
+                      selectedIds={draft.category_ids}
+                      showCategoryEmoji={showCategoryEmoji}
+                      className="md-popover fixed z-20 w-[14.75rem]"
+                      style={detailPanelFloatingStyle}
+                      onToggle={(catId) => toggleDraftCategory(catId)}
+                      onClose={() => setDetailPanel('')}
+                    />
                   )}
 
                   {detailPanel === 'recurrence' && (
-                    <div className="task-quick-popover task-quick-popover-scroll task-recurrence-popover md-popover fixed z-20 w-[18.25rem]" style={detailPanelFloatingStyle}>
-                      <div className="task-quick-header">
-                        <div className="task-quick-title">{t('task.repeat')}</div>
-                        <div className="task-quick-toggle">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handleDraftFieldChange('recurrence_enabled', false);
-                              handleDraftFieldChange('recurrence_type', 'daily');
-                              handleDraftFieldChange('recurrence_interval', 1);
-                              handleDraftFieldChange('recurrence_days', []);
-                              handleDraftFieldChange('recurrence_date', 1);
-                            }}
-                            aria-pressed={!draft.recurrence_enabled}
-                            className={`task-quick-toggle-btn${!draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
-                          >
-                            {t('task.repeatOff')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handleDraftFieldChange('recurrence_enabled', true);
-                              if (
-                                isWeeklyRecurrenceType(draft.recurrence_type || 'daily')
-                                && (draft.recurrence_days || []).length === 0
-                              ) {
-                                handleDraftFieldChange('recurrence_days', workDayKeys);
-                              }
-                            }}
-                            aria-pressed={draft.recurrence_enabled}
-                            className={`task-quick-toggle-btn${draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
-                          >
-                            {t('task.repeatOn')}
-                          </button>
-                        </div>
-                      </div>
-
-                      {draft.recurrence_enabled && (
-                        <div className="task-quick-content space-y-2">
-                            <div className="task-quick-menu">
-                              {[
-                                { value: 'daily', label: t('task.daily') },
-                                { value: 'weekly', label: t('task.weekly') },
-                                { value: 'monthly', label: t('task.monthly') },
-                                { value: 'yearly', label: t('task.yearly') },
-                              ].map((option) => {
-                                const active = (draft.recurrence_type || 'daily') === option.value;
-                                return (
-                                  <button
-                                    key={option.value}
-                                    type="button"
-                                    onClick={() => {
-                                      handleDraftFieldChange('recurrence_type', option.value);
-                                      setShowDraftCustomRecurrenceMenu(false);
-                                      handleDraftFieldChange('recurrence_interval', 1);
-                                      if (isWeeklyRecurrenceType(option.value) && (draft.recurrence_days || []).length === 0) {
-                                        handleDraftFieldChange('recurrence_days', workDayKeys);
-                                      }
-                                      if (!isWeeklyRecurrenceType(option.value)) {
-                                        handleDraftFieldChange('recurrence_days', []);
-                                      }
-                                      if (option.value === 'monthly') {
-                                        const start = parseLocalInput(draft.start_time || '');
-                                        if (start) {
-                                          handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
-                                        }
-                                      }
-                                    }}
-                                    aria-pressed={active}
-                                    className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                                  >
-                                    <span className="task-quick-option-icon">
-                                      <IconRepeat className="h-4 w-4" />
-                                    </span>
-                                    <span className="task-quick-option-label">{option.label}</span>
-                                    <IconCheck className="task-quick-option-check h-4 w-4" />
-                                  </button>
-                                );
-                              })}
-                              <button
-                                type="button"
-                                onClick={() => setShowDraftCustomRecurrenceMenu((prev) => !prev)}
-                                aria-pressed={isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu}
-                                className={`task-quick-option${isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu ? ' task-quick-option--active' : ''}`}
-                              >
-                                <span className="task-quick-option-icon">
-                                  <IconRepeat className="h-4 w-4" />
-                                </span>
-                                <span className="task-quick-option-label">{t('task.customRepeat')}</span>
-                                <IconCheck className="task-quick-option-check h-4 w-4" />
-                              </button>
-                            </div>
-                            {(showDraftCustomRecurrenceMenu || isDraftCustomRecurrenceType) && (
-                              <div className="task-quick-section task-quick-subpanel">
-                                <div className="task-quick-section-title">{t('task.customRepeat')}</div>
-                                <div className="task-quick-chip-row">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      handleDraftFieldChange('recurrence_type', 'biweekly');
-                                      handleDraftFieldChange('recurrence_interval', 2);
-                                      if ((draft.recurrence_days || []).length === 0) {
-                                        handleDraftFieldChange('recurrence_days', workDayKeys);
-                                      }
-                                    }}
-                                    aria-pressed={(draft.recurrence_type || 'daily') === 'biweekly'}
-                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'biweekly' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.biweekly')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      handleDraftFieldChange('recurrence_type', 'custom_weekly');
-                                      handleDraftFieldChange('recurrence_interval', clampCustomRecurrenceInterval(draft.recurrence_interval));
-                                      if ((draft.recurrence_days || []).length === 0) {
-                                        handleDraftFieldChange('recurrence_days', workDayKeys);
-                                      }
-                                    }}
-                                    aria-pressed={(draft.recurrence_type || 'daily') === 'custom_weekly'}
-                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'custom_weekly' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.customWeekly')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      handleDraftFieldChange('recurrence_type', 'custom_monthly');
-                                      handleDraftFieldChange('recurrence_interval', clampCustomRecurrenceInterval(draft.recurrence_interval));
-                                      handleDraftFieldChange('recurrence_days', []);
-                                      const start = parseLocalInput(draft.start_time || '');
-                                      if (start) {
-                                        handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
-                                      }
-                                    }}
-                                    aria-pressed={(draft.recurrence_type || 'daily') === 'custom_monthly'}
-                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'custom_monthly' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.customMonthly')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      handleDraftFieldChange('recurrence_type', 'lunar');
-                                      handleDraftFieldChange('recurrence_interval', 1);
-                                      handleDraftFieldChange('recurrence_days', []);
-                                      const fallback = parseLunarYearlyRule(
-                                        { freq: 'lunar_yearly' },
-                                        draft.start_time || getDefaultStartInputValue(timezone),
-                                      ) || {
-                                        year: dayjs().tz(LUNAR_TIMEZONE).year(),
-                                        month: 1,
-                                        day: 1,
-                                        isLeapMonth: false,
-                                      };
-                                      setDraftRecurrenceLunarYear(fallback.year);
-                                      handleDraftFieldChange('recurrence_lunar_month', fallback.month);
-                                      handleDraftFieldChange('recurrence_lunar_day', fallback.day);
-                                      handleDraftFieldChange('recurrence_lunar_is_leap_month', fallback.isLeapMonth);
-                                    }}
-                                    aria-pressed={(draft.recurrence_type || 'daily') === 'lunar'}
-                                    className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'lunar' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.lunarYearly')}
-                                  </button>
-                                </div>
-                                {(draft.recurrence_type || 'daily') === 'custom_weekly' && (
-                                  <div className="task-quick-interval-row">
-                                    <span>{t('task.repeatEvery')}</span>
-                                    <div className="task-quick-stepper">
-                                      <button
-                                        type="button"
-                                        title={t('task.decreaseInterval')}
-                                        aria-label={t('task.decreaseInterval')}
-                                        onClick={() => handleDraftFieldChange(
-                                          'recurrence_interval',
-                                          Math.max(2, clampCustomRecurrenceInterval(draft.recurrence_interval) - 1)
-                                        )}
-                                        className="task-quick-stepper-btn"
-                                      >
-                                        -
-                                      </button>
-                                      <input
-                                        type="number"
-                                        min="2"
-                                        max={RECURRENCE_INTERVAL_MAX}
-                                        value={clampCustomRecurrenceInterval(draft.recurrence_interval)}
-                                        onChange={(event) => handleDraftFieldChange(
-                                          'recurrence_interval',
-                                          clampCustomRecurrenceInterval(event.target.value)
-                                        )}
-                                        className="task-quick-stepper-input"
-                                      />
-                                      <button
-                                        type="button"
-                                        title={t('task.increaseInterval')}
-                                        aria-label={t('task.increaseInterval')}
-                                        onClick={() => handleDraftFieldChange(
-                                          'recurrence_interval',
-                                          Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(draft.recurrence_interval) + 1)
-                                        )}
-                                        className="task-quick-stepper-btn"
-                                      >
-                                        +
-                                      </button>
-                                    </div>
-                                    <span>{t('task.repeatWeeksUnit')}</span>
-                                  </div>
-                                )}
-                                {(draft.recurrence_type || 'daily') === 'custom_monthly' && (
-                                  <div className="task-quick-interval-row">
-                                    <span>{t('task.repeatEvery')}</span>
-                                    <div className="task-quick-stepper">
-                                      <button
-                                        type="button"
-                                        title={t('task.decreaseInterval')}
-                                        aria-label={t('task.decreaseInterval')}
-                                        onClick={() => handleDraftFieldChange(
-                                          'recurrence_interval',
-                                          Math.max(2, clampCustomRecurrenceInterval(draft.recurrence_interval) - 1)
-                                        )}
-                                        className="task-quick-stepper-btn"
-                                      >
-                                        -
-                                      </button>
-                                      <input
-                                        type="number"
-                                        min="2"
-                                        max={RECURRENCE_INTERVAL_MAX}
-                                        value={clampCustomRecurrenceInterval(draft.recurrence_interval)}
-                                        onChange={(event) => handleDraftFieldChange(
-                                          'recurrence_interval',
-                                          clampCustomRecurrenceInterval(event.target.value)
-                                        )}
-                                        className="task-quick-stepper-input"
-                                      />
-                                      <button
-                                        type="button"
-                                        title={t('task.increaseInterval')}
-                                        aria-label={t('task.increaseInterval')}
-                                        onClick={() => handleDraftFieldChange(
-                                          'recurrence_interval',
-                                          Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(draft.recurrence_interval) + 1)
-                                        )}
-                                        className="task-quick-stepper-btn"
-                                      >
-                                        +
-                                      </button>
-                                    </div>
-                                    <span>{t('task.repeatMonthsUnit')}</span>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
-                            {(draft.recurrence_type || 'daily') === 'lunar' && (
-                              <div className="task-quick-section task-quick-subpanel">
-                                <div className="task-quick-section-title">{t('task.lunarYearly')}</div>
-                                <TaskDatePicker
-                                  value={draftRecurrenceLunarPickerDate}
-                                  allDay
-                                  inline
-                                  lunarOverlay
-                                  lunarMode
-                                  stepMinutes={timeGranularity}
-                                  onChange={(nextValue) => {
-                                    const value = String(nextValue || '').trim();
-                                    if (!value) return;
-                                    const lunar = lunarSelectionFromLocalInput(value, true, LUNAR_TIMEZONE);
-                                    if (!lunar) return;
-                                    const nextSelection = coerceLunarSelection({
-                                      year: lunar.year,
-                                      month: lunar.month,
-                                      day: lunar.day,
-                                      isLeapMonth: lunar.isLeapMonth,
-                                    });
-                                    setDraftRecurrenceLunarYear(nextSelection.year);
-                                    handleDraftFieldChange('recurrence_lunar_month', nextSelection.month);
-                                    handleDraftFieldChange('recurrence_lunar_day', nextSelection.day);
-                                    handleDraftFieldChange('recurrence_lunar_is_leap_month', nextSelection.isLeapMonth);
-                                  }}
-                                />
-                                <div className="mt-2 rounded-xl bg-white px-2 py-1.5 text-xs text-slate-600">
-                                  {`${t('task.lunarYearly')} ${draft.recurrence_lunar_is_leap_month ? t('task.lunarLeapPrefix') : ''}${Number.parseInt(draft.recurrence_lunar_month, 10) || 1}/${Number.parseInt(draft.recurrence_lunar_day, 10) || 1}`}
-                                </div>
-                              </div>
-                            )}
-
-                            {isWeeklyRecurrenceType(draft.recurrence_type || 'daily') && (
-                              <div className="task-quick-section">
-                                <p className="task-quick-section-title">{t('task.selectWeekdays')}</p>
-                                <div className="task-quick-chip-row mb-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDraftFieldChange('recurrence_days', workDayKeys)}
-                                    className="task-quick-chip"
-                                  >
-                                    {t('task.weekdaysWorkdays')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDraftFieldChange('recurrence_days', allDayKeys)}
-                                    className="task-quick-chip"
-                                  >
-                                    {t('task.weekdaysAll')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDraftFieldChange('recurrence_days', [])}
-                                    className="task-quick-chip"
-                                  >
-                                    {t('task.weekdaysClear')}
-                                  </button>
-                                </div>
-                                <div className="task-quick-weekday-grid">
-                                  {weekDays.map((day) => (
-                                    <button
-                                      key={day.key}
-                                      type="button"
-                                      onClick={() => toggleDraftRecurrenceDay(day.key)}
-                                      aria-pressed={(draft.recurrence_days || []).includes(day.key)}
-                                      className={`task-quick-weekday${(draft.recurrence_days || []).includes(day.key) ? ' task-quick-weekday--active' : ''}`}
-                                    >
-                                      {day.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {isMonthlyRecurrenceType(draft.recurrence_type || 'daily') && (
-                              <div className="task-quick-section">
-                                <button
-                                  type="button"
-                                  onClick={() => setShowDraftMonthlyDatePicker((prev) => !prev)}
-                                  className="task-quick-date-trigger"
-                                >
-                                  <span>{t('task.monthlyOnDate')}</span>
-                                  <span className="task-quick-date-value">
-                                    {clampMonthlyDate(draft.recurrence_date, 1)}
-                                  </span>
-                                </button>
-                                {showDraftMonthlyDatePicker && (
-                                  <div className="task-quick-date-grid">
-                                    <div className="grid grid-cols-7 gap-1">
-                                      {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => {
-                                        const active = clampMonthlyDate(draft.recurrence_date, 1) === day;
-                                        return (
-                                          <button
-                                            key={day}
-                                            type="button"
-                                            onClick={() => {
-                                              handleDraftFieldChange('recurrence_date', day);
-                                              setShowDraftMonthlyDatePicker(false);
-                                            }}
-                                            aria-pressed={active}
-                                            className={`task-quick-date-cell${active ? ' task-quick-date-cell--active' : ''}`}
-                                          >
-                                            {day}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        <div className="task-quick-footer">
-                          <button
-                            type="button"
-                            onClick={() => closeDetailPanelWithConfirm('recurrence', false)}
-                            className="task-quick-action task-quick-action--ghost"
-                          >
-                            {t('common.cancel')}
-                          </button>
-                          {selectedHasOccurrenceContext && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void openRecurringSeriesTemplate(selectedTask);
-                              }}
-                              className="task-quick-action task-quick-action--secondary"
-                              title={t('task.editSeriesTemplate')}
-                            >
-                              {t('task.editSeriesTemplateShort')}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              closeDetailPanelWithConfirm('recurrence', true);
-                              submitDraftImmediately('realtime_recurrence');
-                            }}
-                            className="task-quick-action task-quick-action--primary"
-                          >
-                            {t('common.confirm')}
-                          </button>
-                        </div>
-                      </div>
+                    <RecurrencePanel
+                      value={{
+                        enabled: draft.recurrence_enabled,
+                        type: draft.recurrence_type || 'daily',
+                        interval: draft.recurrence_interval,
+                        days: draft.recurrence_days || [],
+                        date: draft.recurrence_date,
+                        lunar: {
+                          year: draftRecurrenceLunarYear,
+                          month: draft.recurrence_lunar_month,
+                          day: draft.recurrence_lunar_day,
+                          isLeapMonth: draft.recurrence_lunar_is_leap_month,
+                        },
+                      }}
+                      onChange={handleRecurrenceFieldChange}
+                      onToggleDay={toggleDraftRecurrenceDay}
+                      renderDatePicker={({ value: pickerValue, onChange: pickerOnChange }) => (
+                        <TaskDatePicker
+                          value={pickerValue}
+                          allDay
+                          inline
+                          lunarOverlay
+                          lunarMode
+                          stepMinutes={timeGranularity}
+                          onChange={pickerOnChange}
+                        />
+                      )}
+                      startInput={draft.start_time || ''}
+                      workDayKeys={workDayKeys}
+                      weekDays={weekDays}
+                      onCancel={() => closeDetailPanelWithConfirm('recurrence', false)}
+                      onConfirm={() => {
+                        closeDetailPanelWithConfirm('recurrence', true);
+                        submitDraftImmediately('realtime_recurrence');
+                      }}
+                      onEditSeries={
+                        selectedHasOccurrenceContext
+                          ? () => {
+                              void openRecurringSeriesTemplate(selectedTask);
+                            }
+                          : undefined
+                      }
+                      className="md-popover fixed z-20 w-[18.25rem]"
+                      style={detailPanelFloatingStyle}
+                    />
                   )}
                 </div>
               </div>
 
               <div ref={bindDetailBodyScroll} className="task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-auto px-5 py-6 lg:px-8">
                 <div
-                  className="task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
+                  className="task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-card"
                   onClick={(event) => {
                     if (shouldFocusDescriptionEditorFromShellClick(event)) {
                       draftDescriptionEditorRef.current?.focus();
@@ -5997,16 +5648,16 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           }}
         >
           <div
-            className="absolute inset-x-0 bottom-0 rounded-t-2xl border border-slate-200 bg-white px-4 pb-4 pt-3 shadow-2xl md:bottom-auto md:left-1/2 md:top-1/2 md:w-[min(28rem,calc(100vw-2rem))] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl"
+            className="absolute inset-x-0 bottom-0 rounded-t-2xl border border-border bg-card px-4 pb-4 pt-3 shadow-2xl md:bottom-auto md:left-1/2 md:top-1/2 md:w-[min(28rem,calc(100vw-2rem))] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200 md:hidden" />
-            <h3 className="text-base font-semibold text-slate-900">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-muted md:hidden" />
+            <h3 className="text-base font-semibold text-foreground">
               {deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_CHOICE || deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_SERIES
                 ? t('task.deleteRecurringDialogTitle')
                 : t('task.deleteDialogTitle')}
             </h3>
-            <p className="mt-1 text-sm text-slate-600">
+            <p className="mt-1 text-sm text-muted-foreground">
               {deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_CHOICE
                 ? t('task.deleteRecurringDialogHint')
                 : deleteDialog.kind === DELETE_DIALOG_KIND_RECURRING_SERIES
@@ -6022,7 +5673,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   onClick={() => {
                     void executeDeleteAction('single');
                   }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm font-medium text-foreground-strong hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {deleteDialogSubmitting ? t('task.submitting') : t('task.skipThis')}
                 </button>
@@ -6042,7 +5693,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   onClick={() => {
                     closeDeleteDialog();
                   }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {t('common.cancel')}
                 </button>
@@ -6055,7 +5706,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   onClick={() => {
                     closeDeleteDialog();
                   }}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {t('common.cancel')}
                 </button>

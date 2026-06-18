@@ -8,10 +8,17 @@ import { scheduleSync } from './data/syncEngine';
 const Login = lazy(() => import('./components/Login'));
 const Register = lazy(() => import('./components/Register'));
 const MainLayout = lazy(() => import('./components/MainLayout'));
+const Landing = lazy(() => import('./components/Landing'));
+
+// PWA / Electron 直接进功能页（未登录进登录页）；仅 Web 浏览器显示 landing
+const isNativeApp = typeof window !== 'undefined' && (
+  Boolean(window.todoElectron)
+  || (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches)
+);
 
 function AppLoadingSkeleton() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--blue-surface))] px-4">
+    <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--card))] px-4">
       <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-sm" aria-label="Loading">
         <div className="mb-5 flex items-center gap-3">
           <div className="h-10 w-10 rounded-xl bg-slate-200" />
@@ -87,8 +94,10 @@ function App() {
           element={
             user ? (
               <MainLayout user={user} setUser={setUser} />
-            ) : (
+            ) : isNativeApp ? (
               <Navigate to="/login" />
+            ) : (
+              <Landing />
             )
           }
         />

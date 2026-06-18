@@ -525,5 +525,44 @@
   },
   "time": {
     "format": "YYYY-MM-DD HH:mm:ss"
+  },
+  "landing": {
+    "badge": "local-first · your data stays local",
+    "heroTitle": "Plan every day, own every detail",
+    "heroDesc": "A local-first todo & calendar. Your data stays on your device — private by default, works offline, syncs across devices.",
+    "ctaRegister": "Get started",
+    "ctaLogin": "Sign in",
+    "featuresTitle": "Built for people who take their time seriously",
+    "featuresDesc": "Lightweight, private, cross-platform — your time, on your terms.",
+    "feature": {
+      "localfirst": {
+        "title": "Local-first",
+        "desc": "Data lives on your device (IndexedDB). Private, secure, works offline."
+      },
+      "calendar": {
+        "title": "Calendar + Tasks",
+        "desc": "Calendar and tasks in one place. See your time at a glance."
+      },
+      "recurrence": {
+        "title": "Smart recurrence",
+        "desc": "Flexible repeat rules — daily, weekly, monthly, even lunar."
+      },
+      "ai": {
+        "title": "AI assist",
+        "desc": "AI drafts task descriptions; manage prompts to move faster."
+      },
+      "crossplatform": {
+        "title": "Cross-platform",
+        "desc": "Web, PWA, and desktop (Electron). Syncs automatically."
+      }
+    },
+    "ctaBottomTitle": "Take control of your time",
+    "ctaBottomDesc": "Sign up free. Local-first, private by default.",
+    "footer": "local-first · privacy by default",
+    "stats": {
+      "local": "data on device",
+      "offline": "works offline",
+      "platforms": "platforms"
+    }
   }
 }

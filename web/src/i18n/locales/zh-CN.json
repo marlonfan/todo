@@ -525,5 +525,44 @@
   },
   "time": {
     "format": "YYYY-MM-DD HH:mm:ss"
+  },
+  "landing": {
+    "badge": "local-first · 数据存本地",
+    "heroTitle": "把每一天，安排得明明白白",
+    "heroDesc": "本地优先的待办与日历。数据存在本地，隐私不外泄；离线可用，跨设备同步。",
+    "ctaRegister": "免费注册",
+    "ctaLogin": "登录",
+    "featuresTitle": "为认真对待时间的人设计",
+    "featuresDesc": "轻量、私密、跨平台——你的时间，由你掌控。",
+    "feature": {
+      "localfirst": {
+        "title": "本地优先",
+        "desc": "数据存储在本地（IndexedDB），隐私安全，离线也能用。"
+      },
+      "calendar": {
+        "title": "日历 + 任务",
+        "desc": "日历视图与任务列表一体，时间安排一目了然。"
+      },
+      "recurrence": {
+        "title": "智能重复",
+        "desc": "灵活的重复规则：每日、每周、每月，甚至农历。"
+      },
+      "ai": {
+        "title": "AI 辅助",
+        "desc": "AI 帮你生成任务描述，Prompt 管理让复用更高效。"
+      },
+      "crossplatform": {
+        "title": "跨平台",
+        "desc": "网页、PWA、桌面端（Electron），数据自动同步。"
+      }
+    },
+    "ctaBottomTitle": "开始掌控你的时间",
+    "ctaBottomDesc": "免费注册，数据本地优先，隐私安全。",
+    "footer": "数据本地 · 隐私优先",
+    "stats": {
+      "local": "数据本地",
+      "offline": "离线可用",
+      "platforms": "平台支持"
+    }
   }
 }

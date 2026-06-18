@@ -559,7 +559,7 @@ function MainLayout({ user, setUser }) {
   const appInitial = String(t('app.name') || 'T').trim().slice(0, 1).toUpperCase();
   const userAvatarURL = String(user?.avatar_url || '').trim();
   const workspaceFallback = (
-    <div className="flex h-full min-h-0 items-center justify-center bg-white text-sm text-slate-500">
+    <div className="flex h-full min-h-0 items-center justify-center bg-card text-sm text-muted-foreground">
       {t('common.loading')}
     </div>
   );
@@ -777,7 +777,7 @@ function MainLayout({ user, setUser }) {
   }
 
   return (
-    <div className="app-shell flex h-screen min-w-0 flex-col overflow-hidden bg-white md:flex-row">
+    <div className="app-shell flex h-screen min-w-0 flex-col overflow-hidden bg-card md:flex-row">
       {activeSyncConflict && (
         <div className="sync-conflict-toast fixed right-2 top-14 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
           <div className="text-xs font-semibold text-amber-900">{t('task.syncConflictTitle')}</div>
@@ -795,7 +795,7 @@ function MainLayout({ user, setUser }) {
             <button
               type="button"
               onClick={handleDismissSyncConflict}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-amber-300 bg-white px-2.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-amber-300 bg-card px-2.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
             >
               {t('task.syncConflictDismiss')}
             </button>
@@ -810,14 +810,14 @@ function MainLayout({ user, setUser }) {
         </div>
       )}
       {!hideMobileHeader && (
-        <div className="mobile-top-bar md:hidden flex h-12 items-center justify-between border-b border-border bg-white/95 px-4 backdrop-blur">
-          <h1 className="truncate text-sm font-semibold text-slate-800">{mobilePageTitle}</h1>
+        <div className="mobile-top-bar md:hidden flex h-12 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur">
+          <h1 className="truncate text-sm font-semibold text-foreground">{mobilePageTitle}</h1>
           <Button
             type="button"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             variant="ghost"
             size="icon"
-            className="text-slate-700"
+            className="text-foreground-strong"
           >
             {mobileMenuOpen ? '✕' : '☰'}
           </Button>
@@ -843,7 +843,7 @@ function MainLayout({ user, setUser }) {
           <button
             type="button"
             onClick={openSettings}
-            className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-blue-600 text-sm font-semibold text-white shadow-sm transition hover:ring-2 hover:ring-blue-200"
+            className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary text-sm font-semibold text-white shadow-sm transition hover:ring-2 hover:ring-ring"
             title={t('nav.settings')}
             aria-label={t('nav.settings')}
           >
@@ -854,8 +854,8 @@ function MainLayout({ user, setUser }) {
             )}
           </button>
           <div className="flex min-w-0 flex-col justify-center">
-            <h1 className="truncate text-lg font-semibold leading-6 text-slate-950">{t('app.name')}</h1>
-            <p className="-mt-0.5 truncate text-sm leading-5 text-slate-500">{user.username}</p>
+            <h1 className="truncate text-lg font-semibold leading-6 text-foreground">{t('app.name')}</h1>
+            <p className="-mt-0.5 truncate text-sm leading-5 text-muted-foreground">{user.username}</p>
           </div>
         </div>
 
@@ -870,7 +870,7 @@ function MainLayout({ user, setUser }) {
             </span>
           </StableNavLink>
 
-          <div className="mt-5 px-3 pb-1 text-xs font-semibold text-slate-400">
+          <div className="mt-5 px-3 pb-1 text-xs font-semibold text-muted-foreground">
             {t('task.listView')}
           </div>
           {taskNavItems.map((item) => {
@@ -905,7 +905,7 @@ function MainLayout({ user, setUser }) {
           })}
 
           {categories.length > 0 && (
-            <div className="mt-4 space-y-1.5 border-t border-slate-200 pt-3">
+            <div className="mt-4 space-y-1.5 border-t border-border pt-3">
               {categories.map((cat) => (
                 <StableNavLink
                   key={cat.id}
@@ -937,7 +937,7 @@ function MainLayout({ user, setUser }) {
             </div>
           )}
 
-          <div className={`${categories.length > 0 ? 'mt-4' : 'mt-5'} border-t border-slate-200 pt-3`}>
+          <div className={`${categories.length > 0 ? 'mt-4' : 'mt-5'} border-t border-border pt-3`}>
             <StableNavLink
               to="/tasks?view=completed"
               className={navItemClass(isTaskNavActive('/tasks?view=completed'))}
@@ -988,7 +988,7 @@ function MainLayout({ user, setUser }) {
           </button>
         </nav>
 
-        <div className="border-t border-slate-200 p-5">
+        <div className="border-t border-border p-5">
           <button
             onClick={handleLogout}
             className="md-nav-item md-nav-item-idle w-full text-left"
@@ -1023,7 +1023,7 @@ function MainLayout({ user, setUser }) {
         </Suspense>
       </div>
 
-      <div className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-20 border-t border-border bg-white md:hidden">
+      <div className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card md:hidden">
         <div className={`grid h-14 ${mobileTabs.length === 5 ? 'grid-cols-5' : mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
@@ -1043,12 +1043,12 @@ function MainLayout({ user, setUser }) {
                     openSearchDialog();
                   }}
                   className={`appearance-none border-0 bg-transparent p-0 flex items-center justify-center ${
-                    (item.action === 'open_settings' ? settingsOpen : active) ? 'text-slate-950' : 'text-slate-500'
+                    (item.action === 'open_settings' ? settingsOpen : active) ? 'text-foreground' : 'text-muted-foreground'
                   }`}
                 >
                   <span
                     className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                      (item.action === 'open_settings' ? settingsOpen : active) ? 'border-[hsl(var(--neutral-blue-foreground))]' : 'border-transparent hover:border-[hsl(var(--blue-border-strong))]'
+                      (item.action === 'open_settings' ? settingsOpen : active) ? 'border-[hsl(var(--primary))]' : 'border-transparent hover:border-[hsl(var(--border-strong))]'
                     }`}
                   >
                     <ItemIcon className="h-[18px] w-[18px]" />
@@ -1063,12 +1063,12 @@ function MainLayout({ user, setUser }) {
                 aria-label={item.label}
                 title={item.label}
                 className={`flex items-center justify-center ${
-                  active ? 'text-slate-950' : 'text-slate-500'
+                  active ? 'text-foreground' : 'text-muted-foreground'
                 }`}
               >
                 <span
                   className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                    active ? 'border-[hsl(var(--neutral-blue-foreground))]' : 'border-transparent hover:border-[hsl(var(--blue-border-strong))]'
+                    active ? 'border-[hsl(var(--primary))]' : 'border-transparent hover:border-[hsl(var(--border-strong))]'
                   }`}
                 >
                   <ItemIcon className="h-[18px] w-[18px]" />
@@ -1083,15 +1083,15 @@ function MainLayout({ user, setUser }) {
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 p-3">
           <div
             ref={resolveConflictDialogRef}
-            className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl"
+            className="w-full max-w-3xl rounded-xl border border-border bg-card shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="sync-conflict-resolve-title"
             tabIndex={-1}
           >
-            <div className="border-b border-slate-200 px-4 py-3">
-              <div id="sync-conflict-resolve-title" className="text-sm font-semibold text-slate-800">{t('task.syncConflictResolveTitle')}</div>
-              <div className="mt-1 text-xs text-slate-600">
+            <div className="border-b border-border px-4 py-3">
+              <div id="sync-conflict-resolve-title" className="text-sm font-semibold text-foreground">{t('task.syncConflictResolveTitle')}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
                 {resolvingConflictItem.task_title
                   ? t('task.syncConflictHint', { title: resolvingConflictItem.task_title })
                   : t('task.syncConflictHintFallback')}
@@ -1112,7 +1112,7 @@ function MainLayout({ user, setUser }) {
                         className={`inline-flex min-w-[8rem] max-w-[12rem] shrink-0 flex-col rounded-md border px-2.5 py-2 text-left text-xs ${
                           active
                             ? 'border-amber-400 bg-amber-50 text-amber-900'
-                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                            : 'border-border bg-card text-muted-foreground hover:bg-muted'
                         }`}
                       >
                         <span className="font-semibold">{t('task.syncConflictItem', { index: index + 1 })}</span>
@@ -1124,7 +1124,7 @@ function MainLayout({ user, setUser }) {
               )}
 
               {conflictFieldEntries.length === 0 && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                <div className="rounded-lg border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
                   {t('task.syncConflictNoFields')}
                 </div>
               )}
@@ -1133,8 +1133,8 @@ function MainLayout({ user, setUser }) {
                 {conflictFieldEntries.map((entry) => {
                   const selected = resolveSelections[entry.field] === 'server' ? 'server' : 'local';
                   return (
-                    <div key={entry.field} className="rounded-lg border border-slate-200 p-2">
-                      <div className="text-xs font-semibold text-slate-700">{entry.label}</div>
+                    <div key={entry.field} className="rounded-lg border border-border p-2">
+                      <div className="text-xs font-semibold text-foreground-strong">{entry.label}</div>
                       <div className="mt-1 grid gap-2 md:grid-cols-2">
                         <button
                           type="button"
@@ -1143,7 +1143,7 @@ function MainLayout({ user, setUser }) {
                           className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                             selected === 'server'
                               ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
-                              : 'border-slate-200 bg-white text-slate-700'
+                              : 'border-border bg-card text-foreground-strong'
                           }`}
                         >
                           <div className="font-medium">{t('task.syncConflictServer')}</div>
@@ -1155,8 +1155,8 @@ function MainLayout({ user, setUser }) {
                           aria-pressed={selected === 'local'}
                           className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                             selected === 'local'
-                              ? 'border-blue-500 bg-blue-50 text-blue-800'
-                              : 'border-slate-200 bg-white text-slate-700'
+                              ? 'border-primary bg-accent text-primary'
+                              : 'border-border bg-card text-foreground-strong'
                           }`}
                         >
                           <div className="font-medium">{t('task.syncConflictLocal')}</div>
@@ -1175,12 +1175,12 @@ function MainLayout({ user, setUser }) {
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+            <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
               <button
                 type="button"
                 onClick={handleCloseResolveConflict}
                 disabled={resolvingConflict}
-                className="inline-flex h-8 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                className="inline-flex h-8 items-center justify-center rounded-md border border-border-strong bg-card px-3 text-xs font-medium text-foreground-strong hover:bg-muted"
               >
                 {t('common.cancel')}
               </button>
@@ -1188,7 +1188,7 @@ function MainLayout({ user, setUser }) {
                 type="button"
                 onClick={() => { void handleApplyResolvedConflict(); }}
                 disabled={resolvingConflict}
-                className="inline-flex h-8 items-center justify-center rounded-md border border-blue-600 bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700"
+                className="inline-flex h-8 items-center justify-center rounded-md border border-primary bg-primary px-3 text-xs font-medium text-white hover:bg-primary-strong"
               >
                 {resolvingConflict ? t('common.loading') : t('task.syncConflictApply')}
               </button>
@@ -1217,7 +1217,7 @@ function MainLayout({ user, setUser }) {
         >
           <div
             ref={settingsDialogRef}
-            className="h-[min(46rem,calc(100vh-2rem))] w-[min(54rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl bg-white shadow-2xl"
+            className="h-[min(46rem,calc(100vh-2rem))] w-[min(54rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl bg-card shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-label={t('settings.title')}

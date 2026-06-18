@@ -42,33 +42,33 @@ function SearchPage() {
   };
 
   return (
-    <div className="h-full overflow-auto bg-slate-100 p-3 md:p-6">
+    <div className="h-full overflow-auto bg-muted p-3 md:p-6">
       <div className="mx-auto max-w-3xl">
-        <form onSubmit={submit} className="mb-3 border border-slate-200 bg-white p-3">
+        <form onSubmit={submit} className="mb-3 border border-border bg-card p-3">
           <div className="flex items-center gap-2">
             <input
               name="keyword"
               defaultValue={query}
               placeholder={t('task.searchPlaceholder')}
-              className="w-full border border-slate-300 px-3 py-2 text-sm outline-none ring-slate-400 focus:ring-2"
+              className="w-full border border-border-strong px-3 py-2 text-sm outline-none ring-ring focus:ring-2"
             />
-            <button type="submit" className="bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+            <button type="submit" className="bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary-strong">
               {t('common.search')}
             </button>
           </div>
         </form>
 
         {!query.trim() && (
-          <div className="border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+          <div className="border border-border bg-card p-8 text-center text-sm text-muted-foreground">
             {t('task.searchHint')}
           </div>
         )}
 
         {!!query.trim() && (
-          <div className="border border-slate-200 bg-white p-2">
-            {isLoading && <div className="px-3 py-6 text-sm text-slate-500">{t('common.loading')}</div>}
+          <div className="border border-border bg-card p-2">
+            {isLoading && <div className="px-3 py-6 text-sm text-muted-foreground">{t('common.loading')}</div>}
             {!isLoading && results.length === 0 && (
-              <div className="px-3 py-8 text-center text-sm text-slate-500">
+              <div className="px-3 py-8 text-center text-sm text-muted-foreground">
                 <p>{t('task.searchNoResults')}</p>
                 <p className="mt-1 text-xs">{t('task.searchHint')}</p>
               </div>
@@ -82,11 +82,11 @@ function SearchPage() {
                     <button
                       key={task.id}
                       type="button"
-                      className="block w-full border border-slate-200 px-3 py-2 text-left hover:bg-slate-50"
+                      className="block w-full border border-border px-3 py-2 text-left hover:bg-muted"
                       onClick={() => setSelectedTask(task)}
                     >
-                      <div className="truncate text-sm font-semibold text-slate-800">{task.title || '-'}</div>
-                      <div className="mt-0.5 truncate text-xs text-slate-500">{timeLabel}</div>
+                      <div className="truncate text-sm font-semibold text-foreground">{task.title || '-'}</div>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground">{timeLabel}</div>
                     </button>
                   );
                 })}

@@ -113,7 +113,7 @@ function CategoryManager() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="hidden border-b border-blue-100 bg-white/90 p-4 md:block">
+      <div className="hidden border-b border-accent bg-card/90 p-4 md:block">
         <h2 className="text-xl font-semibold">{t('nav.categories')}</h2>
       </div>
 
@@ -157,7 +157,7 @@ function CategoryManager() {
                   {...register('color')}
                   type="color"
                   defaultValue="#3788d8"
-                  className="h-10 w-12 cursor-pointer rounded-xl border border-blue-100 bg-white"
+                  className="h-10 w-12 cursor-pointer rounded-xl border border-accent bg-card"
                 />
               </div>
               <div className="flex gap-2">
@@ -184,16 +184,16 @@ function CategoryManager() {
           {/* Categories List */}
           <div className="md-card overflow-hidden">
             {isLoading && (
-              <div className="p-4 text-sm text-slate-500">{t('common.loading')}</div>
+              <div className="p-4 text-sm text-muted-foreground">{t('common.loading')}</div>
             )}
             {categories.length === 0 ? (
-              <div className="p-8 text-center text-slate-500">
+              <div className="p-8 text-center text-muted-foreground">
                 {t('category.noCategories')}
               </div>
             ) : (
-              <ul className="divide-y divide-blue-100">
+              <ul className="divide-y divide-border">
                 {categories.map((category) => (
-                  <li key={category.id} className="flex items-center justify-between p-4 transition-colors hover:bg-blue-50/60">
+                  <li key={category.id} className="flex items-center justify-between p-4 transition-colors hover:bg-accent/60">
                     <div className="flex items-center gap-3">
                       <span className="text-xl leading-none">{category.emoji || '📁'}</span>
                       <span
@@ -205,7 +205,7 @@ function CategoryManager() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEdit(category)}
-                        className="rounded-full px-3 py-1 text-sm text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-800"
+                        className="rounded-full px-3 py-1 text-sm text-primary transition-colors hover:bg-accent hover:text-primary"
                       >
                         {t('common.edit')}
                       </button>

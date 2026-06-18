@@ -159,33 +159,33 @@ function TaskActivityTimeline({ taskID, className = '' }) {
 
   if (!taskID) {
     return (
-      <div className={`rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500 ${className}`}>
+      <div className={`rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground ${className}`}>
         {t('task.activityEmpty')}
       </div>
     );
   }
 
   return (
-    <div className={`rounded-xl border border-slate-200 bg-white p-3 ${className}`}>
-      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{t('task.activityTitle')}</div>
+    <div className={`rounded-xl border border-border bg-card p-3 ${className}`}>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('task.activityTitle')}</div>
       {isLoading && activities.length === 0 ? (
-        <div className="py-2 text-xs text-slate-500">{t('common.loading')}</div>
+        <div className="py-2 text-xs text-muted-foreground">{t('common.loading')}</div>
       ) : activities.length === 0 ? (
-        <div className="py-2 text-xs text-slate-500">{t('task.activityEmpty')}</div>
+        <div className="py-2 text-xs text-muted-foreground">{t('task.activityEmpty')}</div>
       ) : (
         <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
           {activities.map((activity) => (
-            <div key={activity.id} className="rounded-lg border border-slate-100 bg-slate-50/70 p-2">
-              <div className="mb-1 text-[11px] text-slate-500">
+            <div key={activity.id} className="rounded-lg border border-border bg-muted/70 p-2">
+              <div className="mb-1 text-[11px] text-muted-foreground">
                 {dayjs(activity.occurred_at).tz(timezone).format('MM/DD HH:mm:ss')}
               </div>
               <div className="space-y-1">
                 {sortChangeEntries(activity.changes).map(([field, change]) => (
                   <div key={field} className="grid grid-cols-[5rem_1fr] items-start gap-1 text-[11px]">
-                    <span className="text-slate-500">{t(FIELD_LABEL_KEY[field] || field)}</span>
-                    <span className="text-slate-700">
-                      <span className="text-slate-500">{formatFieldValue(field, change?.from, formatterContext)}</span>
-                      <span className="mx-1 text-slate-400">-&gt;</span>
+                    <span className="text-muted-foreground">{t(FIELD_LABEL_KEY[field] || field)}</span>
+                    <span className="text-foreground-strong">
+                      <span className="text-muted-foreground">{formatFieldValue(field, change?.from, formatterContext)}</span>
+                      <span className="mx-1 text-muted-foreground">-&gt;</span>
                       <span>{formatFieldValue(field, change?.to, formatterContext)}</span>
                     </span>
                   </div>

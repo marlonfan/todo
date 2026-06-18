@@ -18,15 +18,23 @@ import {
   coerceLunarSelection,
   lunarSelectionFromLocalInput,
   nextLocalInputFromLunarSelection,
-  solarDateFromLunarSelection,
   LUNAR_TIMEZONE,
   parseLunarYearlyRule,
 } from '../utils/lunar';
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
 import { getLunarInfo } from '../utils/holidays';
 import {
+  buildCategorySummaryLabel,
+  normalizeByDayList,
+  clampMonthlyDate,
+  clampRecurrenceInterval,
+  clampCustomRecurrenceInterval,
+  isWeeklyRecurrenceType,
+  isMonthlyRecurrenceType,
+  isCustomRecurrenceTypeValue,
+} from '../utils/quickEditor';
+import {
   IconCalendar,
-  IconCheck,
   IconClock,
   IconFlag,
   IconHistory,
@@ -42,6 +50,8 @@ import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
+import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
+import { RecurrencePanel } from './task/RecurrencePanel';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
@@ -312,17 +322,6 @@ function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, luna
   return `${dateFmt(start)}-${dateFmt(end)}`;
 }
 
-function buildCategorySummaryLabel(selectedCategoryIDs, categories, showEmoji, fallbackLabel) {
-  const ids = Array.isArray(selectedCategoryIDs) ? selectedCategoryIDs.map(String) : [];
-  if (ids.length === 0) return fallbackLabel;
-  const selected = categories.filter((cat) => ids.includes(String(cat.id)));
-  if (selected.length === 0) return `${fallbackLabel}+${ids.length}`;
-  const first = selected[0];
-  const firstLabel = showEmoji && first?.emoji ? `${first.emoji}${first.name}` : String(first?.name || fallbackLabel);
-  if (selected.length === 1) return firstLabel;
-  return `${firstLabel}+${selected.length - 1}`;
-}
-
 function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, recurrenceMeta = null) {
   if (!enabled) return t('task.repeatOff');
   if (recurrenceType === 'lunar') {
@@ -355,44 +354,6 @@ function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, r
   if (recurrenceType === 'monthly') return t('task.monthly');
   if (recurrenceType === 'yearly') return t('task.yearly');
   return t('task.daily');
-}
-
-function normalizeByDayList(rawList) {
-  if (!Array.isArray(rawList)) return [];
-  return rawList
-    .map((day) => String(day || '').trim().toUpperCase())
-    .filter((day) => day.length > 0);
-}
-
-function clampMonthlyDate(value, fallback = 1) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(31, Math.max(1, parsed));
-}
-
-function clampRecurrenceInterval(value, fallback = 1) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(RECURRENCE_INTERVAL_MAX, Math.max(1, parsed));
-}
-
-function clampCustomRecurrenceInterval(value) {
-  return Math.max(2, clampRecurrenceInterval(value, 2));
-}
-
-function isWeeklyRecurrenceType(value) {
-  const type = String(value || 'daily');
-  return type === 'weekly' || type === 'biweekly' || type === 'custom_weekly';
-}
-
-function isMonthlyRecurrenceType(value) {
-  const type = String(value || 'daily');
-  return type === 'monthly' || type === 'custom_monthly';
-}
-
-function isCustomRecurrenceTypeValue(value) {
-  const type = String(value || 'daily');
-  return type === 'biweekly' || type === 'custom_weekly' || type === 'custom_monthly' || type === 'lunar';
 }
 
 function getRecurrenceIntervalForType(recurrenceType, weeklyInterval = 1, monthlyInterval = 1) {
@@ -766,12 +727,12 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
       ? 'bg-rose-50 text-rose-700'
       : priorityIconTone === 'medium'
         ? 'bg-sky-50 text-sky-700'
-        : 'bg-slate-100 text-slate-700'
+        : 'bg-muted text-foreground-strong'
     : priorityIconTone === 'high'
       ? 'text-rose-600 hover:bg-rose-50'
       : priorityIconTone === 'medium'
         ? 'text-sky-600 hover:bg-sky-50'
-        : 'text-slate-500 hover:bg-slate-100';
+        : 'text-muted-foreground hover:bg-muted';
   const priorityButtonTitle = priorityIconTone === 'high'
     ? t('task.priorityHigh')
     : priorityIconTone === 'medium'
@@ -784,7 +745,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     ? 'bg-sky-50 text-sky-700'
     : (hasParsedTimeHint || hasTimeValue)
       ? 'text-sky-600 hover:bg-sky-50'
-      : 'text-slate-500 hover:bg-slate-100';
+      : 'text-muted-foreground hover:bg-muted';
   const timeButtonTitle = hasParsedTimeHint ? parsePreview : timeSummaryLabel;
   const hasCategoryValue = selectedCategoryValues.length > 0;
   const categorySummaryLabel = buildCategorySummaryLabel(
@@ -797,7 +758,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     ? 'bg-indigo-50 text-indigo-700'
     : hasCategoryValue
       ? 'text-indigo-600 hover:bg-indigo-50'
-      : 'text-slate-500 hover:bg-slate-100';
+      : 'text-muted-foreground hover:bg-muted';
   const recurrenceSummaryLabel = buildRecurrenceSummaryLabel(showRecurrence, recurrenceType, selectedDays, t, {
     month: recurrenceLunarMonth,
     day: recurrenceLunarDay,
@@ -807,21 +768,10 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     monthlyInterval,
   });
   const recurrenceButtonClass = basicPanel === 'recurrence'
-    ? 'bg-slate-100 text-slate-700'
+    ? 'bg-muted text-foreground-strong'
     : showRecurrence
       ? 'text-emerald-600 hover:bg-emerald-50'
-      : 'text-slate-500 hover:bg-slate-100';
-  const isCustomRecurrenceType = isCustomRecurrenceTypeValue(recurrenceType);
-  const recurrenceLunarPickerDate = (
-    solarDateFromLunarSelection({
-      year: recurrenceLunarYear,
-      month: recurrenceLunarMonth,
-      day: recurrenceLunarDay,
-      isLeapMonth: recurrenceLunarIsLeapMonth,
-    })
-    || splitDatePart(startInputValue || '')
-    || dayjs().tz(getUserTimezone()).format('YYYY-MM-DD')
-  );
+      : 'text-muted-foreground hover:bg-muted';
 
   const isBasicPanelRequiringConfirm = useCallback(
     (panelName) => BASIC_PANELS_REQUIRING_CONFIRM.has(String(panelName || '')),
@@ -1997,7 +1947,77 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     { key: 'SU', label: t('calendar.weekday.su') },
   ];
   const workDayKeys = DEFAULT_WORKDAY_KEYS;
-  const allDayKeys = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+
+  // RecurrencePanel adapter：组件单字段 onChange → TaskModal state。
+  // 复现原 recurrence 浮层切 type/enabled 的副作用（TaskModal 语义：双 interval 字段、frequency 不重置 interval）。
+  const handleRecurrenceFieldChange = (field, value) => {
+    if (field === 'enabled') {
+      if (value === false) {
+        setShowRecurrence(false);
+        setSelectedDays([]);
+        setRecurrenceType('daily');
+      } else {
+        setShowRecurrence(true);
+        if (isWeeklyRecurrenceType(recurrenceType) && selectedDays.length === 0) {
+          setSelectedDays(workDayKeys);
+        }
+      }
+      return;
+    }
+    if (field === 'type') {
+      setRecurrenceType(value);
+      if (value === 'daily' || value === 'weekly' || value === 'monthly' || value === 'yearly') {
+        if (isWeeklyRecurrenceType(value) && selectedDays.length === 0) {
+          setSelectedDays(workDayKeys);
+        }
+        if (!isWeeklyRecurrenceType(value)) {
+          setSelectedDays([]);
+        }
+        if (value === 'monthly') {
+          const start = parseLocalInput(startInputValue || getValues('start_time') || '');
+          if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
+        }
+      } else if (value === 'biweekly') {
+        setWeeklyInterval(2);
+        if (selectedDays.length === 0) setSelectedDays(workDayKeys);
+      } else if (value === 'custom_weekly') {
+        setWeeklyInterval((prev) => clampCustomRecurrenceInterval(prev));
+        if (selectedDays.length === 0) setSelectedDays(workDayKeys);
+      } else if (value === 'custom_monthly') {
+        setSelectedDays([]);
+        setMonthlyInterval((prev) => clampCustomRecurrenceInterval(prev));
+        const start = parseLocalInput(startInputValue || getValues('start_time') || '');
+        if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
+      } else if (value === 'lunar') {
+        setSelectedDays([]);
+        const fallback = parseLunarYearlyRule(
+          { freq: 'lunar_yearly' },
+          startInputValue || getValues('start_time') || getDefaultStartInputValue(getUserTimezone()),
+        ) || {
+          year: dayjs().tz(LUNAR_TIMEZONE).year(),
+          month: 1,
+          day: 1,
+          isLeapMonth: false,
+        };
+        setRecurrenceLunarYear(fallback.year);
+        setRecurrenceLunarMonth(fallback.month);
+        setRecurrenceLunarDay(fallback.day);
+        setRecurrenceLunarIsLeapMonth(fallback.isLeapMonth);
+      }
+      return;
+    }
+    if (field === 'interval') {
+      if (recurrenceType === 'custom_weekly') setWeeklyInterval(value);
+      else if (recurrenceType === 'custom_monthly') setMonthlyInterval(value);
+      return;
+    }
+    if (field === 'days') { setSelectedDays(value); return; }
+    if (field === 'date') { setMonthlyDate(value); return; }
+    if (field === 'lunarYear') { setRecurrenceLunarYear(value); return; }
+    if (field === 'lunarMonth') { setRecurrenceLunarMonth(value); return; }
+    if (field === 'lunarDay') { setRecurrenceLunarDay(value); return; }
+    if (field === 'lunarIsLeapMonth') { setRecurrenceLunarIsLeapMonth(value); }
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -2059,7 +2079,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
       >
         <div ref={modalInitialFocusRef} className="task-modal-sheet-handle" aria-hidden="true" tabIndex={-1} />
         <div className="task-modal-frame relative flex min-h-0 flex-col">
-          <div className="task-modal-header sticky top-0 z-20 bg-white/95 px-5 pb-3 pt-4 backdrop-blur md:px-7">
+          <div className="task-modal-header sticky top-0 z-20 bg-card/95 px-5 pb-3 pt-4 backdrop-blur md:px-7">
             <div className="flex items-start justify-between gap-4">
               <div className="relative min-w-0 flex-1">
                 <input
@@ -2070,14 +2090,14 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                     setValue('title', e.target.value, { shouldDirty: true });
                   }}
                   onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
-                  className={`w-full border-none bg-transparent px-0 text-[1.34rem] font-semibold leading-8 text-slate-950 outline-none placeholder:text-slate-300 md:text-[1.45rem] ${
+                  className={`w-full border-none bg-transparent px-0 text-[1.34rem] font-semibold leading-8 text-foreground outline-none placeholder:text-muted-foreground md:text-[1.45rem] ${
                     isSeriesTemplateContext ? 'pr-20' : ''
                   }`}
                   placeholder={t('task.title')}
                 />
                 {isSeriesTemplateContext && (
                   <span
-                    className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-400"
+                    className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[11px] font-medium text-muted-foreground"
                     title={t('task.editingSeriesTemplateHint')}
                   >
                     {t('task.editingSeriesTemplateInline')}
@@ -2087,7 +2107,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
               <button
                 type="button"
                 onClick={requestClose}
-                className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground-strong"
                 title={t('common.cancel')}
               >
                 <IconX className="h-4 w-4" />
@@ -2096,7 +2116,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
               {error && (
                 <div className="mx-4 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
                   {error}
@@ -2130,8 +2150,8 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                           }}
                           className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm ${
                             showActivityPanel
-                              ? 'bg-slate-100 text-slate-700'
-                              : 'text-slate-500 hover:bg-slate-100'
+                              ? 'bg-muted text-foreground-strong'
+                              : 'text-muted-foreground hover:bg-muted'
                           }`}
                           title={t('task.activityTitle')}
                         >
@@ -2184,40 +2204,21 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                     </button>
                   </div>
                     {basicPanel === 'priority' && (
-                    <div className="task-quick-popover absolute left-0 top-10 z-20 w-[min(12.25rem,calc(100vw-3.5rem))]">
-                      <div className="task-quick-menu">
-                        {[
-                          { value: '1', label: t('task.priorityHigh'), tone: 'high' },
-                          { value: '0', label: t('task.priorityMedium'), tone: 'medium' },
-                          { value: '-1', label: t('task.priorityLow'), tone: 'low' },
-                        ].map((priorityOption) => {
-                          const active = priorityValue === priorityOption.value;
-                          return (
-                            <button
-                              key={priorityOption.value}
-                              type="button"
-                              onClick={() => {
-                                setValue('priority', priorityOption.value, { shouldDirty: true });
-                                setBasicPanel('');
-                                detailPanelSnapshotRef.current = null;
-                                if (isEditing) {
-                                  triggerRealtimeSave('realtime_priority', { priority: priorityOption.value });
-                                }
-                              }}
-                              aria-pressed={active}
-                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                            >
-                              <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
-                                <IconFlag className="h-4 w-4" />
-                              </span>
-                              <span className="task-quick-option-label">{priorityOption.label}</span>
-                              <IconCheck className="task-quick-option-check h-4 w-4" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                      <PriorityPanel
+                        value={priorityValue}
+                        className="absolute left-0 top-10 z-20 w-[min(12.25rem,calc(100vw-3.5rem))]"
+                        onChange={(nextPriority) => {
+                          setValue('priority', nextPriority, { shouldDirty: true });
+                          if (isEditing) {
+                            triggerRealtimeSave('realtime_priority', { priority: nextPriority });
+                          }
+                        }}
+                        onClose={() => {
+                          setBasicPanel('');
+                          detailPanelSnapshotRef.current = null;
+                        }}
+                      />
+                    )}
 
                   {basicPanel === 'time' && (
                     <div className="time-panel-card task-modal-time-panel mobile-scrollbar-hidden absolute left-0 top-10 z-20 w-[min(22.75rem,calc(100vw-1rem))] max-h-[calc(100vh-7rem)] overflow-y-auto p-2.5">
@@ -2424,426 +2425,81 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                   )}
 
                   {basicPanel === 'category' && (
-                    <div className="task-quick-popover task-quick-popover-scroll absolute left-0 top-10 z-20 w-[min(14.75rem,calc(100vw-3.5rem))]">
-                      <div className="task-quick-menu">
-                        {categories.map(cat => {
-                          const active = selectedCategoryValues.includes(String(cat.id));
-                          return (
-                            <button
-                              key={cat.id}
-                              type="button"
-                              onClick={() => {
-                                const current = getValues('category_ids');
-                                const asArray = Array.isArray(current) ? current.map(String) : current ? [String(current)] : [];
-                                const next = asArray.includes(String(cat.id))
-                                  ? asArray.filter((id) => id !== String(cat.id))
-                                  : [...asArray, String(cat.id)];
-                                setValue('category_ids', next, { shouldDirty: true });
-                                setBasicPanel('');
-                                detailPanelSnapshotRef.current = null;
-                                if (isEditing) {
-                                  triggerRealtimeSave('realtime_category', { category_ids: next });
-                                }
-                              }}
-                              aria-pressed={active}
-                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                            >
-                              <span className="task-quick-option-icon">
-                                {showCategoryEmoji && cat.emoji ? (
-                                  <span className="task-quick-category-emoji">{cat.emoji}</span>
-                                ) : (
-                                  <span className="task-quick-category-swatch" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                                )}
-                              </span>
-                              <span className="task-quick-option-label">{cat.name}</span>
-                              <IconCheck className="task-quick-option-check h-4 w-4" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {categories.length === 0 && (
-                        <p className="task-quick-empty">{t('category.noCategories')}</p>
-                      )}
-                    </div>
+                    <CategoryPanel
+                      categories={categories}
+                      selectedIds={selectedCategoryValues}
+                      showCategoryEmoji={showCategoryEmoji}
+                      className="absolute left-0 top-10 z-20 w-[min(14.75rem,calc(100vw-3.5rem))]"
+                      onToggle={(catId) => {
+                        const current = getValues('category_ids');
+                        const asArray = Array.isArray(current) ? current.map(String) : current ? [String(current)] : [];
+                        const next = asArray.includes(String(catId))
+                          ? asArray.filter((id) => id !== String(catId))
+                          : [...asArray, String(catId)];
+                        setValue('category_ids', next, { shouldDirty: true });
+                        if (isEditing) {
+                          triggerRealtimeSave('realtime_category', { category_ids: next });
+                        }
+                      }}
+                      onClose={() => {
+                        setBasicPanel('');
+                        detailPanelSnapshotRef.current = null;
+                      }}
+                    />
                   )}
 
                   {basicPanel === 'recurrence' && (
-                    <div className="task-quick-popover task-quick-popover-scroll task-recurrence-popover absolute left-0 top-10 z-20 w-[min(18.25rem,calc(100vw-3.5rem))]">
-                      <div className="task-quick-header">
-                        <div className="task-quick-title">{t('task.repeat')}</div>
-                        <div className="task-quick-toggle">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowRecurrence(false);
-                              setSelectedDays([]);
-                              setRecurrenceType('daily');
-                            }}
-                            aria-pressed={!showRecurrence}
-                            className={`task-quick-toggle-btn${!showRecurrence ? ' task-quick-toggle-btn--active' : ''}`}
-                          >
-                            {t('task.repeatOff')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowRecurrence(true);
-                              if (isWeeklyRecurrenceType(recurrenceType) && selectedDays.length === 0) {
-                                setSelectedDays(workDayKeys);
-                              }
-                            }}
-                            aria-pressed={showRecurrence}
-                            className={`task-quick-toggle-btn${showRecurrence ? ' task-quick-toggle-btn--active' : ''}`}
-                          >
-                            {t('task.repeatOn')}
-                          </button>
-                        </div>
-                      </div>
-
-                      {showRecurrence && (
-                        <div className="task-quick-content space-y-2">
-                          <div className="task-quick-menu">
-                            {[
-                              { value: 'daily', label: t('task.daily') },
-                              { value: 'weekly', label: t('task.weekly') },
-                              { value: 'monthly', label: t('task.monthly') },
-                              { value: 'yearly', label: t('task.yearly') },
-                            ].map((option) => {
-                              const active = recurrenceType === option.value;
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  onClick={() => {
-                                    setRecurrenceType(option.value);
-                                    setShowCustomRecurrenceMenu(false);
-                                    if (isWeeklyRecurrenceType(option.value) && selectedDays.length === 0) {
-                                      setSelectedDays(workDayKeys);
-                                    }
-                                    if (!isWeeklyRecurrenceType(option.value)) {
-                                      setSelectedDays([]);
-                                    }
-                                    if (option.value === 'monthly') {
-                                      const start = parseLocalInput(startInputValue || getValues('start_time') || '');
-                                      if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
-                                    }
-                                  }}
-                                  aria-pressed={active}
-                                  className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                                >
-                                  <span className="task-quick-option-icon">
-                                    <IconRepeat className="h-4 w-4" />
-                                  </span>
-                                  <span className="task-quick-option-label">{option.label}</span>
-                                  <IconCheck className="task-quick-option-check h-4 w-4" />
-                                </button>
-                              );
-                            })}
-                            <button
-                              type="button"
-                              onClick={() => setShowCustomRecurrenceMenu((prev) => !prev)}
-                              aria-pressed={isCustomRecurrenceType || showCustomRecurrenceMenu}
-                              className={`task-quick-option${isCustomRecurrenceType || showCustomRecurrenceMenu ? ' task-quick-option--active' : ''}`}
-                            >
-                              <span className="task-quick-option-icon">
-                                <IconRepeat className="h-4 w-4" />
-                              </span>
-                              <span className="task-quick-option-label">{t('task.customRepeat')}</span>
-                              <IconCheck className="task-quick-option-check h-4 w-4" />
-                            </button>
-                          </div>
-                          {(showCustomRecurrenceMenu || isCustomRecurrenceType) && (
-                            <div className="task-quick-section task-quick-subpanel">
-                              <div className="task-quick-section-title">{t('task.customRepeat')}</div>
-                              <div className="task-quick-chip-row">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setRecurrenceType('biweekly');
-                                    setWeeklyInterval(2);
-                                    if (selectedDays.length === 0) {
-                                      setSelectedDays(workDayKeys);
-                                    }
-                                  }}
-                                  aria-pressed={recurrenceType === 'biweekly'}
-                                  className={`task-quick-chip${recurrenceType === 'biweekly' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.biweekly')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setRecurrenceType('custom_weekly');
-                                      setWeeklyInterval((prev) => clampCustomRecurrenceInterval(prev));
-                                      if (selectedDays.length === 0) {
-                                        setSelectedDays(workDayKeys);
-                                      }
-                                    }}
-                                    aria-pressed={recurrenceType === 'custom_weekly'}
-                                    className={`task-quick-chip${recurrenceType === 'custom_weekly' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.customWeekly')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setRecurrenceType('custom_monthly');
-                                      setSelectedDays([]);
-                                      setMonthlyInterval((prev) => clampCustomRecurrenceInterval(prev));
-                                      const start = parseLocalInput(startInputValue || getValues('start_time') || '');
-                                      if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
-                                    }}
-                                    aria-pressed={recurrenceType === 'custom_monthly'}
-                                    className={`task-quick-chip${recurrenceType === 'custom_monthly' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.customMonthly')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setRecurrenceType('lunar');
-                                      setSelectedDays([]);
-                                      const fallback = parseLunarYearlyRule(
-                                        { freq: 'lunar_yearly' },
-                                        startInputValue || getValues('start_time') || getDefaultStartInputValue(getUserTimezone()),
-                                      ) || {
-                                        year: dayjs().tz(LUNAR_TIMEZONE).year(),
-                                        month: 1,
-                                        day: 1,
-                                        isLeapMonth: false,
-                                      };
-                                      setRecurrenceLunarYear(fallback.year);
-                                      setRecurrenceLunarMonth(fallback.month);
-                                      setRecurrenceLunarDay(fallback.day);
-                                      setRecurrenceLunarIsLeapMonth(fallback.isLeapMonth);
-                                    }}
-                                    aria-pressed={recurrenceType === 'lunar'}
-                                    className={`task-quick-chip${recurrenceType === 'lunar' ? ' task-quick-chip--active' : ''}`}
-                                  >
-                                    {t('task.lunarYearly')}
-                                  </button>
-                              </div>
-                              {recurrenceType === 'custom_weekly' && (
-                                <div className="task-quick-interval-row">
-                                  <span>{t('task.repeatEvery')}</span>
-                                  <div className="task-quick-stepper">
-                                    <button
-                                      type="button"
-                                      title={t('task.decreaseInterval')}
-                                      aria-label={t('task.decreaseInterval')}
-                                      onClick={() => setWeeklyInterval((prev) => Math.max(2, clampCustomRecurrenceInterval(prev) - 1))}
-                                      className="task-quick-stepper-btn"
-                                    >
-                                      -
-                                    </button>
-                                    <input
-                                      type="number"
-                                      min="2"
-                                      max={RECURRENCE_INTERVAL_MAX}
-                                      value={clampCustomRecurrenceInterval(weeklyInterval)}
-                                      onChange={(event) => setWeeklyInterval(clampCustomRecurrenceInterval(event.target.value))}
-                                      className="task-quick-stepper-input"
-                                    />
-                                    <button
-                                      type="button"
-                                      title={t('task.increaseInterval')}
-                                      aria-label={t('task.increaseInterval')}
-                                      onClick={() => setWeeklyInterval((prev) => Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(prev) + 1))}
-                                      className="task-quick-stepper-btn"
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                  <span>{t('task.repeatWeeksUnit')}</span>
-                                </div>
-                              )}
-                              {recurrenceType === 'custom_monthly' && (
-                                <div className="task-quick-interval-row">
-                                  <span>{t('task.repeatEvery')}</span>
-                                  <div className="task-quick-stepper">
-                                    <button
-                                      type="button"
-                                      title={t('task.decreaseInterval')}
-                                      aria-label={t('task.decreaseInterval')}
-                                      onClick={() => setMonthlyInterval((prev) => Math.max(2, clampCustomRecurrenceInterval(prev) - 1))}
-                                      className="task-quick-stepper-btn"
-                                    >
-                                      -
-                                    </button>
-                                    <input
-                                      type="number"
-                                      min="2"
-                                      max={RECURRENCE_INTERVAL_MAX}
-                                      value={clampCustomRecurrenceInterval(monthlyInterval)}
-                                      onChange={(event) => setMonthlyInterval(clampCustomRecurrenceInterval(event.target.value))}
-                                      className="task-quick-stepper-input"
-                                    />
-                                    <button
-                                      type="button"
-                                      title={t('task.increaseInterval')}
-                                      aria-label={t('task.increaseInterval')}
-                                      onClick={() => setMonthlyInterval((prev) => Math.min(RECURRENCE_INTERVAL_MAX, clampCustomRecurrenceInterval(prev) + 1))}
-                                      className="task-quick-stepper-btn"
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                  <span>{t('task.repeatMonthsUnit')}</span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {recurrenceType === 'lunar' && (
-                            <div className="task-quick-section task-quick-subpanel">
-                              <div className="task-quick-section-title">{t('task.lunarYearly')}</div>
-                              <TaskDatePicker
-                                value={recurrenceLunarPickerDate}
-                                allDay
-                                inline
-                                lunarOverlay
-                                lunarMode
-                                stepMinutes={timeGranularity}
-                                onChange={(nextValue) => {
-                                  const value = String(nextValue || '').trim();
-                                  if (!value) return;
-                                  const lunar = lunarSelectionFromLocalInput(value, true, LUNAR_TIMEZONE);
-                                  if (!lunar) return;
-                                  const nextSelection = coerceLunarSelection({
-                                    year: lunar.year,
-                                    month: lunar.month,
-                                    day: lunar.day,
-                                    isLeapMonth: lunar.isLeapMonth,
-                                  });
-                                  setRecurrenceLunarYear(nextSelection.year);
-                                  setRecurrenceLunarMonth(nextSelection.month);
-                                  setRecurrenceLunarDay(nextSelection.day);
-                                  setRecurrenceLunarIsLeapMonth(nextSelection.isLeapMonth);
-                                }}
-                              />
-                              <div className="mt-2 rounded-xl bg-white px-2 py-1.5 text-xs text-slate-600">
-                                {`${t('task.lunarYearly')} ${recurrenceLunarIsLeapMonth ? t('task.lunarLeapPrefix') : ''}${recurrenceLunarMonth}/${recurrenceLunarDay}`}
-                              </div>
-                            </div>
-                          )}
-
-                          {isWeeklyRecurrenceType(recurrenceType) && (
-                            <div className="task-quick-section">
-                              <p className="task-quick-section-title">{t('task.selectWeekdays')}</p>
-                              <div className="task-quick-chip-row mb-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedDays(workDayKeys)}
-                                  className="task-quick-chip"
-                                >
-                                  {t('task.weekdaysWorkdays')}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedDays(allDayKeys)}
-                                  className="task-quick-chip"
-                                >
-                                  {t('task.weekdaysAll')}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedDays([])}
-                                  className="task-quick-chip"
-                                >
-                                  {t('task.weekdaysClear')}
-                                </button>
-                              </div>
-                              <div className="task-quick-weekday-grid">
-                                {weekDays.map(day => (
-                                  <button
-                                    key={day.key}
-                                    type="button"
-                                    onClick={() => toggleDay(day.key)}
-                                    aria-pressed={selectedDays.includes(day.key)}
-                                    className={`task-quick-weekday${selectedDays.includes(day.key) ? ' task-quick-weekday--active' : ''}`}
-                                  >
-                                    {day.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {isMonthlyRecurrenceType(recurrenceType) && (
-                            <div className="task-quick-section">
-                              <button
-                                type="button"
-                                onClick={() => setShowMonthlyDatePicker((prev) => !prev)}
-                                className="task-quick-date-trigger"
-                              >
-                                <span>{t('task.monthlyOnDate')}</span>
-                                <span className="task-quick-date-value">{clampMonthlyDate(monthlyDate)}</span>
-                              </button>
-                              {showMonthlyDatePicker && (
-                                <div className="task-quick-date-grid">
-                                  <div className="grid grid-cols-7 gap-1">
-                                    {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => {
-                                      const active = clampMonthlyDate(monthlyDate) === day;
-                                      return (
-                                        <button
-                                          key={day}
-                                          type="button"
-                                          onClick={() => {
-                                            setMonthlyDate(day);
-                                            setShowMonthlyDatePicker(false);
-                                          }}
-                                          aria-pressed={active}
-                                          className={`task-quick-date-cell${active ? ' task-quick-date-cell--active' : ''}`}
-                                        >
-                                          {day}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                    <RecurrencePanel
+                      value={{
+                        enabled: showRecurrence,
+                        type: recurrenceType,
+                        interval: getRecurrenceIntervalForType(recurrenceType, weeklyInterval, monthlyInterval),
+                        days: selectedDays,
+                        date: monthlyDate,
+                        lunar: {
+                          year: recurrenceLunarYear,
+                          month: recurrenceLunarMonth,
+                          day: recurrenceLunarDay,
+                          isLeapMonth: recurrenceLunarIsLeapMonth,
+                        },
+                      }}
+                      onChange={handleRecurrenceFieldChange}
+                      onToggleDay={toggleDay}
+                      renderDatePicker={({ value: pickerValue, onChange: pickerOnChange }) => (
+                        <TaskDatePicker
+                          value={pickerValue}
+                          allDay
+                          inline
+                          lunarOverlay
+                          lunarMode
+                          stepMinutes={timeGranularity}
+                          onChange={pickerOnChange}
+                        />
                       )}
-                      <div className="task-quick-footer">
-                        <button
-                          type="button"
-                          onClick={() => closeBasicPanelWithConfirm('recurrence', false)}
-                          className="task-quick-action task-quick-action--ghost"
-                        >
-                          {t('common.cancel')}
-                        </button>
-                        {hasOccurrenceContext && typeof onEditSeriesTemplate === 'function' && (
-                          <button
-                            type="button"
-                            onClick={handleEditSeriesTemplate}
-                            className="task-quick-action task-quick-action--secondary"
-                            title={t('task.editSeriesTemplate')}
-                          >
-                            {t('task.editSeriesTemplateShort')}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            closeBasicPanelWithConfirm('recurrence', true);
-                            if (isEditing) {
-                              triggerRealtimeSave('realtime_recurrence');
-                            }
-                          }}
-                          className="task-quick-action task-quick-action--primary"
-                        >
-                          {t('common.confirm')}
-                        </button>
-                      </div>
-                    </div>
+                      startInput={startInputValue || ''}
+                      workDayKeys={workDayKeys}
+                      weekDays={weekDays}
+                      onCancel={() => closeBasicPanelWithConfirm('recurrence', false)}
+                      onConfirm={() => {
+                        closeBasicPanelWithConfirm('recurrence', true);
+                        if (isEditing) {
+                          triggerRealtimeSave('realtime_recurrence');
+                        }
+                      }}
+                      onEditSeries={
+                        hasOccurrenceContext && typeof onEditSeriesTemplate === 'function'
+                          ? handleEditSeriesTemplate
+                          : undefined
+                      }
+                      className="absolute left-0 top-10 z-20 w-[min(18.25rem,calc(100vw-3.5rem))]"
+                    />
                   )}
                 </div>
               </div>
 
               <div ref={bindModalBodyScroll} className="task-modal-body task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-5 py-4 md:px-7 md:py-5">
                 <div
-                  className="task-modal-description-editor task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-white"
+                  className="task-modal-description-editor task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-card"
                   onClick={(event) => {
                     if (shouldFocusDescriptionEditorFromShellClick(event)) {
                       descriptionEditorRef.current?.focus();
@@ -2887,7 +2543,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
               </div>
             </div>
 
-            <div className="task-modal-footer sticky bottom-0 z-20 flex items-center justify-between bg-white/95 px-5 py-2.5 backdrop-blur md:px-7">
+            <div className="task-modal-footer sticky bottom-0 z-20 flex items-center justify-between bg-card/95 px-5 py-2.5 backdrop-blur md:px-7">
               <div>
                 {isEditing && (
                   <div className="flex items-center gap-2">
@@ -2938,7 +2594,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
             }}
           >
             <div
-              className="w-full max-w-[18rem] rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+              className="w-full max-w-[18rem] rounded-xl border border-border bg-card p-3 shadow-xl"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="grid grid-cols-1 gap-2">

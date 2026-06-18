@@ -229,6 +229,7 @@ function createTray() {
 function createWindow() {
   mainWindow = new BrowserWindow({
     title: 'Todo',
+    autoHideMenuBar: !isMac,
     width: 1280,
     height: 800,
     minWidth: 900,
