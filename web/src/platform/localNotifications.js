@@ -121,11 +121,7 @@ async function loadNotificationModule() {
     },
     isPermissionGranted: () => electronNotifications.isPermissionGranted(),
     requestPermission: () => electronNotifications.requestPermission(),
-    sendNotification: (payload) => {
-      void electronNotifications.send(payload).catch((error) => {
-        console.error('Failed to send Electron notification:', error);
-      });
-    },
+    sendNotification: (payload) => electronNotifications.send(payload),
     cancel: (ids) => electronNotifications.cancel(ids),
   };
 }
@@ -404,7 +400,7 @@ export async function sendLocalNotificationTest() {
   if (!plugin) throw new Error('local notifications are not available');
   const granted = await ensurePermission({ request: true });
   if (!granted) throw new Error('notification permission was not granted');
-  plugin.sendNotification({
+  await plugin.sendNotification({
     id: buildNotificationID(`test|${Date.now()}`),
     channelId: NOTIFICATION_CHANNEL_ID,
     title: 'Todo',

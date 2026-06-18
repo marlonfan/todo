@@ -48,6 +48,35 @@ body {
   min-height: 100vh;
 }
 
+* {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+:where(a[href], button, [role="button"], summary, [tabindex]:not([tabindex="-1"])) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(a[href], button, [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus {
+  outline: none;
+}
+
+:where(a[href], button, [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid rgba(47, 124, 246, 0.42);
+  outline-offset: 2px;
+}
+
+:root[data-input-modality="pointer"]
+  :where(a[href], button, [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 .md-card {
   border-color: hsl(var(--blue-border));
   @apply rounded-lg border bg-card text-card-foreground shadow-sm;
@@ -55,6 +84,19 @@ body {
 
 .md-nav-item {
   @apply mt-1 flex min-h-9 items-center rounded-lg px-3.5 py-2 text-[0.96rem] transition-colors;
+}
+
+.md-nav-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(47, 124, 246, 0.32);
+}
+
+:root[data-input-modality="pointer"] .md-nav-item:focus-visible {
+  box-shadow: none !important;
+}
+
+:root[data-input-modality="pointer"] .peer:focus-visible ~ .peer-focus-visible\:ring-2 {
+  box-shadow: none !important;
 }
 
 .md-nav-item > span > .truncate {
@@ -3333,42 +3375,10 @@ body {
   border: none !important;
   min-width: 0;
   max-width: 100%;
-  scrollbar-color: rgba(148, 174, 198, 0) transparent;
-  scrollbar-width: thin;
-  transition: scrollbar-color 0.18s ease;
 }
 
 .task-detail-body-scroll {
   min-width: 0;
-}
-
-.live-md-toast .vditor-ir::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
-}
-
-.live-md-toast .vditor-ir::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.live-md-toast .vditor-ir::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background-color: rgba(148, 174, 198, 0);
-  background-clip: content-box;
-  transition: background-color 0.18s ease;
-}
-
-.live-md-toast .vditor-ir.is-scrolling {
-  scrollbar-color: rgba(148, 174, 198, 0.48) transparent;
-}
-
-.live-md-toast .vditor-ir.is-scrolling::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 174, 198, 0.48);
-}
-
-.live-md-toast .vditor-ir.is-scrolling::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(120, 148, 176, 0.58);
 }
 
 .live-md-toast .vditor-ir pre.vditor-reset {
@@ -3754,42 +3764,66 @@ body {
 }
 
 .editor-scrollbar-overlay {
-  scrollbar-color: rgba(148, 174, 198, 0) transparent;
-  scrollbar-width: thin;
-  transition: scrollbar-color 0.18s ease;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .editor-scrollbar-overlay::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.editor-scrollbar-track {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2147483000;
   width: 9px;
-  height: 9px;
+  height: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  will-change: transform;
 }
 
-.editor-scrollbar-overlay::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.editor-scrollbar-overlay::-webkit-scrollbar-thumb {
+.editor-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 9px;
+  min-height: 32px;
   border: 2px solid transparent;
   border-radius: 999px;
   background-color: rgba(148, 174, 198, 0);
   background-clip: content-box;
-  transition: background-color 0.18s ease;
+  transition: background-color 0.16s ease;
 }
 
-.editor-scrollbar-overlay.is-scrolling {
-  scrollbar-color: rgba(148, 174, 198, 0.48) transparent;
+.editor-scrollbar-track.has-custom-scrollbar.is-visible,
+.editor-scrollbar-track.has-custom-scrollbar.is-dragging {
+  pointer-events: auto;
+  opacity: 1;
 }
 
-.editor-scrollbar-overlay.is-scrolling::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 174, 198, 0.48);
+.editor-scrollbar-track.has-custom-scrollbar.is-visible > .editor-scrollbar-thumb,
+.editor-scrollbar-track.has-custom-scrollbar.is-dragging > .editor-scrollbar-thumb {
+  background-color: rgba(148, 174, 198, 0.54);
 }
 
-.editor-scrollbar-overlay.is-scrolling::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(120, 148, 176, 0.58);
+.editor-scrollbar-track.has-custom-scrollbar > .editor-scrollbar-thumb:hover,
+.editor-scrollbar-track.has-custom-scrollbar.is-dragging > .editor-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.62);
 }
 
-.editor-scrollbar-overlay::-webkit-scrollbar-corner {
-  background: transparent;
+.editor-scrollbar-track.is-dragging,
+.editor-scrollbar-track.is-dragging * {
+  cursor: default !important;
+  user-select: none !important;
+}
+
+.editor-scrollbar-track:not(.has-custom-scrollbar) {
+  display: none;
 }
 
 .live-md-toast .vditor-reset ol {
@@ -5890,4 +5924,15 @@ body {
 /* Date cell holiday highlight */
 .canvas-day-cell.holiday {
   @apply bg-rose-50/30;
+}
+
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+*::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
 }

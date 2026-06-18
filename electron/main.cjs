@@ -6,12 +6,19 @@ const isWindows = process.platform === 'win32';
 const keepsRunningInTray = isMac || isWindows;
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_DEV);
 const devURL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
+const APP_USER_MODEL_ID = 'life.marlon.todo';
+const STARTUP_HIDDEN_ARG = '--todo-startup-hidden';
 
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
+let startHidden = process.argv.includes(STARTUP_HIDDEN_ARG);
 const scheduledNotifications = new Map();
+const activeNotifications = new Set();
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const NOTIFICATION_DELIVERY_TIMEOUT_MS = 3000;
+const NOTIFICATION_REF_TTL_MS = 5 * 60 * 1000;
+const MAC_TRAY_ICON_SIZE = 18;
 const MAC_TRAY_TEMPLATE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAAAfElEQVR4nO3VUQrAIAwDUO9/aXeCimlTU1gC/jiID6e4lvOT7MsxCtOKQhGtOBaGgmJjyqioDFm4FaTuoR5IgwyK5m+vt0FSkKzLoGxJ5uGkPB8GZUGVHvmhRnaxHYT+VriQgaGCdvANwdBBjFHKKAwb9SSyhU8ZB3Ke5QM4aGimfd1r3QAAAABJRU5ErkJggg==';
 
 function resolveResourcePath(...segments) {
@@ -42,8 +49,9 @@ function getTrayIcon() {
   if (isMac) {
     const image = nativeImage.createFromDataURL(`data:image/png;base64,${MAC_TRAY_TEMPLATE_PNG_BASE64}`);
     if (!image.isEmpty()) {
-      image.setTemplateImage(true);
-      return image;
+      const resized = image.resize({ width: MAC_TRAY_ICON_SIZE, height: MAC_TRAY_ICON_SIZE });
+      resized.setTemplateImage(true);
+      return resized;
     }
   }
 
@@ -53,7 +61,7 @@ function getTrayIcon() {
     return image;
   }
   if (isMac) {
-    const resized = image.resize({ width: 18, height: 18 });
+    const resized = image.resize({ width: MAC_TRAY_ICON_SIZE, height: MAC_TRAY_ICON_SIZE });
     resized.setTemplateImage(true);
     return resized;
   }
@@ -236,6 +244,10 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
+    if (startHidden) {
+      mainWindow.hide();
+      return;
+    }
     showMainWindow();
   });
 
@@ -274,18 +286,62 @@ function requestNotificationPermission() {
 
 function showNotification(payload = {}) {
   if (!Notification.isSupported()) {
-    return false;
+    throw new Error('Desktop notifications are not supported on this system.');
   }
 
-  const notification = new Notification({
-    title: String(payload.title || 'Todo'),
-    body: String(payload.body || ''),
-    silent: false,
-  });
+  return new Promise((resolve, reject) => {
+    const notification = new Notification({
+      id: payload.id === undefined ? undefined : String(payload.id),
+      groupId: payload.groupId || payload.group || undefined,
+      title: String(payload.title || 'Todo'),
+      body: String(payload.body || ''),
+      sound: payload.sound || undefined,
+      silent: Boolean(payload.silent),
+    });
 
-  notification.on('click', showMainWindow);
-  notification.show();
-  return true;
+    activeNotifications.add(notification);
+
+    let settled = false;
+    const releaseTimer = setTimeout(() => {
+      activeNotifications.delete(notification);
+    }, NOTIFICATION_REF_TTL_MS);
+    const deliveryTimer = setTimeout(() => {
+      settle(resolve, true);
+    }, NOTIFICATION_DELIVERY_TIMEOUT_MS);
+
+    const cleanupDelivery = () => {
+      clearTimeout(deliveryTimer);
+    };
+    const release = () => {
+      clearTimeout(releaseTimer);
+      activeNotifications.delete(notification);
+    };
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanupDelivery();
+      callback(value);
+    };
+
+    notification.once('show', () => {
+      settle(resolve, true);
+    });
+    notification.once('failed', (_event, error) => {
+      const details = String(error || 'unknown error');
+      const hint = isMac
+        ? ' macOS Electron notifications require a code-signed app; unsigned builds emit a failed event.'
+        : '';
+      settle(reject, new Error(`Desktop notification failed: ${details}.${hint}`));
+      release();
+    });
+    notification.once('click', () => {
+      showMainWindow();
+      release();
+    });
+    notification.once('close', release);
+
+    notification.show();
+  });
 }
 
 function scheduleNotificationTimer(id, runAt, callback) {
@@ -315,7 +371,9 @@ function scheduleNotification(payload = {}) {
 
   const timeout = scheduleNotificationTimer(id, scheduledAt || new Date(), () => {
     scheduledNotifications.delete(id);
-    showNotification(payload);
+    showNotification(payload).catch((error) => {
+      console.error('Failed to show scheduled notification:', error);
+    });
   });
 
   scheduledNotifications.set(id, timeout);
@@ -333,6 +391,89 @@ function cancelNotifications(ids = []) {
   });
 }
 
+function isStartupSupported() {
+  return app.isPackaged && (isMac || isWindows);
+}
+
+function getWindowsLoginItemOptions() {
+  return {
+    path: app.getPath('exe'),
+    args: [STARTUP_HIDDEN_ARG],
+  };
+}
+
+function normalizeStartupSettings(settings = {}) {
+  const registered = isWindows
+    ? Boolean(settings.openAtLogin || settings.executableWillLaunchAtLogin)
+    : Boolean(settings.openAtLogin);
+  const enabled = isWindows
+    ? Boolean(settings.executableWillLaunchAtLogin)
+    : registered;
+
+  return {
+    supported: isStartupSupported(),
+    platform: process.platform,
+    packaged: app.isPackaged,
+    enabled,
+    registered,
+    openAtLogin: Boolean(settings.openAtLogin),
+    openAsHidden: Boolean(settings.openAsHidden),
+    wasOpenedAtLogin: Boolean(settings.wasOpenedAtLogin),
+    wasOpenedAsHidden: Boolean(settings.wasOpenedAsHidden),
+    restoreState: Boolean(settings.restoreState),
+    executableWillLaunchAtLogin: Boolean(settings.executableWillLaunchAtLogin),
+    status: settings.status || '',
+  };
+}
+
+function getStartupSettings() {
+  if (!isStartupSupported()) {
+    return normalizeStartupSettings();
+  }
+
+  const settings = isWindows
+    ? app.getLoginItemSettings(getWindowsLoginItemOptions())
+    : app.getLoginItemSettings();
+  return normalizeStartupSettings(settings);
+}
+
+function setStartupEnabled(enabled) {
+  if (!isStartupSupported()) {
+    throw new Error('Startup launch is only available in packaged macOS and Windows builds.');
+  }
+
+  if (isWindows) {
+    app.setLoginItemSettings({
+      ...getWindowsLoginItemOptions(),
+      openAtLogin: Boolean(enabled),
+      enabled: Boolean(enabled),
+    });
+  } else {
+    app.setLoginItemSettings({
+      openAtLogin: Boolean(enabled),
+      openAsHidden: true,
+    });
+  }
+
+  return getStartupSettings();
+}
+
+function shouldStartHiddenAtLogin() {
+  if (process.argv.includes(STARTUP_HIDDEN_ARG)) {
+    return true;
+  }
+  if (!isMac || !app.isPackaged) {
+    return false;
+  }
+  try {
+    const settings = app.getLoginItemSettings();
+    return Boolean(settings.wasOpenedAtLogin || settings.wasOpenedAsHidden);
+  } catch (error) {
+    console.error('Failed to read macOS login item launch state:', error);
+    return false;
+  }
+}
+
 function registerIPC() {
   ipcMain.handle('todo:notifications:is-supported', () => Notification.isSupported());
   ipcMain.handle('todo:notifications:is-permission-granted', () => Notification.isSupported());
@@ -347,21 +488,29 @@ function registerIPC() {
     cancelNotifications(ids);
     return true;
   });
+  ipcMain.handle('todo:startup:get', () => getStartupSettings());
+  ipcMain.handle('todo:startup:set-enabled', (_event, enabled) => setStartupEnabled(enabled));
 }
 
 app.setName('Todo');
 Menu.setApplicationMenu(buildApplicationMenu());
 if (isWindows) {
-  app.setAppUserModelId('life.marlon.todo');
+  app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', showMainWindow);
+  app.on('second-instance', (_event, commandLine) => {
+    if (Array.isArray(commandLine) && commandLine.includes(STARTUP_HIDDEN_ARG)) {
+      return;
+    }
+    showMainWindow();
+  });
 
   app.whenReady().then(() => {
+    startHidden = shouldStartHiddenAtLogin();
     registerIPC();
     setDockIcon();
     createTray();

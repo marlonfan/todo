@@ -8,10 +8,12 @@ import './index.css'
 import { queryClient } from './query/client'
 import { initializeSyncEngine } from './data/syncEngine'
 import { initPlatform } from './platform/init'
+import { initInputModality } from './utils/inputModality'
 
 (async () => {
   const isDesktopRuntime = Boolean(window.todoElectron);
   const shouldUseServiceWorker = 'serviceWorker' in navigator && !isDesktopRuntime && !import.meta.env.DEV;
+  initInputModality();
 
   // Dev servers need fresh modules for HMR, so clear any SW left from older runs.
   if ('serviceWorker' in navigator && import.meta.env.DEV) {

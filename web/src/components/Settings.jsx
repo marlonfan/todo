@@ -11,6 +11,7 @@ import {
   EyeOff,
   KeyRound,
   MonitorCog,
+  Power,
   Shield,
   UserCircle,
   X,
@@ -33,6 +34,7 @@ import {
   toAIConfigPayload,
 } from '../utils/aiConfig';
 import { getShowCategoryEmoji, setShowCategoryEmoji, getShowChineseHolidays, setShowChineseHolidays } from '../utils/uiPrefs';
+import { getStartupStatus, setStartupEnabled } from '../platform/startup';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { aiConfigAPI, authAPI, caldavAPI } from '../api/client';
@@ -173,6 +175,15 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncStatus, setSyncStatus] = useState({ pendingCount: 0, lastPullAt: '', lastError: '' });
   const [syncIntervalSeconds, setSyncIntervalSeconds] = useState(getConfiguredSyncIntervalSeconds());
+  const [startupStatus, setStartupStatus] = useState({
+    supported: false,
+    enabled: false,
+    registered: false,
+    platform: '',
+    packaged: false,
+    status: 'unknown',
+  });
+  const [startupBusy, setStartupBusy] = useState(false);
   const [aiConfig, setAIConfig] = useState(() => readAIConfig());
   const [aiConfigBusy, setAIConfigBusy] = useState(false);
   const [showAIKey, setShowAIKey] = useState(false);
@@ -250,6 +261,32 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     return () => {
       active = false;
       clearInterval(timer);
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'general') return undefined;
+    let active = true;
+
+    getStartupStatus()
+      .then((status) => {
+        if (!active) return;
+        setStartupStatus(status || {});
+      })
+      .catch(() => {
+        if (!active) return;
+        setStartupStatus({
+          supported: false,
+          enabled: false,
+          registered: false,
+          platform: '',
+          packaged: false,
+          status: 'error',
+        });
+      });
+
+    return () => {
+      active = false;
     };
   }, [activeTab]);
 
@@ -519,6 +556,23 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const handleShowChineseHolidaysToggle = (enabled) => {
     setShowChineseHolidaysState(enabled);
     setShowChineseHolidays(enabled);
+  };
+
+  const handleStartupToggle = async (enabled) => {
+    const previous = startupStatus;
+    setStartupBusy(true);
+    setStartupStatus((prev) => ({ ...prev, enabled, registered: enabled }));
+    setSaveToast(null);
+    try {
+      const status = await setStartupEnabled(enabled);
+      setStartupStatus(status || {});
+      showToast('success', enabled ? t('settings.startupEnabled') : t('settings.startupDisabled'));
+    } catch (err) {
+      setStartupStatus(previous);
+      showToast('error', err?.message || t('settings.startupFailed'));
+    } finally {
+      setStartupBusy(false);
+    }
   };
 
   const handleMobileDefaultTabChange = async (nextValue) => {
@@ -1093,6 +1147,45 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
               <div className="space-y-6">
                 <PWAInstallCard />
+
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 gap-3">
+                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-600">
+                        <Power className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-900">{t('settings.startupLaunch')}</div>
+                        <p className="mt-1 text-sm leading-5 text-slate-500">
+                          {startupStatus.supported
+                            ? t('settings.startupLaunchHint')
+                            : t('settings.startupLaunchUnavailable')}
+                        </p>
+                        {startupStatus.status === 'requires-approval' && (
+                          <p className="mt-1 text-xs font-medium text-amber-700">
+                            {t('settings.startupRequiresApproval')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={Boolean(startupStatus.enabled)}
+                      disabled={!startupStatus.supported || startupBusy}
+                      onClick={() => handleStartupToggle(!startupStatus.enabled)}
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-50 ${
+                        startupStatus.enabled ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 translate-y-[1px] rounded-full bg-white shadow-sm transition-transform ${
+                          startupStatus.enabled ? 'translate-x-5' : 'translate-x-[1px]'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
 
                 {/* Language */}
                 <div>

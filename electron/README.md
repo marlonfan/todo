@@ -44,3 +44,59 @@ npm run build
 ```
 
 This first runs `web`'s `build:desktop` script, then packages the app with `electron-builder`.
+
+## Launch At Login
+
+The desktop app exposes a Settings -> Launch at login switch for packaged macOS and Windows builds. It uses Electron's `app.setLoginItemSettings` API.
+
+- macOS registers the app as a login item and starts hidden when launched by the system login item.
+- Windows registers the installed `.exe` with the `--todo-startup-hidden` argument and checks the Task Manager startup-approved state.
+- Development runs are intentionally unsupported so `electron .` is not added to the user's system startup items.
+
+## macOS Notifications And Signing
+
+macOS system notifications sent through Electron's native `Notification` API need the app bundle to be code signed. A build can be un-notarized and still work locally, but it should not be completely unsigned.
+
+The packaged app uses bundle id `life.marlon.todo`. After changing signing mode, remove any stale notification permission for the old build and grant it again:
+
+```bash
+tccutil reset Notifications life.marlon.todo
+```
+
+### Development Signing
+
+For a local development `.app` without an Apple Developer certificate, build an ad-hoc signed app:
+
+```bash
+cd electron
+CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack:dev-signed
+npm run verify:mac-signature
+open dist/mac*/Todo.app
+```
+
+Then open Settings -> Notifications and click "Allow system notifications", followed by "Test local notification".
+
+This path uses `electron-builder --dir -c.mac.identity=- -c.mac.hardenedRuntime=false`. It is meant only for local testing. If macOS still suppresses the banner, check System Settings -> Notifications -> Todo and make sure alerts are enabled.
+
+### Certificate Signing
+
+For the final app, install a real signing identity in Keychain:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+Useful identities are:
+
+- `Developer ID Application: ...` for distribution outside the Mac App Store.
+- `Mac Developer: ...` for local development builds. `Apple Development: ...` may work when passed explicitly with `CSC_NAME`, but `Developer ID Application` is the production path.
+
+Then build with:
+
+```bash
+cd electron
+CSC_NAME="Your Name (TEAMID)" npm run build:signed
+npm run verify:mac-signature
+```
+
+`npm run build:signed` sets `forceCodeSigning=true`, so the build fails instead of silently producing an unsigned app when the certificate is missing. For normal `npm run build`, `electron-builder` will search Keychain automatically; if no identity exists it will skip signing.

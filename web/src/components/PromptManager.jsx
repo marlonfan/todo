@@ -66,6 +66,7 @@ function PromptManager() {
   const [askCopied, setAskCopied] = useState(false);
   const askControllerRef = useRef(null);
   const outputScrollCleanupRef = useRef(null);
+  const historyScrollCleanupRefs = useRef(new Map());
   const askCopiedTimerRef = useRef(null);
   const activeAskRef = useRef({
     prompt: null,
@@ -99,6 +100,8 @@ function PromptManager() {
   useEffect(() => () => {
     askControllerRef.current?.abort?.();
     outputScrollCleanupRef.current?.();
+    historyScrollCleanupRefs.current.forEach((cleanup) => cleanup?.());
+    historyScrollCleanupRefs.current.clear();
     if (askCopiedTimerRef.current) window.clearTimeout(askCopiedTimerRef.current);
   }, []);
 
@@ -106,6 +109,17 @@ function PromptManager() {
     outputScrollCleanupRef.current?.();
     outputScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
   };
+
+  const bindHistoryScroll = useCallback((key) => (node) => {
+    const cleanupMap = historyScrollCleanupRefs.current;
+    cleanupMap.get(key)?.();
+    cleanupMap.delete(key);
+    if (node) {
+      cleanupMap.set(key, attachTransientScrollbar(node));
+    }
+  }, []);
+  const bindDesktopHistoryScroll = useMemo(() => bindHistoryScroll('desktop'), [bindHistoryScroll]);
+  const bindMobileHistoryScroll = useMemo(() => bindHistoryScroll('mobile'), [bindHistoryScroll]);
 
   useEffect(() => {
     if (!formDialogOpen && !askDialogOpen && !deleteHistoryDialog.open) return undefined;
@@ -662,8 +676,9 @@ function PromptManager() {
     </form>
   );
 
-  const renderHistoryList = (className = '') => (
+  const renderHistoryList = (className = '', bindScroll = bindDesktopHistoryScroll) => (
     <div
+      ref={bindScroll}
       className={`prompt-history-list editor-scrollbar-overlay ${className}`}
       onScroll={handleHistoryScroll}
     >
@@ -819,7 +834,7 @@ function PromptManager() {
             </div>
             <span className="text-xs text-slate-400">{askHistoryCountLabel}</span>
           </div>
-          {renderHistoryList('prompt-history-list--mobile')}
+          {renderHistoryList('prompt-history-list--mobile', bindMobileHistoryScroll)}
         </section>
       </div>
 

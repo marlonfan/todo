@@ -1,6 +1,6 @@
 {
   "name": "todo-electron",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Electron desktop shell for Todo.",
   "author": "marlon",
@@ -9,7 +9,10 @@
     "dev": "node ./scripts/dev.mjs",
     "start": "electron .",
     "build": "node ./scripts/build.mjs && electron-builder",
-    "pack": "node ./scripts/build.mjs && electron-builder --dir"
+    "build:signed": "node ./scripts/build.mjs && electron-builder -c.forceCodeSigning=true",
+    "pack": "node ./scripts/build.mjs && electron-builder --dir",
+    "pack:dev-signed": "node ./scripts/build.mjs && electron-builder --dir -c.mac.identity=- -c.mac.hardenedRuntime=false",
+    "verify:mac-signature": "node ./scripts/verify-mac-signature.mjs"
   },
   "devDependencies": {
     "electron": "42.3.3",
@@ -40,7 +43,6 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "icons/icon.icns",
-      "identity": null,
       "target": [
         "dmg",
         "zip"

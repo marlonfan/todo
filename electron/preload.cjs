@@ -9,4 +9,8 @@ contextBridge.exposeInMainWorld('todoElectron', {
     send: (payload) => ipcRenderer.invoke('todo:notifications:send', payload),
     cancel: (ids) => ipcRenderer.invoke('todo:notifications:cancel', ids),
   },
+  startup: {
+    get: () => ipcRenderer.invoke('todo:startup:get'),
+    setEnabled: (enabled) => ipcRenderer.invoke('todo:startup:set-enabled', Boolean(enabled)),
+  },
 });

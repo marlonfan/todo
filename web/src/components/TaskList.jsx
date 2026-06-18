@@ -1579,6 +1579,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const detailPanelTriggerRefs = useRef({});
   const taskWorkspaceRef = useRef(null);
   const taskListScrollRef = useRef(null);
+  const taskListScrollCleanupRef = useRef(null);
   const taskSplitDragRef = useRef({ startX: 0, startRatio: TASK_SPLIT_DEFAULT_RATIO, workspaceWidth: 0 });
   const taskSplitRatioRef = useRef(taskSplitRatio);
   const taskPullRefreshRef = useRef({
@@ -1629,6 +1630,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const bindDetailBodyScroll = useCallback((node) => {
     detailBodyScrollCleanupRef.current?.();
     detailBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
+  }, []);
+
+  const bindTaskListScroll = useCallback((node) => {
+    taskListScrollRef.current = node;
+    taskListScrollCleanupRef.current?.();
+    taskListScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
+  }, []);
+
+  useEffect(() => () => {
+    taskListScrollCleanupRef.current?.();
+    taskListScrollCleanupRef.current = null;
   }, []);
 
   const scheduleTaskRowAnimation = useCallback((taskID, animation, duration = TASK_ROW_INSERT_MS) => {
@@ -4876,8 +4888,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           )}
 
           <div
-            ref={taskListScrollRef}
-            className="task-list-scroll mobile-scrollbar-hidden relative flex-1 overflow-auto bg-white md:bg-white"
+            ref={bindTaskListScroll}
+            className="task-list-scroll editor-scrollbar-overlay mobile-scrollbar-hidden relative flex-1 overflow-auto bg-white md:bg-white"
           >
             {(isCompactMobile || isMobileViewport) && (
               <div
