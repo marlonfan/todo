@@ -352,6 +352,13 @@ func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Ta
 	fromDate := fromUTC.Truncate(24 * time.Hour)
 	searchStart := fromDate.AddDate(-3, 0, 0)
 	horizon := fromDate.AddDate(3, 0, 0)
+	latestOccurrenceDates, err := s.taskRepo.ListLatestTaskOccurrenceDates(task.UserID, []int64{task.ID})
+	if err != nil {
+		return nil, err
+	}
+	if latestDate, ok := latestOccurrenceDates[task.ID]; ok {
+		horizon = extendRecurringSearchHorizon(horizon, latestDate, task.RecurrenceRule)
+	}
 	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(task.UserID, []int64{task.ID}, searchStart, horizon)
 	if err != nil {
 		return nil, err

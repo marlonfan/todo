@@ -85,14 +85,16 @@ export function shouldTreatPointerReleaseAsClick({
   startY = 0,
   endX = 0,
   endY = 0,
-  clickDistance = 8,
+  clickDistance,
+  pointerType = '',
 }) {
   if (ignoreTarget || (dragStarted && !allowStartedDrag)) return false;
   const sx = Number.isFinite(startX) ? startX : 0;
   const sy = Number.isFinite(startY) ? startY : 0;
   const ex = Number.isFinite(endX) ? endX : sx;
   const ey = Number.isFinite(endY) ? endY : sy;
-  const threshold = Math.max(0, Number.isFinite(clickDistance) ? clickDistance : 8);
+  const defaultDistance = String(pointerType || '').toLowerCase() === 'touch' ? 14 : 8;
+  const threshold = Math.max(0, Number.isFinite(clickDistance) ? clickDistance : defaultDistance);
   return Math.hypot(ex - sx, ey - sy) <= threshold;
 }
 

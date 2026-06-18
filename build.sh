@@ -12,6 +12,7 @@ cd ..
 
 # Prepare embedded files
 echo "Preparing embedded files..."
+rm -rf cmd/server/web/dist
 mkdir -p cmd/server/web/dist
 cp -r web/dist/* cmd/server/web/dist/
 

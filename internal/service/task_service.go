@@ -272,7 +272,25 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 	searchStart := fromDate.AddDate(-3, 0, 0)
 	horizon := fromDate.AddDate(3, 0, 0)
 	fromCutoff := fromRef.UTC()
-	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, taskIDs, searchStart, horizon)
+	latestOccurrenceDates, err := s.taskRepo.ListLatestTaskOccurrenceDates(userID, taskIDs)
+	if err != nil {
+		return nil, err
+	}
+	horizonByTask := make(map[int64]time.Time, len(recurringTasks))
+	extendedHorizon := horizon
+	for i := range recurringTasks {
+		task := &recurringTasks[i]
+		taskHorizon := horizon
+		if latestDate, ok := latestOccurrenceDates[task.ID]; ok {
+			taskHorizon = extendRecurringSearchHorizon(horizon, latestDate, task.RecurrenceRule)
+		}
+		horizonByTask[task.ID] = taskHorizon
+		if taskHorizon.After(extendedHorizon) {
+			extendedHorizon = taskHorizon
+		}
+	}
+
+	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, taskIDs, searchStart, extendedHorizon)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +307,11 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 		if task.RecurrenceRule == nil {
 			continue
 		}
-		occurrences := buildTaskOccurrenceStarts(task, searchStart, horizon, tz)
+		taskHorizon := horizonByTask[task.ID]
+		if taskHorizon.IsZero() {
+			taskHorizon = horizon
+		}
+		occurrences := buildTaskOccurrenceStarts(task, searchStart, taskHorizon, tz)
 		var earliestPending *models.TaskInstance
 		var firstAfterFromPending *models.TaskInstance
 		for _, occurrenceStart := range occurrences {
@@ -928,6 +950,13 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 	fromDate := fromUTC.Truncate(24 * time.Hour)
 	searchStart := fromDate.AddDate(-3, 0, 0)
 	horizon := fromDate.AddDate(3, 0, 0)
+	latestOccurrenceDates, err := s.taskRepo.ListLatestTaskOccurrenceDates(userID, []int64{task.ID})
+	if err != nil {
+		return nil, err
+	}
+	if latestDate, ok := latestOccurrenceDates[task.ID]; ok {
+		horizon = extendRecurringSearchHorizon(horizon, latestDate, task.RecurrenceRule)
+	}
 	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, []int64{task.ID}, searchStart, horizon)
 	if err != nil {
 		return nil, err

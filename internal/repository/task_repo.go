@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"fmt"
 	"time"
 	"todo-app/internal/models"
 
@@ -453,6 +454,77 @@ func (r *TaskRepository) ListTaskOccurrencesForTasksInRange(
 		Order("occurrence_date ASC, id ASC").
 		Find(&rows).Error
 	return rows, err
+}
+
+func (r *TaskRepository) ListLatestTaskOccurrenceDates(userID int64, taskIDs []int64) (map[int64]time.Time, error) {
+	if len(taskIDs) == 0 {
+		return map[int64]time.Time{}, nil
+	}
+	rows, err := r.db.
+		Model(&models.TaskOccurrence{}).
+		Select("task_id, MAX(occurrence_date) AS occurrence_date").
+		Where("user_id = ? AND task_id IN ?", userID, taskIDs).
+		Group("task_id").
+		Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	latestByTask := make(map[int64]time.Time)
+	for rows.Next() {
+		var taskID int64
+		var rawOccurrenceDate interface{}
+		if err := rows.Scan(&taskID, &rawOccurrenceDate); err != nil {
+			return nil, err
+		}
+		occurrenceDate, err := parseScannedTime(rawOccurrenceDate)
+		if err != nil {
+			return nil, err
+		}
+		if taskID <= 0 || occurrenceDate.IsZero() {
+			continue
+		}
+		latestByTask[taskID] = occurrenceDate.UTC().Truncate(24 * time.Hour)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return latestByTask, nil
+}
+
+func parseScannedTime(value interface{}) (time.Time, error) {
+	switch typed := value.(type) {
+	case nil:
+		return time.Time{}, nil
+	case time.Time:
+		return typed, nil
+	case []byte:
+		return parseScannedTimeString(string(typed))
+	case string:
+		return parseScannedTimeString(typed)
+	default:
+		return time.Time{}, fmt.Errorf("unsupported time scan type %T", value)
+	}
+}
+
+func parseScannedTimeString(value string) (time.Time, error) {
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05Z07:00",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time value %q", value)
 }
 
 func (r *TaskRepository) ListTaskOccurrencesByStatus(

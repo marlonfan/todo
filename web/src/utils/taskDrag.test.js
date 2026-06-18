@@ -91,3 +91,20 @@ test('shouldSelectTaskRowFromPointerRelease allows jitter but rejects drag inten
     allowStartedDrag: true,
   }), true);
 });
+
+test('shouldSelectTaskRowFromPointerRelease gives touch input a wider default click tolerance', () => {
+  assert.equal(shouldSelectTaskRowFromPointerRelease({
+    startX: 10,
+    startY: 10,
+    endX: 23,
+    endY: 10,
+    pointerType: 'touch',
+  }), true);
+  assert.equal(shouldSelectTaskRowFromPointerRelease({
+    startX: 10,
+    startY: 10,
+    endX: 23,
+    endY: 10,
+    pointerType: 'mouse',
+  }), false);
+});

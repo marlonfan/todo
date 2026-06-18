@@ -202,13 +202,13 @@ body {
 }
 
 .task-quick-toggle-btn {
-  min-height: 1.48rem;
+  min-height: 2rem;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: #64748b;
   padding: 0 0.5rem;
-  font-size: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 620;
   line-height: 1;
   transition:
@@ -235,7 +235,7 @@ body {
 
 .task-quick-option {
   display: flex;
-  min-height: 2.02rem;
+  min-height: 2.25rem;
   width: 100%;
   align-items: center;
   gap: 0.46rem;
@@ -335,7 +335,7 @@ body {
 .task-quick-empty {
   padding: 0.44rem 0.48rem 0.52rem;
   color: #94a3b8;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
 }
 
 .task-quick-divider {
@@ -351,7 +351,7 @@ body {
 .task-quick-section-title {
   margin: 0 0 0.3rem;
   color: #64748b;
-  font-size: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 620;
   line-height: 1.2;
 }
@@ -370,7 +370,7 @@ body {
 
 .task-quick-chip {
   display: inline-flex;
-  min-height: 1.56rem;
+  min-height: 2rem;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -378,7 +378,7 @@ body {
   background: #eef2f7;
   color: #475569;
   padding: 0 0.52rem;
-  font-size: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 620;
   transition:
     background-color 0.15s ease,
@@ -402,19 +402,19 @@ body {
 
 .task-quick-interval-row {
   display: flex;
-  min-height: 2rem;
+  min-height: 2.25rem;
   align-items: center;
   gap: 0.4rem;
   margin-top: 0.36rem;
   color: #475569;
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 620;
 }
 
 .task-quick-stepper {
   display: inline-grid;
-  grid-template-columns: 1.5rem 2.7rem 1.5rem;
-  height: 1.72rem;
+  grid-template-columns: 2rem 2.7rem 2rem;
+  height: 2rem;
   overflow: hidden;
   border: 1px solid #dbe4ee;
   border-radius: 8px;
@@ -447,7 +447,7 @@ body {
   border-right: 1px solid #e2e8f0;
   background: #fff;
   color: #0f172a;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   font-weight: 720;
   text-align: center;
   outline: none;
@@ -471,14 +471,14 @@ body {
 
 .task-quick-weekday {
   display: inline-flex;
-  min-height: 1.66rem;
+  min-height: 2rem;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: 7px;
   background: #f1f5f9;
   color: #475569;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   font-weight: 650;
   transition:
     background-color 0.15s ease,
@@ -504,7 +504,7 @@ body {
 
 .task-quick-date-trigger {
   display: inline-flex;
-  min-height: 1.78rem;
+  min-height: 2rem;
   align-items: center;
   gap: 0.38rem;
   border: 0;
@@ -512,7 +512,7 @@ body {
   background: #f1f5f9;
   color: #334155;
   padding: 0 0.52rem;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   font-weight: 620;
   transition:
     background-color 0.15s ease,
@@ -543,12 +543,12 @@ body {
 }
 
 .task-quick-date-cell {
-  height: 1.54rem;
+  height: 2rem;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: #475569;
-  font-size: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 620;
   transition:
     background-color 0.15s ease,
@@ -575,11 +575,11 @@ body {
 }
 
 .task-quick-action {
-  min-height: 1.64rem;
+  min-height: 2rem;
   border: 0;
   border-radius: 8px;
   padding: 0 0.62rem;
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 650;
   transition:
     background-color 0.15s ease,
@@ -599,6 +599,17 @@ body {
 .task-quick-action--ghost:hover {
   background: #f1f5f9;
   color: #334155;
+}
+
+.task-quick-action--secondary {
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.task-quick-action--secondary:hover {
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
 .task-quick-action--primary {
@@ -4163,13 +4174,13 @@ body {
 }
 
 .task-row-animate-complete-feedback {
-  animation: task-row-complete-feedback 0.14s ease-out both;
+  animation: task-row-complete-feedback 0.1s ease-out both;
 }
 
 .task-row-animate-complete-exit {
   overflow: hidden;
   pointer-events: none;
-  animation: task-row-complete-exit 0.18s ease-in both;
+  animation: task-row-complete-exit 0.14s ease-in both;
 }
 
 .task-row-animate-insert {

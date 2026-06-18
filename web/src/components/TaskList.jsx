@@ -182,6 +182,13 @@ function parseRecurrenceRule(rawRule) {
   }
 }
 
+function resolveRecurringSourceTask(task, allTasks) {
+  const sourceTaskID = Number(task?.source_task_id || task?.sourceTaskID || task?.task_id || task?.taskID || task?.id || 0);
+  if (!sourceTaskID) return null;
+  const source = (Array.isArray(allTasks) ? allTasks : []).find((item) => Number(item?.id || 0) === sourceTaskID);
+  return source || null;
+}
+
 function normalizeDraftForCompare(draft) {
   if (!draft) return null;
   return {
@@ -202,6 +209,27 @@ function normalizeDraftForCompare(draft) {
     recurrence_lunar_day: Number.parseInt(draft.recurrence_lunar_day, 10) || 1,
     recurrence_lunar_is_leap_month: !!draft.recurrence_lunar_is_leap_month,
   };
+}
+
+function stableSerializeForDraft(value) {
+  try {
+    const seen = new WeakSet();
+    const normalize = (item) => {
+      if (!item || typeof item !== 'object') return item;
+      if (seen.has(item)) return null;
+      seen.add(item);
+      if (Array.isArray(item)) return item.map(normalize);
+      return Object.keys(item)
+        .sort()
+        .reduce((acc, key) => {
+          acc[key] = normalize(item[key]);
+          return acc;
+        }, {});
+    };
+    return JSON.stringify(normalize(value));
+  } catch {
+    return String(value ?? '');
+  }
 }
 
 function isDetailPanelFloatingLayerTarget(target) {
@@ -934,6 +962,7 @@ const TaskRow = React.memo(function TaskRow({
     startX: 0,
     startY: 0,
     pointerId: null,
+    pointerType: '',
     dragStarted: false,
     selectedFromPointer: false,
     lastX: 0,
@@ -954,6 +983,14 @@ const TaskRow = React.memo(function TaskRow({
   const displayTime = resolveTaskDisplayTime(task, timeMode);
   const overdue = timeMode === 'primary' && isTaskOverdue(task, timezone);
   const displayTimeLabel = formatDisplayDateWithYear(displayTime, timezone);
+  const titleStateClass = isCompleted
+    ? 'text-slate-400 line-through decoration-slate-300'
+    : isDeleted
+      ? 'text-slate-500'
+      : 'text-slate-900';
+  const deletedStatusTone = isSkipped
+    ? 'border-violet-200 bg-violet-50 text-violet-700'
+    : 'border-slate-200 bg-slate-100 text-slate-600';
   const rowAnimationClass = rowAnimation === 'complete-exit'
     ? ' task-row-animate-complete-exit'
     : rowAnimation === 'complete-feedback'
@@ -976,16 +1013,18 @@ const TaskRow = React.memo(function TaskRow({
       }}
       onDragEnd={(event) => {
         const pointerState = pointerStateRef.current;
+        const startedFromPointer = pointerState.active || pointerState.pointerId !== null;
         const hasDragEndPosition = Number.isFinite(event.clientX)
           && Number.isFinite(event.clientY)
           && (event.clientX !== 0 || event.clientY !== 0);
-        if (shouldSelectTaskRowFromPointerRelease({
+        if (startedFromPointer && shouldSelectTaskRowFromPointerRelease({
           dragStarted: pointerState.dragStarted,
           allowStartedDrag: true,
           startX: pointerState.startX,
           startY: pointerState.startY,
           endX: hasDragEndPosition ? event.clientX : pointerState.lastX,
           endY: hasDragEndPosition ? event.clientY : pointerState.lastY,
+          pointerType: pointerState.pointerType,
         })) {
           pointerState.selectedFromPointer = true;
           onSelectTask(task);
@@ -1000,6 +1039,7 @@ const TaskRow = React.memo(function TaskRow({
           startX: event.clientX,
           startY: event.clientY,
           pointerId: event.pointerId,
+          pointerType: event.pointerType || '',
           dragStarted: false,
           selectedFromPointer: false,
           lastX: event.clientX,
@@ -1033,6 +1073,7 @@ const TaskRow = React.memo(function TaskRow({
           startY: pointerState.startY,
           endX: event.clientX,
           endY: event.clientY,
+          pointerType: event.pointerType || pointerState.pointerType,
         })) {
           pointerState.selectedFromPointer = true;
           onSelectTask(task);
@@ -1041,10 +1082,16 @@ const TaskRow = React.memo(function TaskRow({
       onPointerCancel={() => {
         pointerStateRef.current.active = false;
         pointerStateRef.current.selectedFromPointer = false;
+        pointerStateRef.current.pointerId = null;
       }}
       onClick={() => {
         if (pointerStateRef.current.selectedFromPointer) {
           pointerStateRef.current.selectedFromPointer = false;
+          pointerStateRef.current.pointerId = null;
+          return;
+        }
+        if (pointerStateRef.current.pointerId !== null) {
+          pointerStateRef.current.pointerId = null;
           return;
         }
         logDraftSwitchDebug('taskRow.click', {
@@ -1078,7 +1125,7 @@ const TaskRow = React.memo(function TaskRow({
         >
           <span className="text-[10px] leading-none">✓</span>
         </button>
-        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] leading-5 ${isCompleted || isDeleted ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
+        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] leading-5 ${titleStateClass}`}>
           {task.title}
         </h3>
         <div className="hidden shrink-0 items-center gap-2 text-xs sm:flex">
@@ -1099,7 +1146,11 @@ const TaskRow = React.memo(function TaskRow({
               ↺
             </button>
           )}
-          {isDeleted && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
+          {isDeleted && (
+            <span className={`rounded-sm border px-1.5 py-0.5 ${deletedStatusTone}`}>
+              {isSkipped ? labels.statusSkipped : labels.statusCancelled}
+            </span>
+          )}
           <span title={priority.title} className={priority.className}>{priority.text}</span>
           {task.categories?.slice(0, 2).map((cat) => (
             <span
@@ -1129,7 +1180,11 @@ const TaskRow = React.memo(function TaskRow({
             {displayTimeLabel}
           </span>
         )}
-        {isDeleted && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">{isSkipped ? labels.statusSkipped : labels.statusCancelled}</span>}
+        {isDeleted && (
+          <span className={`rounded-sm border px-1.5 py-0.5 ${deletedStatusTone}`}>
+            {isSkipped ? labels.statusSkipped : labels.statusCancelled}
+          </span>
+        )}
         {isReadOnly && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-slate-500">CalDAV</span>}
         <span title={priority.title} className={priority.className}>{priority.text}</span>
         {task.categories?.slice(0, 2).map((cat) => (
@@ -1160,6 +1215,56 @@ const TaskRow = React.memo(function TaskRow({
   prev.onSelectTask === next.onSelectTask &&
   prev.onToggleStatus === next.onToggleStatus
 ));
+
+function TaskListSkeleton() {
+  return (
+    <div className="space-y-2 px-3 py-4 md:px-5" aria-hidden="true">
+      {Array.from({ length: 7 }).map((_, index) => (
+        <div key={index} className="flex items-center gap-3 rounded-md border-b border-slate-100 bg-white px-1 py-2.5 md:px-0">
+          <div className="h-4 w-4 shrink-0 rounded-[5px] bg-slate-200" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className={`h-3.5 rounded-full bg-slate-200 ${index % 3 === 0 ? 'w-7/12' : index % 3 === 1 ? 'w-10/12' : 'w-5/12'}`} />
+            <div className="flex gap-2">
+              <div className="h-2.5 w-14 rounded-full bg-slate-100" />
+              <div className="h-2.5 w-20 rounded-full bg-slate-100" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TaskListEmptyState({ view, searchKeyword, canCreateTask, onCreateTask, t }) {
+  const isSearch = view === 'search';
+  const hasSearchTerm = !!String(searchKeyword || '').trim();
+  const title = isSearch ? t('task.searchNoResults') : t('task.emptyTitle');
+  const hint = isSearch
+    ? (hasSearchTerm ? t('task.searchHint') : t('task.searchEmptyHint'))
+    : t('task.emptyHint');
+
+  return (
+    <div className="flex min-h-[18rem] items-center justify-center px-4 py-12 text-center">
+      <div className="w-full max-w-sm">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-sky-100 bg-sky-50 text-sky-700 shadow-sm">
+          {isSearch ? <IconSearch className="h-6 w-6" /> : <IconCheck className="h-6 w-6" />}
+        </div>
+        <h2 className="mt-4 text-base font-semibold text-slate-900">{title}</h2>
+        <p className="mt-1 text-sm leading-6 text-slate-500">{hint}</p>
+        {canCreateTask && (
+          <button
+            type="button"
+            onClick={onCreateTask}
+            className="btn-primary mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm"
+          >
+            <Plus className="h-4 w-4" />
+            {t('task.newTask')}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export const TaskListView = React.memo(function TaskListView({ forcedView = '', routeLocation }) {
   const { t, i18n } = useTranslation();
@@ -1494,6 +1599,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const draftSyncTimerRef = useRef(0);
   const draftDescriptionRenderTimerRef = useRef(0);
   const pendingDraftSubmitRef = useRef({ taskID: 0, payload: null });
+  const lastSubmittedDraftRef = useRef({ taskID: 0, payloadKey: '' });
   const pendingImmediateSubmitSourceRef = useRef('');
   const preservingSavedSelectionTaskIDRef = useRef(0);
   const suppressRecurringEquivalentSelectionTaskIDRef = useRef(0);
@@ -1507,8 +1613,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const isSubmittingDraftRef = useRef(false);
   const flushDraftQueueRef = useRef(Promise.resolve());
   const flushDraftOnLeaveRef = useRef(null);
-  const discardDraftOnUnloadUntilRef = useRef(0);
-  const discardDraftOnUnloadTimerRef = useRef(0);
   const detailPanelSnapshotRef = useRef(null);
   const switchTaskRequestRef = useRef(0);
   const activeRenderTaskIDRef = useRef(0);
@@ -1807,10 +1911,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (taskPullRefreshResetTimerRef.current) {
       window.clearTimeout(taskPullRefreshResetTimerRef.current);
       taskPullRefreshResetTimerRef.current = 0;
-    }
-    if (discardDraftOnUnloadTimerRef.current) {
-      window.clearTimeout(discardDraftOnUnloadTimerRef.current);
-      discardDraftOnUnloadTimerRef.current = 0;
     }
     pinnedNextOccurrenceTimersRef.current.forEach((timerID) => window.clearTimeout(timerID));
     pinnedNextOccurrenceTimersRef.current.clear();
@@ -2382,9 +2482,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             ? t('task.statusPending')
             : status === 'completed'
               ? t('task.statusCompleted')
-          : status === 'skipped'
-            ? t('task.statusSkipped')
-            : t('task.statusCancelled');
+              : status === 'skipped'
+                ? t('task.statusSkipped')
+                : t('task.statusCancelled');
         pushTaskToGroup(status, title, task);
         return;
       }
@@ -2612,6 +2712,16 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [filteredTasks, getEffectiveTaskID, selectedTaskID, tasks]);
   // 对于虚拟实例，使用源任务的数字 ID
   activeRenderTaskIDRef.current = getEffectiveTaskID(selectedTask);
+  const selectedRecurrenceRule = parseRecurrenceRule(selectedTask?.recurrence_rule || selectedTask?.recurrenceRule);
+  const selectedHasOccurrenceContext = !!(
+    selectedRecurrenceRule
+    && (
+      String(selectedTask?.instanceId || selectedTask?.instance_id || '').trim()
+      || String(selectedTask?.occurrenceDate || selectedTask?.occurrence_date || '').trim()
+      || String(selectedTask?.occurrenceStart || selectedTask?.occurrence_start || '').trim()
+    )
+  );
+  const selectedIsSeriesTemplateContext = !!(selectedTask && selectedRecurrenceRule && !selectedHasOccurrenceContext);
   const parsedDraftPriority = parsePriorityFromTitle(String(draft?.title || ''));
   const draftPriorityValue = Number.isInteger(parsedDraftPriority?.priority)
     ? parsedDraftPriority.priority
@@ -3828,6 +3938,22 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       });
       return;
     }
+    const payloadKey = stableSerializeForDraft(pending.payload);
+    if (
+      Number(lastSubmittedDraftRef.current.taskID || 0) === taskID
+      && lastSubmittedDraftRef.current.payloadKey === payloadKey
+    ) {
+      logDraftSwitchDebug('draft.submit.skipDuplicatePayload', {
+        task_id: taskID,
+        submit_source: submitSource,
+      });
+      pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+      setPendingSubmitTaskID(0);
+      if (Number(preservingSavedSelectionTaskIDRef.current || 0) === taskID) {
+        preservingSavedSelectionTaskIDRef.current = 0;
+      }
+      return;
+    }
 
     setSubmittingDraft(true);
     try {
@@ -3851,6 +3977,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           submitSource,
         },
       });
+      lastSubmittedDraftRef.current = { taskID, payloadKey };
       pendingDraftSubmitRef.current = { taskID: 0, payload: null };
       setPendingSubmitTaskID(0);
       logDraftSwitchDebug('draft.submit.done', {
@@ -4036,15 +4163,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   const flushDraftOnLeave = useCallback((submitSource = 'leave', options = {}) => {
     const runFlush = async () => {
-      if (Date.now() < Number(discardDraftOnUnloadUntilRef.current || 0)) {
-        pendingDraftSubmitRef.current = { taskID: 0, payload: null };
-        setPendingSubmitTaskID(0);
-        preservingSavedSelectionTaskIDRef.current = 0;
-        logDraftSwitchDebug('draft.flush.skipDiscardOnUnload', {
-          submit_source: submitSource,
-        });
-        return;
-      }
       const pending = pendingDraftSubmitRef.current;
       const pendingTaskID = Number(pending?.taskID || 0);
       const pendingPayload = pending?.payload && typeof pending.payload === 'object' ? pending.payload : null;
@@ -4215,7 +4333,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const handleBeforeUnload = (event) => {
+    const handleBeforeUnload = () => {
       const pending = pendingDraftSubmitRef.current;
       const hasPendingSubmit = !!(
         Number(pending?.taskID || 0) > 0
@@ -4239,16 +4357,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         || isSubmittingDraftRef.current
       );
       if (!hasUnsyncedChanges) return;
-      discardDraftOnUnloadUntilRef.current = Date.now() + 10000;
-      if (discardDraftOnUnloadTimerRef.current) {
-        window.clearTimeout(discardDraftOnUnloadTimerRef.current);
+      const flush = flushDraftOnLeaveRef.current;
+      if (typeof flush === 'function') {
+        void flush('beforeunload');
       }
-      discardDraftOnUnloadTimerRef.current = window.setTimeout(() => {
-        discardDraftOnUnloadUntilRef.current = 0;
-        discardDraftOnUnloadTimerRef.current = 0;
-      }, 10000);
-      event.preventDefault();
-      event.returnValue = '';
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
@@ -4429,6 +4541,20 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     setModalTask(task);
     setModalOpen(true);
   }, []);
+
+  const openRecurringSeriesTemplate = useCallback(async (task) => {
+    const sourceTask = resolveRecurringSourceTask(task, tasksRaw);
+    if (!sourceTask || sourceTask.read_only) return;
+    if (modalOpen) {
+      setModalTask(sourceTask);
+      setModalOpen(true);
+      return;
+    }
+    if (isDraftDirtyRef.current) {
+      await handleSaveDraft({ submitAfter: true, submitSource: 'before_edit_series_template' });
+    }
+    openAdvancedModal(sourceTask);
+  }, [handleSaveDraft, modalOpen, openAdvancedModal, tasksRaw]);
 
   const handleModalClose = () => {
     setModalOpen(false);
@@ -4780,12 +4906,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
               }}
             >
               {loading ? (
-                <div className="py-8 text-center text-slate-500">{t('common.loading')}</div>
+                <TaskListSkeleton />
               ) : filteredTasks.length === 0 ? (
-                <div className="py-10 text-center text-slate-500">
-                  <p>{view === 'search' ? t('task.searchNoResults') : t('task.noTasks')}</p>
-                  <p className="mt-2 text-sm">{view === 'search' ? t('task.searchHint') : t('task.createFirst')}</p>
-                </div>
+                <TaskListEmptyState
+                  view={view}
+                  searchKeyword={searchKeyword}
+                  canCreateTask={canQuickCreate}
+                  onCreateTask={() => openAdvancedModal(null)}
+                  t={t}
+                />
               ) : (
                 <div className="space-y-5 px-0 py-1 md:px-5">
                   {taskGroups.map((group) => (
@@ -5276,7 +5405,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     </DropdownMenu>
                   </div>
                 </div>
-                <div className="mt-6 py-0.5">
+                <div className="relative mt-6 py-0.5">
                   <input
                     ref={draftTitleInputRef}
                     data-testid="task-detail-title-input"
@@ -5318,117 +5447,131 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       }
                       setDraftParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
                     }}
-                    className="w-full border-none bg-transparent px-0 text-[1.55rem] font-semibold leading-9 text-slate-950 outline-none placeholder:text-slate-300 sm:text-[1.65rem]"
+                    className={`w-full border-none bg-transparent px-0 text-[1.55rem] font-semibold leading-9 text-slate-950 outline-none placeholder:text-slate-300 sm:text-[1.65rem] ${
+                      selectedIsSeriesTemplateContext ? 'pr-20' : ''
+                    }`}
                     placeholder={t('task.title')}
                   />
+                  {selectedIsSeriesTemplateContext && (
+                    <span
+                      className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-400"
+                      title={t('task.editingSeriesTemplateHint')}
+                    >
+                      {t('task.editingSeriesTemplateInline')}
+                    </span>
+                  )}
                 </div>
                 <div className="relative">
                   {detailPanel === 'priority' && (
-                      <div className="task-quick-popover md-popover fixed z-20 w-[12.25rem]" style={detailPanelFloatingStyle}>
-                        <div className="task-quick-menu">
-                          {[
-                            { value: '1', label: t('task.priorityHigh'), tone: 'high' },
-                            { value: '0', label: t('task.priorityMedium'), tone: 'medium' },
-                            { value: '-1', label: t('task.priorityLow'), tone: 'low' },
-                          ].map((priorityOption) => {
-                            const active = String(draftPriorityValue) === priorityOption.value;
-                            return (
-                              <button
-                                key={priorityOption.value}
-                                type="button"
-                                onClick={() => {
-                                  handleDraftFieldChange('priority', priorityOption.value, {
-                                    submitNow: true,
-                                    submitSource: 'realtime_priority',
-                                  });
-                                  setDetailPanel('');
-                                }}
-                                className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                              >
-                                <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
-                                  <IconFlag className="h-4 w-4" />
-                                </span>
-                                <span className="task-quick-option-label">{priorityOption.label}</span>
-                                <IconCheck className="task-quick-option-check h-4 w-4" />
-                              </button>
-                            );
-                          })}
-                        </div>
+                    <div className="task-quick-popover md-popover fixed z-20 w-[12.25rem]" style={detailPanelFloatingStyle}>
+                      <div className="task-quick-menu">
+                        {[
+                          { value: '1', label: t('task.priorityHigh'), tone: 'high' },
+                          { value: '0', label: t('task.priorityMedium'), tone: 'medium' },
+                          { value: '-1', label: t('task.priorityLow'), tone: 'low' },
+                        ].map((priorityOption) => {
+                          const active = String(draftPriorityValue) === priorityOption.value;
+                          return (
+                            <button
+                              key={priorityOption.value}
+                              type="button"
+                              onClick={() => {
+                                handleDraftFieldChange('priority', priorityOption.value, {
+                                  submitNow: true,
+                                  submitSource: 'realtime_priority',
+                                });
+                                setDetailPanel('');
+                              }}
+                              aria-pressed={active}
+                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
+                            >
+                              <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
+                                <IconFlag className="h-4 w-4" />
+                              </span>
+                              <span className="task-quick-option-label">{priorityOption.label}</span>
+                              <IconCheck className="task-quick-option-check h-4 w-4" />
+                            </button>
+                          );
+                        })}
                       </div>
+                    </div>
                   )}
 
                   {detailPanel === 'category' && (
-                      <div className="task-quick-popover task-quick-popover-scroll md-popover fixed z-20 w-[14.75rem]" style={detailPanelFloatingStyle}>
-                        <div className="task-quick-menu">
-                          {categories.map((cat) => {
-                            const active = draft.category_ids.includes(String(cat.id));
-                            return (
-                              <button
-                                key={cat.id}
-                                type="button"
-                                onClick={() => {
-                                  toggleDraftCategory(cat.id);
-                                  setDetailPanel('');
-                                }}
-                                className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
-                              >
-                                <span className="task-quick-option-icon">
-                                  {showCategoryEmoji && cat.emoji ? (
-                                    <span className="task-quick-category-emoji">{cat.emoji}</span>
-                                  ) : (
-                                    <span className="task-quick-category-swatch" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                                  )}
-                                </span>
-                                <span className="task-quick-option-label">{cat.name}</span>
-                                <IconCheck className="task-quick-option-check h-4 w-4" />
-                              </button>
-                            );
-                          })}
-                        </div>
-                        {categories.length === 0 && (
-                          <p className="task-quick-empty">{t('category.noCategories')}</p>
-                        )}
+                    <div className="task-quick-popover task-quick-popover-scroll md-popover fixed z-20 w-[14.75rem]" style={detailPanelFloatingStyle}>
+                      <div className="task-quick-menu">
+                        {categories.map((cat) => {
+                          const active = draft.category_ids.includes(String(cat.id));
+                          return (
+                            <button
+                              key={cat.id}
+                              type="button"
+                              onClick={() => {
+                                toggleDraftCategory(cat.id);
+                                setDetailPanel('');
+                              }}
+                              aria-pressed={active}
+                              className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
+                            >
+                              <span className="task-quick-option-icon">
+                                {showCategoryEmoji && cat.emoji ? (
+                                  <span className="task-quick-category-emoji">{cat.emoji}</span>
+                                ) : (
+                                  <span className="task-quick-category-swatch" style={{ backgroundColor: cat.color || '#94a3b8' }} />
+                                )}
+                              </span>
+                              <span className="task-quick-option-label">{cat.name}</span>
+                              <IconCheck className="task-quick-option-check h-4 w-4" />
+                            </button>
+                          );
+                        })}
                       </div>
+                      {categories.length === 0 && (
+                        <p className="task-quick-empty">{t('category.noCategories')}</p>
+                      )}
+                    </div>
                   )}
 
                   {detailPanel === 'recurrence' && (
-                      <div className="task-quick-popover task-quick-popover-scroll task-recurrence-popover md-popover fixed z-20 w-[18.25rem]" style={detailPanelFloatingStyle}>
-                        <div className="task-quick-header">
-                          <div className="task-quick-title">{t('task.repeat')}</div>
-                          <div className="task-quick-toggle">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                handleDraftFieldChange('recurrence_enabled', false);
-                                handleDraftFieldChange('recurrence_type', 'daily');
-                                handleDraftFieldChange('recurrence_interval', 1);
-                                handleDraftFieldChange('recurrence_days', []);
-                                handleDraftFieldChange('recurrence_date', 1);
-                              }}
-                              className={`task-quick-toggle-btn${!draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
-                            >
-                              {t('task.repeatOff')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                handleDraftFieldChange('recurrence_enabled', true);
-                                if (
-                                  isWeeklyRecurrenceType(draft.recurrence_type || 'daily')
-                                  && (draft.recurrence_days || []).length === 0
-                                ) {
-                                  handleDraftFieldChange('recurrence_days', workDayKeys);
-                                }
-                              }}
-                              className={`task-quick-toggle-btn${draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
-                            >
-                              {t('task.repeatOn')}
-                            </button>
-                          </div>
+                    <div className="task-quick-popover task-quick-popover-scroll task-recurrence-popover md-popover fixed z-20 w-[18.25rem]" style={detailPanelFloatingStyle}>
+                      <div className="task-quick-header">
+                        <div className="task-quick-title">{t('task.repeat')}</div>
+                        <div className="task-quick-toggle">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleDraftFieldChange('recurrence_enabled', false);
+                              handleDraftFieldChange('recurrence_type', 'daily');
+                              handleDraftFieldChange('recurrence_interval', 1);
+                              handleDraftFieldChange('recurrence_days', []);
+                              handleDraftFieldChange('recurrence_date', 1);
+                            }}
+                            aria-pressed={!draft.recurrence_enabled}
+                            className={`task-quick-toggle-btn${!draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
+                          >
+                            {t('task.repeatOff')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleDraftFieldChange('recurrence_enabled', true);
+                              if (
+                                isWeeklyRecurrenceType(draft.recurrence_type || 'daily')
+                                && (draft.recurrence_days || []).length === 0
+                              ) {
+                                handleDraftFieldChange('recurrence_days', workDayKeys);
+                              }
+                            }}
+                            aria-pressed={draft.recurrence_enabled}
+                            className={`task-quick-toggle-btn${draft.recurrence_enabled ? ' task-quick-toggle-btn--active' : ''}`}
+                          >
+                            {t('task.repeatOn')}
+                          </button>
                         </div>
+                      </div>
 
-                        {draft.recurrence_enabled && (
-                          <div className="task-quick-content space-y-2">
+                      {draft.recurrence_enabled && (
+                        <div className="task-quick-content space-y-2">
                             <div className="task-quick-menu">
                               {[
                                 { value: 'daily', label: t('task.daily') },
@@ -5458,6 +5601,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                         }
                                       }
                                     }}
+                                    aria-pressed={active}
                                     className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                                   >
                                     <span className="task-quick-option-icon">
@@ -5471,6 +5615,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                               <button
                                 type="button"
                                 onClick={() => setShowDraftCustomRecurrenceMenu((prev) => !prev)}
+                                aria-pressed={isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu}
                                 className={`task-quick-option${isDraftCustomRecurrenceType || showDraftCustomRecurrenceMenu ? ' task-quick-option--active' : ''}`}
                               >
                                 <span className="task-quick-option-icon">
@@ -5493,6 +5638,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                         handleDraftFieldChange('recurrence_days', workDayKeys);
                                       }
                                     }}
+                                    aria-pressed={(draft.recurrence_type || 'daily') === 'biweekly'}
                                     className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'biweekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.biweekly')}
@@ -5506,6 +5652,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                         handleDraftFieldChange('recurrence_days', workDayKeys);
                                       }
                                     }}
+                                    aria-pressed={(draft.recurrence_type || 'daily') === 'custom_weekly'}
                                     className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'custom_weekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.customWeekly')}
@@ -5521,6 +5668,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                         handleDraftFieldChange('recurrence_date', clampMonthlyDate(start.date(), 1));
                                       }
                                     }}
+                                    aria-pressed={(draft.recurrence_type || 'daily') === 'custom_monthly'}
                                     className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'custom_monthly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.customMonthly')}
@@ -5545,6 +5693,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                       handleDraftFieldChange('recurrence_lunar_day', fallback.day);
                                       handleDraftFieldChange('recurrence_lunar_is_leap_month', fallback.isLeapMonth);
                                     }}
+                                    aria-pressed={(draft.recurrence_type || 'daily') === 'lunar'}
                                     className={`task-quick-chip${(draft.recurrence_type || 'daily') === 'lunar' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.lunarYearly')}
@@ -5704,6 +5853,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                       key={day.key}
                                       type="button"
                                       onClick={() => toggleDraftRecurrenceDay(day.key)}
+                                      aria-pressed={(draft.recurrence_days || []).includes(day.key)}
                                       className={`task-quick-weekday${(draft.recurrence_days || []).includes(day.key) ? ' task-quick-weekday--active' : ''}`}
                                     >
                                       {day.label}
@@ -5737,6 +5887,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                                               handleDraftFieldChange('recurrence_date', day);
                                               setShowDraftMonthlyDatePicker(false);
                                             }}
+                                            aria-pressed={active}
                                             className={`task-quick-date-cell${active ? ' task-quick-date-cell--active' : ''}`}
                                           >
                                             {day}
@@ -5758,6 +5909,18 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                           >
                             {t('common.cancel')}
                           </button>
+                          {selectedHasOccurrenceContext && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void openRecurringSeriesTemplate(selectedTask);
+                              }}
+                              className="task-quick-action task-quick-action--secondary"
+                              title={t('task.editSeriesTemplate')}
+                            >
+                              {t('task.editSeriesTemplateShort')}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -5904,7 +6067,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         </div>
       )}
 
-      {modalOpen && <TaskModal task={modalTask} onClose={handleModalClose} onSaved={handleTaskSaved} />}
+      {modalOpen && (
+        <TaskModal
+          task={modalTask}
+          onClose={handleModalClose}
+          onSaved={handleTaskSaved}
+          onEditSeriesTemplate={openRecurringSeriesTemplate}
+        />
+      )}
     </div>
   );
 });

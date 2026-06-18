@@ -194,6 +194,56 @@ func buildTaskOccurrenceStarts(task *models.Task, rangeStart, rangeEnd time.Time
 	return buildGregorianOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC, userTimezone)
 }
 
+func extendRecurringSearchHorizon(baseHorizon, latestOccurrenceDate time.Time, rule *models.RecurrenceRule) time.Time {
+	horizon := baseHorizon.UTC()
+	if latestOccurrenceDate.IsZero() || rule == nil {
+		return horizon
+	}
+	latest := latestOccurrenceDate.UTC().Truncate(24 * time.Hour)
+	normalized := normalizeRecurrenceRule(rule)
+	if normalized == nil {
+		return horizon
+	}
+	interval := normalized.Interval
+	if interval <= 0 {
+		interval = 1
+	}
+
+	var extended time.Time
+	switch normalized.Freq {
+	case recurrenceFreqDaily:
+		days := interval * 3
+		if days < 14 {
+			days = 14
+		}
+		extended = latest.AddDate(0, 0, days)
+	case recurrenceFreqWeekly:
+		weeks := interval * 3
+		if weeks < 8 {
+			weeks = 8
+		}
+		extended = latest.AddDate(0, 0, weeks*7)
+	case recurrenceFreqMonthly:
+		months := interval * 3
+		if months < 12 {
+			months = 12
+		}
+		extended = latest.AddDate(0, months, 0)
+	case recurrenceFreqYearly, recurrenceFreqLunarYearly, recurrenceFreqLunarLegacy:
+		years := interval * 3
+		if years < 4 {
+			years = 4
+		}
+		extended = latest.AddDate(years, 0, 0)
+	default:
+		extended = latest.AddDate(3, 0, 0)
+	}
+	if extended.After(horizon) {
+		return extended.UTC()
+	}
+	return horizon
+}
+
 func buildGregorianOccurrenceStarts(
 	anchor time.Time,
 	until *time.Time,

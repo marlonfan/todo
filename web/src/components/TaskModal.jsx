@@ -43,6 +43,7 @@ import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
@@ -670,7 +671,7 @@ function buildTaskModalSavedTask(task, savedTask, payload, saveContext) {
   };
 }
 
-function TaskModal({ task, initialRange, onClose, onSaved }) {
+function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { register, handleSubmit, watch, setValue, getValues } = useForm({
@@ -711,6 +712,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const [showActivityPanel, setShowActivityPanel] = useState(false);
   const basicPanelRef = useRef(null);
   const detailPanelSnapshotRef = useRef(null);
+  const modalShellRef = useRef(null);
+  const modalInitialFocusRef = useRef(null);
   const modalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const modalOpenedAtRef = useRef(Date.now());
   const descriptionEditorRef = useRef(null);
@@ -731,6 +734,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
   const isEditing = !!task;
   const mutationTaskID = getTaskMutationID(task);
   const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
+  const hasOccurrenceContext = !!(
+    isEditing
+    && recurrenceRule
+    && (
+      String(task?.instanceId || task?.instance_id || '').trim()
+      || String(task?.occurrenceDate || task?.occurrence_date || '').trim()
+      || String(task?.occurrenceStart || task?.occurrence_start || '').trim()
+    )
+  );
+  const isSeriesTemplateContext = !!(isEditing && recurrenceRule && !hasOccurrenceContext);
   const isAllDay = watch('all_day');
   const titleValue = watch('title') || '';
   const priorityValue = watch('priority') || '0';
@@ -1809,6 +1822,11 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     setValue('description', description, { shouldDirty: true });
   }, [setValue]);
 
+  const handleEditSeriesTemplate = useCallback(() => {
+    if (!hasOccurrenceContext || typeof onEditSeriesTemplate !== 'function') return;
+    onEditSeriesTemplate(task);
+  }, [hasOccurrenceContext, onEditSeriesTemplate, task]);
+
   const requestClose = useCallback(() => {
     const state = modalHistoryRef.current;
     if (typeof window !== 'undefined' && state.hasEntry) {
@@ -1994,8 +2012,8 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
       const state = modalHistoryRef.current;
       if (state.ignoreNextPop) {
         state.ignoreNextPop = false;
-        return;
-      }
+          return;
+        }
       if (!state.hasEntry) return;
       state.hasEntry = false;
       onClose();
@@ -2026,17 +2044,24 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [deleteChoiceOpen, loading, requestClose]);
 
+  useFocusTrap(true, modalShellRef, { initialFocusRef: modalInitialFocusRef });
+
   return createPortal(
     <div className="modal-overlay" onClick={handleOverlayClick}>
       <div
+        ref={modalShellRef}
         className="modal-content task-modal-shell mobile-scrollbar-hidden"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={isEditing ? t('task.editTask') : t('task.newTask')}
+        tabIndex={-1}
       >
-        <div className="task-modal-sheet-handle" aria-hidden="true" />
+        <div ref={modalInitialFocusRef} className="task-modal-sheet-handle" aria-hidden="true" tabIndex={-1} />
         <div className="task-modal-frame relative flex min-h-0 flex-col">
           <div className="task-modal-header sticky top-0 z-20 bg-white/95 px-5 pb-3 pt-4 backdrop-blur md:px-7">
             <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
+              <div className="relative min-w-0 flex-1">
                 <input
                   data-testid="task-modal-title-input"
                   value={titleValue}
@@ -2045,9 +2070,19 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                     setValue('title', e.target.value, { shouldDirty: true });
                   }}
                   onBlur={(e) => applyNaturalTimeFromTitle(e.target.value, !timeTouched)}
-                  className="w-full border-none bg-transparent px-0 text-[1.34rem] font-semibold leading-8 text-slate-950 outline-none placeholder:text-slate-300 md:text-[1.45rem]"
+                  className={`w-full border-none bg-transparent px-0 text-[1.34rem] font-semibold leading-8 text-slate-950 outline-none placeholder:text-slate-300 md:text-[1.45rem] ${
+                    isSeriesTemplateContext ? 'pr-20' : ''
+                  }`}
                   placeholder={t('task.title')}
                 />
+                {isSeriesTemplateContext && (
+                  <span
+                    className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-400"
+                    title={t('task.editingSeriesTemplateHint')}
+                  >
+                    {t('task.editingSeriesTemplateInline')}
+                  </span>
+                )}
               </div>
               <button
                 type="button"
@@ -2169,6 +2204,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   triggerRealtimeSave('realtime_priority', { priority: priorityOption.value });
                                 }
                               }}
+                              aria-pressed={active}
                               className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                             >
                               <span className={`task-quick-option-icon task-quick-option-icon--${priorityOption.tone}`}>
@@ -2409,6 +2445,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                   triggerRealtimeSave('realtime_category', { category_ids: next });
                                 }
                               }}
+                              aria-pressed={active}
                               className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                             >
                               <span className="task-quick-option-icon">
@@ -2442,6 +2479,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                               setSelectedDays([]);
                               setRecurrenceType('daily');
                             }}
+                            aria-pressed={!showRecurrence}
                             className={`task-quick-toggle-btn${!showRecurrence ? ' task-quick-toggle-btn--active' : ''}`}
                           >
                             {t('task.repeatOff')}
@@ -2454,6 +2492,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                 setSelectedDays(workDayKeys);
                               }
                             }}
+                            aria-pressed={showRecurrence}
                             className={`task-quick-toggle-btn${showRecurrence ? ' task-quick-toggle-btn--active' : ''}`}
                           >
                             {t('task.repeatOn')}
@@ -2489,6 +2528,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
                                     }
                                   }}
+                                  aria-pressed={active}
                                   className={`task-quick-option${active ? ' task-quick-option--active' : ''}`}
                                 >
                                   <span className="task-quick-option-icon">
@@ -2502,6 +2542,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                             <button
                               type="button"
                               onClick={() => setShowCustomRecurrenceMenu((prev) => !prev)}
+                              aria-pressed={isCustomRecurrenceType || showCustomRecurrenceMenu}
                               className={`task-quick-option${isCustomRecurrenceType || showCustomRecurrenceMenu ? ' task-quick-option--active' : ''}`}
                             >
                               <span className="task-quick-option-icon">
@@ -2524,6 +2565,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       setSelectedDays(workDayKeys);
                                     }
                                   }}
+                                  aria-pressed={recurrenceType === 'biweekly'}
                                   className={`task-quick-chip${recurrenceType === 'biweekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.biweekly')}
@@ -2537,6 +2579,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                         setSelectedDays(workDayKeys);
                                       }
                                     }}
+                                    aria-pressed={recurrenceType === 'custom_weekly'}
                                     className={`task-quick-chip${recurrenceType === 'custom_weekly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.customWeekly')}
@@ -2550,6 +2593,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       const start = parseLocalInput(startInputValue || getValues('start_time') || '');
                                       if (start) setMonthlyDate(clampMonthlyDate(start.date(), monthlyDate));
                                     }}
+                                    aria-pressed={recurrenceType === 'custom_monthly'}
                                     className={`task-quick-chip${recurrenceType === 'custom_monthly' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.customMonthly')}
@@ -2573,6 +2617,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                       setRecurrenceLunarDay(fallback.day);
                                       setRecurrenceLunarIsLeapMonth(fallback.isLeapMonth);
                                     }}
+                                    aria-pressed={recurrenceType === 'lunar'}
                                     className={`task-quick-chip${recurrenceType === 'lunar' ? ' task-quick-chip--active' : ''}`}
                                   >
                                     {t('task.lunarYearly')}
@@ -2714,6 +2759,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                     key={day.key}
                                     type="button"
                                     onClick={() => toggleDay(day.key)}
+                                    aria-pressed={selectedDays.includes(day.key)}
                                     className={`task-quick-weekday${selectedDays.includes(day.key) ? ' task-quick-weekday--active' : ''}`}
                                   >
                                     {day.label}
@@ -2745,6 +2791,7 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                                             setMonthlyDate(day);
                                             setShowMonthlyDatePicker(false);
                                           }}
+                                          aria-pressed={active}
                                           className={`task-quick-date-cell${active ? ' task-quick-date-cell--active' : ''}`}
                                         >
                                           {day}
@@ -2766,6 +2813,16 @@ function TaskModal({ task, initialRange, onClose, onSaved }) {
                         >
                           {t('common.cancel')}
                         </button>
+                        {hasOccurrenceContext && typeof onEditSeriesTemplate === 'function' && (
+                          <button
+                            type="button"
+                            onClick={handleEditSeriesTemplate}
+                            className="task-quick-action task-quick-action--secondary"
+                            title={t('task.editSeriesTemplate')}
+                          >
+                            {t('task.editSeriesTemplateShort')}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {

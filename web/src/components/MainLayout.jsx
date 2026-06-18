@@ -33,6 +33,7 @@ import {
 } from '../utils/taskDrag';
 import { blurActiveTaskDescriptionEditor } from '../utils/editorFocus';
 import { useCategoriesQuery } from '../query/hooks';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { moveTaskToCategoryLocal, updateTaskLocal } from '../data/taskMutations';
 import { closeSearchDialog, openSearchDialog, subscribeSearchOverlay } from '../state/searchOverlay';
 import {
@@ -336,6 +337,8 @@ function MainLayout({ user, setUser }) {
     pathname: location.pathname,
     search: location.search,
   });
+  const resolveConflictDialogRef = useRef(null);
+  const settingsDialogRef = useRef(null);
   const { data: categories = [] } = useCategoriesQuery();
 
   const openSettings = useCallback(() => {
@@ -612,11 +615,11 @@ function MainLayout({ user, setUser }) {
     }
   }, [activeSyncConflict, resolveConflictID]);
 
-  const handleEditSyncConflict = useCallback(() => {
-    if (!activeSyncConflict?.id) return;
-    const taskID = Number.parseInt(activeSyncConflict.task_id, 10) || 0;
-    removeSyncConflict(activeSyncConflict.id);
-    if (Number(resolveConflictID || 0) === Number(activeSyncConflict.id)) {
+  const handleEditSyncConflict = useCallback((conflict = activeSyncConflict) => {
+    if (!conflict?.id) return;
+    const taskID = Number.parseInt(conflict.task_id, 10) || 0;
+    removeSyncConflict(conflict.id);
+    if (Number(resolveConflictID || 0) === Number(conflict.id)) {
       setResolveConflictID(0);
       setResolveSelections({});
       setResolveConflictError('');
@@ -628,16 +631,16 @@ function MainLayout({ user, setUser }) {
     navigate('/tasks?view=all');
   }, [activeSyncConflict, navigate, resolveConflictID]);
 
-  const handleOpenResolveConflict = useCallback(() => {
-    if (!activeSyncConflict?.id) return;
-    if (!activeSyncConflict.latest_task || typeof activeSyncConflict.latest_task !== 'object') {
-      handleEditSyncConflict();
+  const handleOpenResolveConflict = useCallback((conflict = activeSyncConflict) => {
+    if (!conflict?.id) return;
+    if (!conflict.latest_task || typeof conflict.latest_task !== 'object') {
+      handleEditSyncConflict(conflict);
       return;
     }
-    const localPayload = activeSyncConflict?.local_payload && typeof activeSyncConflict.local_payload === 'object'
-      ? activeSyncConflict.local_payload
+    const localPayload = conflict?.local_payload && typeof conflict.local_payload === 'object'
+      ? conflict.local_payload
       : {};
-    const latestTask = activeSyncConflict.latest_task;
+    const latestTask = conflict.latest_task;
     const nextSelections = {};
     sortConflictFields(
       Object.keys(localPayload).filter((field) => !CONFLICT_EXCLUDED_FIELDS.has(field))
@@ -648,7 +651,7 @@ function MainLayout({ user, setUser }) {
     });
     setResolveSelections(nextSelections);
     setResolveConflictError('');
-    setResolveConflictID(activeSyncConflict.id);
+    setResolveConflictID(conflict.id);
   }, [activeSyncConflict, handleEditSyncConflict]);
 
   const handleResolveChoiceChange = useCallback((field, choice) => {
@@ -664,6 +667,18 @@ function MainLayout({ user, setUser }) {
     setResolveSelections({});
     setResolveConflictError('');
   }, [resolvingConflict]);
+
+  useEffect(() => {
+    if (!resolvingConflictItem) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleCloseResolveConflict();
+    };
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [handleCloseResolveConflict, resolvingConflictItem]);
 
   const handleApplyResolvedConflict = useCallback(async () => {
     if (!resolvingConflictItem?.id) return;
@@ -686,15 +701,15 @@ function MainLayout({ user, setUser }) {
     Object.keys(localPayload)
       .filter((field) => !CONFLICT_EXCLUDED_FIELDS.has(field))
       .forEach((field) => {
-      const choice = resolveSelections[field] === 'server' ? 'server' : 'local';
-      if (choice === 'local') {
-        payload[field] = localPayload[field];
-        return;
-      }
-      const serverValue = readTaskFieldValue(latestTask, field);
-      if (typeof serverValue !== 'undefined') {
-        payload[field] = serverValue;
-      }
+        const choice = resolveSelections[field] === 'server' ? 'server' : 'local';
+        if (choice === 'local') {
+          payload[field] = localPayload[field];
+          return;
+        }
+        const serverValue = readTaskFieldValue(latestTask, field);
+        if (typeof serverValue !== 'undefined') {
+          payload[field] = serverValue;
+        }
       });
 
     if (!Object.keys(payload).length) {
@@ -738,6 +753,9 @@ function MainLayout({ user, setUser }) {
     setResolvingConflict(false);
   }, [resolveConflictID, syncConflicts]);
 
+  useFocusTrap(!!resolvingConflictItem, resolveConflictDialogRef);
+  useFocusTrap(settingsOpen, settingsDialogRef);
+
   // 首次进入 / 时同步重定向，后续手动返回 / 不再强制跳转
   if (!initialRedirectConsumedRef.current && initialRedirectTo && location.pathname === '/') {
     initialRedirectConsumedRef.current = true;
@@ -747,7 +765,7 @@ function MainLayout({ user, setUser }) {
   return (
     <div className="app-shell flex h-screen min-w-0 flex-col overflow-hidden bg-white md:flex-row">
       {activeSyncConflict && (
-        <div className="sync-conflict-toast fixed right-2 top-2 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
+        <div className="sync-conflict-toast fixed right-2 top-14 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
           <div className="text-xs font-semibold text-amber-900">{t('task.syncConflictTitle')}</div>
           <div className="mt-1 text-xs leading-relaxed text-amber-800">
             {activeSyncConflict.task_title
@@ -769,10 +787,10 @@ function MainLayout({ user, setUser }) {
             </button>
             <button
               type="button"
-              onClick={handleOpenResolveConflict}
+              onClick={() => handleOpenResolveConflict(activeSyncConflict)}
               className="inline-flex h-8 items-center justify-center rounded-md border border-amber-500 bg-amber-500 px-2.5 text-xs font-medium text-white hover:bg-amber-600"
             >
-              {t('task.syncConflictResolve')}
+              {syncConflictMoreCount > 0 ? t('task.syncConflictViewAll') : t('task.syncConflictResolve')}
             </button>
           </div>
         </div>
@@ -1046,9 +1064,16 @@ function MainLayout({ user, setUser }) {
 
       {resolvingConflictItem && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 p-3">
-          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div
+            ref={resolveConflictDialogRef}
+            className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sync-conflict-resolve-title"
+            tabIndex={-1}
+          >
             <div className="border-b border-slate-200 px-4 py-3">
-              <div className="text-sm font-semibold text-slate-800">{t('task.syncConflictResolveTitle')}</div>
+              <div id="sync-conflict-resolve-title" className="text-sm font-semibold text-slate-800">{t('task.syncConflictResolveTitle')}</div>
               <div className="mt-1 text-xs text-slate-600">
                 {resolvingConflictItem.task_title
                   ? t('task.syncConflictHint', { title: resolvingConflictItem.task_title })
@@ -1057,6 +1082,30 @@ function MainLayout({ user, setUser }) {
             </div>
 
             <div className="max-h-[65vh] overflow-auto px-4 py-3">
+              {syncConflicts.length > 1 && (
+                <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+                  {syncConflicts.map((item, index) => {
+                    const active = Number(item?.id || 0) === Number(resolvingConflictItem.id || 0);
+                    return (
+                      <button
+                        key={item.id || index}
+                        type="button"
+                        onClick={() => handleOpenResolveConflict(item)}
+                        aria-pressed={active}
+                        className={`inline-flex min-w-[8rem] max-w-[12rem] shrink-0 flex-col rounded-md border px-2.5 py-2 text-left text-xs ${
+                          active
+                            ? 'border-amber-400 bg-amber-50 text-amber-900'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="font-semibold">{t('task.syncConflictItem', { index: index + 1 })}</span>
+                        <span className="mt-0.5 truncate">{item.task_title || t('task.syncConflictHintFallback')}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {conflictFieldEntries.length === 0 && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   {t('task.syncConflictNoFields')}
@@ -1073,6 +1122,7 @@ function MainLayout({ user, setUser }) {
                         <button
                           type="button"
                           onClick={() => handleResolveChoiceChange(entry.field, 'server')}
+                          aria-pressed={selected === 'server'}
                           className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                             selected === 'server'
                               ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
@@ -1085,6 +1135,7 @@ function MainLayout({ user, setUser }) {
                         <button
                           type="button"
                           onClick={() => handleResolveChoiceChange(entry.field, 'local')}
+                          aria-pressed={selected === 'local'}
                           className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                             selected === 'local'
                               ? 'border-blue-500 bg-blue-50 text-blue-800'
@@ -1144,10 +1195,12 @@ function MainLayout({ user, setUser }) {
           }}
         >
           <div
+            ref={settingsDialogRef}
             className="h-[min(46rem,calc(100vh-2rem))] w-[min(54rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl bg-white shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-label={t('settings.title')}
+            tabIndex={-1}
           >
             <Settings
               modal
