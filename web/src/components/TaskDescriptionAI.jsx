@@ -2,116 +2,26 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Bot, Check, Copy, Wand2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import Vditor from 'vditor';
-import 'vditor/dist/index.css';
-import vditorLuteUrl from 'vditor/dist/js/lute/lute.min.js?url';
 import {
   AI_CONFIG_REQUIRED_CODE,
   cleanGeneratedTaskDescription,
   generateTaskDescriptionDraft,
 } from '../utils/aiTaskDescription';
+import { renderTaskMarkdownPreview } from '../utils/taskMarkdownPreview';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 
-let vditorLuteScriptPromise = null;
-
-function ensureVditorLuteScript() {
-  if (typeof document === 'undefined' || typeof window === 'undefined') {
-    return Promise.resolve();
-  }
-  if (window.Lute) {
-    if (!document.getElementById('vditorLuteScript')) {
-      const marker = document.createElement('script');
-      marker.id = 'vditorLuteScript';
-      marker.type = 'text/javascript';
-      document.head.appendChild(marker);
-    }
-    return Promise.resolve();
-  }
-  if (vditorLuteScriptPromise) return vditorLuteScriptPromise;
-
-  const staleScript = document.getElementById('vditorLuteScript');
-  if (staleScript && !window.Lute) {
-    staleScript.remove();
-  }
-
-  vditorLuteScriptPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.id = 'vditorLuteScript';
-    script.src = vditorLuteUrl;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-
-  return vditorLuteScriptPromise;
-}
-
-const TASK_AI_MARKDOWN_OPTIONS = {
-  cdn: '',
-  emojiPath: '',
-  anchor: 0,
-  markdown: {
-    codeBlockPreview: false,
-    gfmAutoLink: true,
-    listStyle: true,
-    mathBlockPreview: false,
-    sanitize: true,
-  },
-};
-
 export function TaskAIMarkdownPreview({ value, fallback }) {
-  const previewRef = useRef(null);
-  const renderIDRef = useRef(0);
-  const frameRef = useRef(0);
   const text = cleanGeneratedTaskDescription(value).trimEnd();
-
-  useEffect(() => {
-    const node = previewRef.current;
-    if (!node) return undefined;
-
-    if (!text.trim()) {
-      node.innerHTML = '';
-      return undefined;
-    }
-
-    const renderID = renderIDRef.current + 1;
-    renderIDRef.current = renderID;
-    let cancelled = false;
-
-    const renderMarkdown = async () => {
-      try {
-        await ensureVditorLuteScript();
-        const html = await Vditor.md2html(text, TASK_AI_MARKDOWN_OPTIONS);
-        if (cancelled || renderIDRef.current !== renderID || !previewRef.current) return;
-        previewRef.current.innerHTML = html;
-        previewRef.current.classList.remove('task-ai-markdown-fallback');
-        previewRef.current.classList.add('vditor-reset');
-      } catch {
-        if (cancelled || renderIDRef.current !== renderID || !previewRef.current) return;
-        previewRef.current.textContent = text;
-        previewRef.current.classList.add('task-ai-markdown-fallback');
-      }
-    };
-
-    frameRef.current = window.requestAnimationFrame(renderMarkdown);
-
-    return () => {
-      cancelled = true;
-      if (frameRef.current) {
-        window.cancelAnimationFrame(frameRef.current);
-        frameRef.current = 0;
-      }
-    };
-  }, [text]);
 
   if (!text.trim()) {
     return <p className="task-ai-empty">{fallback}</p>;
   }
 
   return (
-    <div className="task-ai-markdown live-md-toast">
-      <div ref={previewRef} className="task-ai-markdown-preview vditor-reset" />
+    <div className="task-ai-markdown">
+      <div className="task-ai-markdown-preview">
+        {renderTaskMarkdownPreview(text)}
+      </div>
     </div>
   );
 }

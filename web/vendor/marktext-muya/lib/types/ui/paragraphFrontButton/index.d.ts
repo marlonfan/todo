@@ -1,0 +1,37 @@
+import { default as Parent } from '../../block/base/parent';
+import { Muya } from '../../index';
+export declare class ParagraphFrontButton {
+    muya: Muya;
+    name: string;
+    resizeObserver: ResizeObserver | null;
+    private _options;
+    private _block;
+    private _oldVNode;
+    private _status;
+    private _floatBox;
+    private _container;
+    private _iconWrapper;
+    private _cleanup;
+    private _dragTimer;
+    private _dragInfo;
+    private _ghost;
+    private _shadow;
+    private _disableListen;
+    private _dragEvents;
+    constructor(muya: Muya, options?: {});
+    init(): void;
+    listen(): void;
+    dragBarMouseDown: (event: Event) => void;
+    dragBarMouseUp: () => void;
+    mouseMove: (event: Event) => void;
+    mouseUp: (event: Event) => void;
+    startDrag: () => void;
+    createStyledGhost(rect: DOMRect, position: 'down' | 'up'): void;
+    createStyledShadow(): void;
+    moveShadow(event: Event): void;
+    destroyShadow(): void;
+    render(): void;
+    hide(): void;
+    show(block: Parent): void;
+    destroy(): void;
+}

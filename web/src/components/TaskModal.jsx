@@ -46,7 +46,7 @@ import {
   IconTag,
   IconX,
 } from './icons/TaskIcons';
-import LiveMarkdownEditor from './LiveMarkdownEditor';
+import MarkTextMarkdownEditor from './MarkTextMarkdownEditor';
 import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
@@ -114,7 +114,7 @@ function shouldFocusDescriptionEditorFromShellClick(event) {
   const target = event.target;
   if (!(target instanceof Element)) return true;
   return !target.closest(
-    'button, input, textarea, select, a, [contenteditable="true"], [role="button"], [role="menuitem"], .task-ai-description'
+    'button, input, textarea, select, a, [contenteditable="true"], [role="button"], [role="menuitem"], .task-ai-description, .mu-front-button-wrapper, .mu-float-wrapper'
   );
 }
 
@@ -2524,7 +2524,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                     disabled={loading}
                     compact
                   />
-                  <LiveMarkdownEditor
+                  <MarkTextMarkdownEditor
                     ref={descriptionEditorRef}
                     key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
                     value={descriptionValue}

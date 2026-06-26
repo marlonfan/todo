@@ -1,0 +1,5 @@
+(function(e){var t=['"(?:\\\\[^]|\\$\\([^)]+\\)|\\$(?!\\()|`[^`]+`|[^"\\\\`$])*"',`'[^']*'`,`\\$'(?:[^'\\\\]|\\\\[^])*'`,`<<-?\\s*(["']?)(\\w+)\\1\\s[^]*?[\r
+]\\2`].join(`|`);e.languages[`shell-session`]={command:{pattern:RegExp(`^(?:[^\\s@:$#%*!/\\\\]+@[^\r
+@:$#%*!/\\\\]+(?::[^\0-\\x1F$#%*?"<>:;|]+)?|[/~.][^\0-\\x1F$#%*?"<>@:;|]*)?[$#%](?=\\s)`+`(?:[^\\\\\r
+ 	'"<$]|[ 	](?:(?!#)|#.*$)|\\\\(?:[^\r]|\r
+?)|\\$(?!')|<(?!<)|<<str>>)+`.replace(/<<str>>/g,(function(){return t})),`m`),greedy:!0,inside:{info:{pattern:/^[^#$%]+/,alias:`punctuation`,inside:{user:/^[^\s@:$#%*!/\\]+@[^\r\n@:$#%*!/\\]+/,punctuation:/:/,path:/[\s\S]+/}},bash:{pattern:/(^[$#%]\s*)\S[\s\S]*/,lookbehind:!0,alias:`language-bash`,inside:e.languages.bash},"shell-symbol":{pattern:/^[$#%]/,alias:`important`}}},output:/.(?:.*(?:[\r\n]|.$))*/},e.languages[`sh-session`]=e.languages.shellsession=e.languages[`shell-session`]})(Prism);

@@ -14,6 +14,9 @@ todo-app
 
 # Go vendor directory
 vendor/
+!web/vendor/
+!web/vendor/marktext-muya/
+!web/vendor/marktext-muya/**
 
 # Database files
 *.db

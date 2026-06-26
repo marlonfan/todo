@@ -1,0 +1,1 @@
+const e=require(`./src-BrLQZsaB.js`);var t,n=(t=class{constructor(e){this.init=e,this.records=this.init()}reset(){this.records=this.init()}},e.r(t,`ImperativeState`),t);Object.defineProperty(exports,`t`,{enumerable:!0,get:function(){return n}});

@@ -1,0 +1,30 @@
+import { Muya } from '../../../muya';
+import { ICursor } from '../../../selection/types';
+import { default as Table } from '../../gfm/table';
+import { default as Cell } from '../../gfm/table/cell';
+import { default as Row } from '../../gfm/table/row';
+import { default as TableInner } from '../../gfm/table/table';
+import { default as Format } from '../../base/format';
+declare class TableCellContent extends Format {
+    hasZeroWidthSpaceAtBeginning: boolean;
+    static blockName: string;
+    static create(muya: Muya, text: string): TableCellContent;
+    get table(): Table;
+    get tableInner(): TableInner;
+    get row(): Row;
+    get cell(): Cell;
+    constructor(muya: Muya, text: string);
+    getAnchor(): Table;
+    update(cursor: ICursor, highlights?: never[]): void;
+    findNextRow(): import('../../base/parent').default | null;
+    findPreviousRow(): import('../../base/parent').default | null;
+    shiftEnter(event: Event): void;
+    commandEnter(event: Event): void;
+    normalEnter(event: Event): void;
+    enterHandler(event: Event): void;
+    arrowHandler(event: Event): void;
+    backspaceHandler(event: Event): void;
+    tabHandler(event: Event): void;
+    composeHandler(event: Event): void;
+}
+export default TableCellContent;

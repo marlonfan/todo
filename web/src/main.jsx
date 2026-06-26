@@ -5,6 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import './i18n'  // 引入 i18n 配置
 import App from './App.jsx'
 import '@fontsource-variable/inter';
+import '@todo/vendor-marktext-muya/lib/core.css'
 import './index.css'
 import { queryClient } from './query/client'
 import { initializeSyncEngine } from './data/syncEngine'
@@ -13,11 +14,13 @@ import { initInputModality } from './utils/inputModality'
 
 (async () => {
   const isDesktopRuntime = Boolean(window.todoElectron);
-  const shouldUseServiceWorker = 'serviceWorker' in navigator && !isDesktopRuntime && !import.meta.env.DEV;
+  const isLocalPreviewHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+  const shouldDisableServiceWorker = isDesktopRuntime || import.meta.env.DEV || isLocalPreviewHost;
+  const shouldUseServiceWorker = 'serviceWorker' in navigator && !shouldDisableServiceWorker;
   initInputModality();
 
-  // Dev servers need fresh modules for HMR, so clear any SW left from older runs.
-  if ('serviceWorker' in navigator && import.meta.env.DEV) {
+  // Local preview and desktop builds should always use the freshly served bundle.
+  if ('serviceWorker' in navigator && shouldDisableServiceWorker) {
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .getRegistrations()

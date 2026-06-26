@@ -1,0 +1,1 @@
+const e=require(`./src-BrLQZsaB.js`);var t=e.r((t,n)=>{let r;return n===`sandbox`&&(r=e.t(`#i`+t)),(n===`sandbox`?e.t(r.nodes()[0].contentDocument.body):e.t(`body`)).select(`[id="${t}"]`)},`getDiagramElement`);Object.defineProperty(exports,`t`,{enumerable:!0,get:function(){return t}});

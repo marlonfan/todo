@@ -1,0 +1,30 @@
+import { Muya } from '../../../muya';
+import { ITableState } from '../../../state/types';
+import { Nullable } from '../../../types';
+import { default as Content } from '../../base/content';
+import { default as TableCellContent } from '../../content/tableCell';
+import { TBlockPath } from '../../types';
+import { default as TableInner } from './table';
+import { LinkedList } from '../../base/linkedList/linkedList';
+import { default as Parent } from '../../base/parent';
+declare class Table extends Parent {
+    children: LinkedList<TableInner>;
+    static blockName: string;
+    static create(muya: Muya, state: ITableState): Table;
+    static createWithHeader(muya: Muya, header: string[]): Table;
+    get path(): (string | number)[];
+    get rowCount(): number;
+    get columnCount(): number;
+    constructor(muya: Muya);
+    isEmpty(): boolean;
+    private _listenDomEvent;
+    queryBlock(path: TBlockPath): any;
+    empty(): void;
+    insertRow(offset: number): any;
+    insertColumn(offset: number, align?: string): TableCellContent;
+    removeRow(offset: number): Nullable<Content>;
+    removeColumn(offset: number): Nullable<Content>;
+    alignColumn(offset: number, value: string): void;
+    getState(): ITableState;
+}
+export default Table;

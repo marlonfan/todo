@@ -1,0 +1,31 @@
+import { default as Table } from '../../block/gfm/table';
+import { default as TableBodyCell } from '../../block/gfm/table/cell';
+import { Muya } from '../../index';
+import { default as BaseFloat } from '../baseFloat';
+type BarType = 'bottom' | 'right';
+export declare function getAllTableCells(tableBlock: Table): HTMLTableCellElement[][];
+export declare function getIndex(barType: BarType, cellBlock: TableBodyCell): number;
+export declare class TableDragBar extends BaseFloat {
+    static pluginName: string;
+    private _block;
+    private _mouseTimer;
+    private _dragEventIds;
+    private _isDragTableBar;
+    private _barType;
+    private _dragInfo;
+    constructor(muya: Muya, options?: {});
+    listen(): void;
+    mousedown: (event: Event) => void;
+    mouseup: (event: Event) => void;
+    startDrag(event: Event): void;
+    docMousemove: (event: Event) => void;
+    docMouseup: (event: Event) => void;
+    calculateCurIndex: () => void;
+    setDragTargetStyle: () => void;
+    setSwitchStyle: () => void;
+    setDropTargetStyle: () => void;
+    switchTableData: () => void;
+    resetDragTableBar: () => void;
+    render(barType: BarType): void;
+}
+export {};

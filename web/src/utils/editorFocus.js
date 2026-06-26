@@ -1,9 +1,11 @@
 const TASK_DESCRIPTION_EDITOR_SELECTOR = '.task-description-editor-shell, .live-md-toast';
 const TASK_DESCRIPTION_EDITABLE_SELECTOR = [
   '.task-description-editor-shell [contenteditable="true"]',
+  '.task-description-editor-shell .mu-editor',
   '.task-description-editor-shell .vditor-ir pre.vditor-reset',
   '.task-description-editor-shell .vditor-ir .vditor-reset',
   '.live-md-toast [contenteditable="true"]',
+  '.live-md-toast .mu-editor',
   '.live-md-toast .vditor-ir pre.vditor-reset',
   '.live-md-toast .vditor-ir .vditor-reset',
 ].join(', ');

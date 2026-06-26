@@ -1,0 +1,1 @@
+const e=require(`./src-BrLQZsaB.js`),t=require(`./chunk-CSCIHK7Q-CBwzgd8G.js`);var n=e.r(n=>{let{securityLevel:r}=t.x(),i=e.t(`body`);if(r===`sandbox`){var a,o;i=e.t(((a=(o=e.t(`#i${n}`).node())==null?void 0:o.contentDocument)==null?document:a).body)}return i.select(`#${n}`)},`selectSvgElement`);Object.defineProperty(exports,`t`,{enumerable:!0,get:function(){return n}});

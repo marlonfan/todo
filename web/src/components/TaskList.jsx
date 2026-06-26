@@ -68,7 +68,7 @@ import {
   IconSunrise,
   IconTag,
 } from './icons/TaskIcons';
-import LiveMarkdownEditor from './LiveMarkdownEditor';
+import MarkTextMarkdownEditor from './MarkTextMarkdownEditor';
 import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
 import { RecurrencePanel } from './task/RecurrencePanel';
 import TaskDescriptionAI from './TaskDescriptionAI';
@@ -257,7 +257,7 @@ function shouldFocusDescriptionEditorFromShellClick(event) {
   const target = event.target;
   if (!(target instanceof Element)) return true;
   return !target.closest(
-    'button, input, textarea, select, a, [contenteditable="true"], [role="button"], [role="menuitem"], .task-ai-description'
+    'button, input, textarea, select, a, [contenteditable="true"], [role="button"], [role="menuitem"], .task-ai-description, .mu-front-button-wrapper, .mu-float-wrapper'
   );
 }
 
@@ -5130,13 +5130,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           </button>
         )}
 
-        <section className={`md-pane h-full min-h-0 min-w-0 flex-col overflow-hidden ${isMobileViewport ? 'hidden' : 'flex'}`}>
-          {!selectedTask || !draft ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              {t('task.selectTaskHint')}
-            </div>
-          ) : (
-            <div className="flex h-full min-h-0 min-w-0 flex-col bg-card">
+        {!isMobileViewport && (
+          <section className="md-pane flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+            {!selectedTask || !draft ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                {t('task.selectTaskHint')}
+              </div>
+            ) : (
+              <div className="flex h-full min-h-0 min-w-0 flex-col bg-card">
               <div className="border-b border-border px-5 pb-5 pt-5 lg:px-8">
                 <div className="flex min-h-9 items-center justify-between gap-4">
                   <div ref={detailPanelRef} className="relative flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
@@ -5617,7 +5618,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     onApply={handleApplyAIDraftDescription}
                     disabled={selectedTask.read_only}
                   />
-                  <LiveMarkdownEditor
+                  <MarkTextMarkdownEditor
                     ref={draftDescriptionEditorRef}
                     key={`task-editor-${selectedTask.id}`}
                     value={draft.description}
@@ -5635,9 +5636,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   />
                 </div>
               </div>
-            </div>
-          )}
-        </section>
+              </div>
+            )}
+          </section>
+        )}
       </div>
 
       {deleteDialog.open && (
