@@ -78,6 +78,27 @@ function updatePackageVersion(commit) {
   writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
+function replaceOnce(filePath, from, to) {
+  const content = readFileSync(filePath, 'utf8');
+  if (!content.includes(from)) {
+    throw new Error(`Expected MarkText Muya patch target not found in ${filePath}`);
+  }
+  writeFileSync(filePath, content.replace(from, to));
+}
+
+function patchBuiltMuya() {
+  replaceOnce(
+    path.join(vendorDir, 'lib', 'es', 'index.js'),
+    'let { key: n, metaKey: r } = e, { isSelectionInSameBlock: i } = (t = this.selection.getSelection()) == null ? {} : t;\n\t\t\t\ti || /Alt|Option|Meta|Shift|CapsLock|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/.test(n) || r || ((n === "Backspace" || n === "Delete") && e.preventDefault(), this.cutHandler());',
+    'let { key: n, metaKey: r, ctrlKey: i } = e, { isSelectionInSameBlock: a } = (t = this.selection.getSelection()) == null ? {} : t;\n\t\t\ta || /Alt|Option|Meta|Shift|CapsLock|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/.test(n) || r || i || ((n === "Backspace" || n === "Delete") && e.preventDefault(), this.cutHandler());'
+  );
+  replaceOnce(
+    path.join(vendorDir, 'lib', 'cjs', 'index.js'),
+    'let{key:n,metaKey:r}=e,{isSelectionInSameBlock:i}=(t=this.selection.getSelection())==null?{}:t;i||/Alt|Option|Meta|Shift|CapsLock|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/.test(n)||r||((n===`Backspace`||n===`Delete`)&&e.preventDefault(),this.cutHandler())',
+    'let{key:n,metaKey:r,ctrlKey:i}=e,{isSelectionInSameBlock:a}=(t=this.selection.getSelection())==null?{}:t;a||/Alt|Option|Meta|Shift|CapsLock|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/.test(n)||r||i||((n===`Backspace`||n===`Delete`)&&e.preventDefault(),this.cutHandler())'
+  );
+}
+
 if (!existsSync(vendorDir)) {
   throw new Error(`Missing vendor directory: ${vendorDir}`);
 }
@@ -104,6 +125,7 @@ try {
 
   rmSync(path.join(vendorDir, 'lib'), { recursive: true, force: true });
   cpSync(builtLib, path.join(vendorDir, 'lib'), { recursive: true });
+  patchBuiltMuya();
 
   for (const file of ['LICENSE', 'README.md']) {
     const source = path.join(packageDir, file);

@@ -1,6 +1,10 @@
 import React, { useEffect, useImperativeHandle, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
+import {
+  normalizeMarkTextEditorValue,
+  resolveMarkTextExternalValueAction,
+} from '../utils/markTextEditorSync';
 
 let markTextPluginsRegistered = false;
 let markTextCorePromise = null;
@@ -80,10 +84,6 @@ function logEditorDebug(scope, payload = {}) {
     ...payload,
   };
   console.info('[todo-draft-debug]', JSON.stringify(entry));
-}
-
-function normalize(text) {
-  return String(text || '').replace(/\r\n/g, '\n').replace(/\n+$/g, '');
 }
 
 function buildLocale(core, language, placeholder) {
@@ -171,6 +171,104 @@ function scheduleScrollSnapshotRestore(snapshot) {
   });
 }
 
+function selectEditorDomRange(host) {
+  try {
+    if (!host || typeof document === 'undefined') return false;
+    const contentBlocks = Array.from(host.querySelectorAll('.mu-content'));
+    const firstBlock = contentBlocks[0];
+    const lastBlock = contentBlocks[contentBlocks.length - 1];
+    if (!firstBlock || !lastBlock) return false;
+    const range = document.createRange();
+    range.setStart(firstBlock, 0);
+    range.setEnd(lastBlock, lastBlock.childNodes.length);
+    const selection = window.getSelection?.();
+    if (!selection) return false;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getSelectionNodeElement(node) {
+  if (!node) return null;
+  if (node instanceof Element) return node;
+  return node.parentElement || null;
+}
+
+function isSelectionInsideEditor(host) {
+  try {
+    if (!host || typeof window === 'undefined') return false;
+    const selection = window.getSelection?.();
+    if (!selection || selection.rangeCount === 0) return false;
+    const anchorElement = getSelectionNodeElement(selection.anchorNode);
+    const focusElement = getSelectionNodeElement(selection.focusNode);
+    return !!(
+      (anchorElement && host.contains(anchorElement))
+      || (focusElement && host.contains(focusElement))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasNonCollapsedEditorSelection(host) {
+  try {
+    const selection = window.getSelection?.();
+    return !!(
+      selection
+      && selection.rangeCount > 0
+      && !selection.isCollapsed
+      && isSelectionInsideEditor(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function deleteEditorSelection(instance, host) {
+  if (!hasNonCollapsedEditorSelection(host)) return false;
+  try {
+    const clipboard = instance?.editor?.clipboard;
+    if (clipboard && typeof clipboard.cutHandler === 'function') {
+      clipboard.cutHandler();
+      return true;
+    }
+  } catch {
+    // Fall through to the native command below.
+  }
+  try {
+    return !!document.execCommand?.('delete');
+  } catch {
+    return false;
+  }
+}
+
+function selectWholeEditorContent(instance, host) {
+  try {
+    const editor = instance?.editor;
+    const selection = editor?.selection;
+    const scrollPage = editor?.scrollPage;
+    const firstContent = scrollPage?.firstContentInDescendant?.();
+    const lastContent = scrollPage?.lastContentInDescendant?.();
+    if (selection && firstContent && lastContent) {
+      selection.setSelection({
+        anchor: { offset: 0 },
+        focus: { offset: String(lastContent.text || '').length },
+        anchorBlock: firstContent,
+        anchorPath: firstContent.path,
+        focusBlock: lastContent,
+        focusPath: lastContent.path,
+      });
+      return true;
+    }
+  } catch {
+    // Fall back to native DOM selection below.
+  }
+  return selectEditorDomRange(host);
+}
+
 const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor({
   value,
   onChange,
@@ -186,8 +284,13 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
   const editorScrollCleanupRef = useRef(null);
   const readyRef = useRef(false);
   const syncingRef = useRef(false);
+  const focusedRef = useRef(false);
+  const composingRef = useRef(false);
+  const hasLocalEditsRef = useRef(false);
   const lastInternalValueRef = useRef(String(value || ''));
   const pendingExternalValueRef = useRef(String(value || ''));
+  const deferredExternalValueRef = useRef(null);
+  const deferredExternalVersionRef = useRef(0);
   const fastInputVersionRef = useRef(0);
   const externalVersionRef = useRef(0);
   const appliedExternalVersionRef = useRef(0);
@@ -217,23 +320,109 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
     return String(lastInternalValueRef.current ?? pendingExternalValueRef.current ?? '');
   };
 
+  const applySetContent = (editor, text) => {
+    syncingRef.current = true;
+    try {
+      editor.setContent(text, false);
+    } finally {
+      syncingRef.current = false;
+    }
+  };
+
+  const acknowledgeExternalValue = (text, version, source, reason) => {
+    const currentValue = getCurrentValue();
+    lastInternalValueRef.current = currentValue;
+    hasLocalEditsRef.current = false;
+    deferredExternalValueRef.current = null;
+    deferredExternalVersionRef.current = 0;
+    appliedExternalVersionRef.current = version;
+    logEditorDebug('editor.marktext.externalValue.acknowledged', {
+      source,
+      reason,
+      external_version: version,
+      applied_external_version: appliedExternalVersionRef.current,
+      fast_input_version: fastInputVersionRef.current,
+      next_value: summarizeDebugText(text),
+      current_value: summarizeDebugText(currentValue),
+    });
+  };
+
+  const applyExternalValueIfSafe = (nextValue, source, externalVersion, options = {}) => {
+    const text = String(nextValue || '');
+    const editor = editorRef.current;
+    if (!readyRef.current || !editor || typeof editor.setContent !== 'function') return false;
+
+    const currentValue = getCurrentValue();
+    const decision = resolveMarkTextExternalValueAction({
+      nextValue: text,
+      currentValue,
+      isFocused: focusedRef.current,
+      hasLocalEdits: hasLocalEditsRef.current,
+      isComposing: composingRef.current,
+      force: !!options.force,
+    });
+
+    if (decision.action === 'acknowledge') {
+      acknowledgeExternalValue(text, externalVersion, source, decision.reason);
+      return true;
+    }
+
+    if (decision.action === 'defer') {
+      deferredExternalValueRef.current = text;
+      deferredExternalVersionRef.current = externalVersion;
+      logEditorDebug('editor.marktext.externalValue.deferred', {
+        source,
+        reason: decision.reason,
+        external_version: externalVersion,
+        fast_input_version: fastInputVersionRef.current,
+        has_focus: !!focusedRef.current,
+        has_local_edits: !!hasLocalEditsRef.current,
+        composing: !!composingRef.current,
+        next_value: summarizeDebugText(text),
+        current_value: summarizeDebugText(currentValue),
+      });
+      return false;
+    }
+
+    applySetContent(editor, text);
+    lastInternalValueRef.current = text;
+    hasLocalEditsRef.current = false;
+    deferredExternalValueRef.current = null;
+    deferredExternalVersionRef.current = 0;
+    fastInputVersionRef.current += 1;
+    appliedExternalVersionRef.current = externalVersion;
+    logEditorDebug('editor.marktext.externalValue.applied', {
+      source,
+      reason: decision.reason,
+      external_version: externalVersion,
+      applied_external_version: appliedExternalVersionRef.current,
+      fast_input_version: fastInputVersionRef.current,
+      next_value: summarizeDebugText(text),
+    });
+    return true;
+  };
+
+  const applyDeferredExternalValue = (source = 'deferred') => {
+    if (deferredExternalValueRef.current === null) return false;
+    return applyExternalValueIfSafe(
+      deferredExternalValueRef.current,
+      source,
+      deferredExternalVersionRef.current
+    );
+  };
+
   const applyEditorValue = (nextValue, source = 'imperative') => {
     const text = String(nextValue || '');
     pendingExternalValueRef.current = text;
     externalVersionRef.current += 1;
     const currentExternalVersion = externalVersionRef.current;
 
-    const editor = editorRef.current;
-    if (readyRef.current && editor && typeof editor.setContent === 'function') {
-      syncingRef.current = true;
-      try {
-        editor.setContent(text, false);
-      } finally {
-        syncingRef.current = false;
-      }
-    }
+    applyExternalValueIfSafe(text, source, currentExternalVersion, { force: true });
 
     lastInternalValueRef.current = text;
+    hasLocalEditsRef.current = false;
+    deferredExternalValueRef.current = null;
+    deferredExternalVersionRef.current = 0;
     fastInputVersionRef.current += 1;
     appliedExternalVersionRef.current = currentExternalVersion;
     logEditorDebug('editor.marktext.value.applied', {
@@ -264,6 +453,13 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
     }
   };
 
+  const isTargetInsideEditor = (target) => !!(
+    target
+    && hostRef.current
+    && typeof hostRef.current.contains === 'function'
+    && hostRef.current.contains(target)
+  );
+
   useEffect(() => {
     let disposed = false;
     let instance = null;
@@ -279,7 +475,17 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
       if (disposed || syncingRef.current || !instance) return;
       const nextValue = String(instance.getMarkdown?.() || '');
       lastInternalValueRef.current = nextValue;
+      focusedRef.current = true;
+      hasLocalEditsRef.current = true;
       fastInputVersionRef.current += 1;
+      if (
+        deferredExternalValueRef.current !== null
+        && normalizeMarkTextEditorValue(deferredExternalValueRef.current)
+          === normalizeMarkTextEditorValue(nextValue)
+      ) {
+        deferredExternalValueRef.current = null;
+        deferredExternalVersionRef.current = 0;
+      }
       logEditorDebug('editor.marktext.input', {
         source: event?.source || '',
         fast_input_version: fastInputVersionRef.current,
@@ -320,15 +526,27 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
       const target = event.target && typeof event.target.closest === 'function'
         ? event.target
         : document.activeElement;
-      const isInsideCurrentEditor = !!(
-        target
-        && hostRef.current
-        && typeof hostRef.current.contains === 'function'
-        && hostRef.current.contains(target)
-      );
-      if (!isInsideCurrentEditor) return;
+      const host = hostRef.current;
+      const hasEditorSelection = isSelectionInsideEditor(host);
+      if (!isTargetInsideEditor(target) && !hasEditorSelection) return;
 
       const key = String(event.key || '').toLowerCase();
+      const isDeleteSelectionShortcut = !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+        && !event.isComposing
+        && (key === 'backspace' || key === 'delete')
+        && hasNonCollapsedEditorSelection(host);
+      if (isDeleteSelectionShortcut) {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteEditorSelection(instance, host);
+        return;
+      }
+
+      const hasCommandModifier = (event.ctrlKey || event.metaKey) && !event.altKey;
+      if (!hasCommandModifier || event.isComposing) return;
+
       const isSaveShortcut = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === 's';
       if (isSaveShortcut) {
         event.preventDefault();
@@ -339,18 +557,78 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
         return;
       }
 
-      const isRedoAlias = ((event.ctrlKey || event.metaKey) && event.shiftKey && key === 'z')
-        || ((event.ctrlKey || event.metaKey) && key === 'y');
-      if (!isRedoAlias) return;
-      event.preventDefault();
-      event.stopPropagation();
-      try {
-        instance?.redo?.();
-      } catch {
-        // Redo is best-effort; Muya owns the actual history stack.
+      const runHistoryCommand = (command) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          instance?.[command]?.();
+        } catch {
+          // History is best-effort; Muya owns the actual stack.
+        }
+      };
+
+      if (key === 'z') {
+        runHistoryCommand(event.shiftKey ? 'redo' : 'undo');
+        return;
+      }
+
+      if (!event.shiftKey && key === 'y') {
+        runHistoryCommand('redo');
+        return;
+      }
+
+      if (!event.shiftKey && key === 'a') {
+        event.preventDefault();
+        event.stopPropagation();
+        focusedRef.current = true;
+        selectWholeEditorContent(instance, host);
+        return;
+      }
+
+      if (!event.shiftKey && /^(c|x|v)$/.test(key)) {
+        event.stopPropagation();
       }
     };
     window.addEventListener('keydown', handleEditorShortcuts, true);
+
+    const handleFocusIn = () => {
+      focusedRef.current = true;
+    };
+
+    const handlePointerDownInsideEditor = () => {
+      focusedRef.current = true;
+    };
+
+    const handleFocusOut = () => {
+      window.setTimeout(() => {
+        if (disposed || isTargetInsideEditor(document.activeElement)) return;
+        focusedRef.current = false;
+        applyDeferredExternalValue('focusout');
+      }, 0);
+    };
+
+    const handleCompositionStart = () => {
+      composingRef.current = true;
+    };
+
+    const handleCompositionEnd = () => {
+      composingRef.current = false;
+      applyDeferredExternalValue('compositionend');
+    };
+
+    const handleDocumentPointerDown = (event) => {
+      if (isTargetInsideEditor(event.target)) return;
+      if (!focusedRef.current && !hasLocalEditsRef.current && !composingRef.current) return;
+      focusedRef.current = false;
+      applyDeferredExternalValue('outside_pointer');
+    };
+
+    host.addEventListener('pointerdown', handlePointerDownInsideEditor, true);
+    document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+    host.addEventListener('focusin', handleFocusIn, true);
+    host.addEventListener('focusout', handleFocusOut, true);
+    host.addEventListener('compositionstart', handleCompositionStart, true);
+    host.addEventListener('compositionend', handleCompositionEnd, true);
 
     const initEditor = async () => {
       const core = await loadMarkTextCore();
@@ -406,9 +684,17 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
     return () => {
       disposed = true;
       window.removeEventListener('keydown', handleEditorShortcuts, true);
+      document.removeEventListener('pointerdown', handleDocumentPointerDown, true);
       scrollNode?.removeEventListener('mousedown', handleTaskCheckboxMouseDown, true);
       scrollNode?.removeEventListener('click', handleTaskCheckboxClick, true);
+      host.removeEventListener('pointerdown', handlePointerDownInsideEditor, true);
+      host.removeEventListener('focusin', handleFocusIn, true);
+      host.removeEventListener('focusout', handleFocusOut, true);
+      host.removeEventListener('compositionstart', handleCompositionStart, true);
+      host.removeEventListener('compositionend', handleCompositionEnd, true);
       readyRef.current = false;
+      focusedRef.current = false;
+      composingRef.current = false;
       try {
         instance?.off?.('json-change', handleContentChange);
         instance?.destroy?.();
@@ -439,23 +725,7 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
     if (!editor || typeof editor.getMarkdown !== 'function' || typeof editor.setContent !== 'function') return;
 
     const nextValue = String(value || '');
-    if (normalize(nextValue) === normalize(lastInternalValueRef.current)) return;
-
-    syncingRef.current = true;
-    try {
-      editor.setContent(nextValue, false);
-      lastInternalValueRef.current = nextValue;
-      fastInputVersionRef.current += 1;
-      appliedExternalVersionRef.current = currentExternalVersion;
-      logEditorDebug('editor.marktext.externalValue.applied', {
-        external_version: currentExternalVersion,
-        applied_external_version: appliedExternalVersionRef.current,
-        fast_input_version: fastInputVersionRef.current,
-        next_value: summarizeDebugText(nextValue),
-      });
-    } finally {
-      syncingRef.current = false;
-    }
+    applyExternalValueIfSafe(nextValue, 'prop', currentExternalVersion);
   }, [value]);
 
   useImperativeHandle(ref, () => ({
@@ -474,12 +744,18 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
     getDebugSnapshot: () => ({
       ready: !!readyRef.current,
       syncing: !!syncingRef.current,
+      focused: !!focusedRef.current,
+      composing: !!composingRef.current,
+      has_local_edits: !!hasLocalEditsRef.current,
+      selection_inside: isSelectionInsideEditor(hostRef.current),
+      has_selection: hasNonCollapsedEditorSelection(hostRef.current),
       fast_input_version: fastInputVersionRef.current,
       external_version: externalVersionRef.current,
       applied_external_version: appliedExternalVersionRef.current,
       current_value: summarizeDebugText(getCurrentValue()),
       last_internal: summarizeDebugText(lastInternalValueRef.current),
       pending_external: summarizeDebugText(pendingExternalValueRef.current),
+      deferred_external: summarizeDebugText(deferredExternalValueRef.current || ''),
     }),
     focus: () => {
       try {

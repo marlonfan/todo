@@ -1582,6 +1582,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const detailBodyScrollCleanupRef = useRef(null);
   const draftDescriptionEditorRef = useRef(null);
   const draftTitleInputRef = useRef(null);
+  const pendingDetailDraftSyncRef = useRef(null);
   const activeDescriptionSessionRef = useRef(0);
   const descriptionSessionSeqRef = useRef(0);
   const descriptionSessionTaskIDRef = useRef(0);
@@ -1957,14 +1958,67 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const setDraftDescriptionSnapshot = useCallback((value, taskIDInput = 0, sessionIDInput = 0) => {
     const prevSnapshot = draftSnapshotRef.current;
     if (!prevSnapshot) return null;
+    const description = String(value || '');
     const nextSnapshot = {
       ...prevSnapshot,
-      description: String(value || ''),
+      description,
     };
     draftSnapshotRef.current = nextSnapshot;
+    const pendingSync = pendingDetailDraftSyncRef.current;
+    if (pendingSync?.draft) {
+      pendingDetailDraftSyncRef.current = {
+        ...pendingSync,
+        draft: {
+          ...pendingSync.draft,
+          description,
+        },
+      };
+    }
     scheduleDescriptionDraftRender(taskIDInput, sessionIDInput);
     return nextSnapshot;
   }, [scheduleDescriptionDraftRender]);
+
+  const isDescriptionEditorActive = useCallback(() => {
+    const snapshot = draftDescriptionEditorRef.current?.getDebugSnapshot?.();
+    return !!(
+      snapshot
+      && (
+        snapshot.focused
+        || snapshot.composing
+        || snapshot.has_local_edits
+        || snapshot.selection_inside
+        || snapshot.has_selection
+      )
+    );
+  }, []);
+
+  const applyDetailDraftSync = useCallback((nextDraft, taskIDInput = 0) => {
+    const taskID = Number(taskIDInput || 0);
+    if (taskID && Number(draftSourceTaskIDRef.current || 0) !== taskID) return false;
+    setDraftWithSnapshot(nextDraft);
+    setDraftTimeRangeEnabled(!!nextDraft?.end_time);
+    pendingDetailDraftSyncRef.current = null;
+    return true;
+  }, [setDraftWithSnapshot]);
+
+  const deferDetailDraftSyncIfEditing = useCallback((nextDraft, taskIDInput = 0, reason = '') => {
+    const taskID = Number(taskIDInput || 0);
+    if (!isDescriptionEditorActive()) {
+      return applyDetailDraftSync(nextDraft, taskID);
+    }
+    const currentDescription = draftSnapshotRef.current?.description;
+    const deferredDraft = typeof currentDescription === 'string'
+      ? { ...nextDraft, description: currentDescription }
+      : nextDraft;
+    pendingDetailDraftSyncRef.current = { taskID, draft: deferredDraft, reason };
+    logDraftSwitchDebug('draft.sync.deferredForEditor', {
+      reason,
+      task_id: taskID,
+      editor: draftDescriptionEditorRef.current?.getDebugSnapshot?.() || null,
+      next_description: summarizeDebugText(deferredDraft?.description),
+    });
+    return false;
+  }, [applyDetailDraftSync, isDescriptionEditorActive]);
 
   const beginDescriptionSession = useCallback((taskIDInput, reason = '') => {
     const taskID = Number(taskIDInput || 0);
@@ -2866,6 +2920,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (!selectedTask) {
       setDraftWithSnapshot(null);
       setDraftTimeRangeEnabled(false);
+      pendingDetailDraftSyncRef.current = null;
       detailPanelSnapshotRef.current = null;
       lastSyncedSelectedIDRef.current = 0;
       draftSourceTaskIDRef.current = 0;
@@ -2881,6 +2936,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       beginDescriptionSession(draftSourceTaskIDRef.current, 'selected_task_effect');
       draftTouchedRef.current = false;
       draftEditVersionRef.current = 0;
+      pendingDetailDraftSyncRef.current = null;
       setDraftWithSnapshot(nextDraft);
       setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       setDetailPanel('');
@@ -2892,6 +2948,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
       beginDescriptionSession(draftSourceTaskIDRef.current, 'missing_draft_effect');
       draftEditVersionRef.current = 0;
+      pendingDetailDraftSyncRef.current = null;
       setDraftWithSnapshot(nextDraft);
       setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       return;
@@ -2921,11 +2978,20 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           }
         }
         draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
-        setDraftWithSnapshot(nextDraft);
-        setDraftTimeRangeEnabled(!!nextDraft?.end_time);
+        deferDetailDraftSyncIfEditing(nextDraft, draftSourceTaskIDRef.current, 'selected_task_external_update');
       }
     }
-  }, [beginDescriptionSession, selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot, tasksRaw, timezone]);
+  }, [
+    beginDescriptionSession,
+    deferDetailDraftSyncIfEditing,
+    selectedTask,
+    draft,
+    detailPanel,
+    isDetailPanelRequiringConfirm,
+    setDraftWithSnapshot,
+    tasksRaw,
+    timezone,
+  ]);
 
   useEffect(() => {
     if (!draft) return;
@@ -3885,8 +3951,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         draft_source_task_id: Number(draftSourceTaskIDRef.current || 0),
       });
     }
+    if (!isDescriptionEditorActive()) {
+      const pendingSync = pendingDetailDraftSyncRef.current;
+      if (pendingSync?.draft) {
+        applyDetailDraftSync(pendingSync.draft, pendingSync.taskID);
+      }
+    }
     return released;
-  }, [getEffectiveTaskID]);
+  }, [applyDetailDraftSync, getEffectiveTaskID, isDescriptionEditorActive]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined;
@@ -4161,6 +4233,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         return false;
       }
       draftTouchedRef.current = false;
+      const pendingSync = pendingDetailDraftSyncRef.current;
+      if (pendingSync?.draft && !isDescriptionEditorActive()) {
+        applyDetailDraftSync(pendingSync.draft, pendingSync.taskID);
+      }
       void savedTask;
 
       pendingDraftSubmitRef.current = { taskID: targetTaskID, payload: built.payload };

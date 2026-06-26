@@ -73359,8 +73359,8 @@ var Zv = class e {
 			this.pasteHandler(e);
 		}), Hn(e, "keydown").subscribe((e) => {
 			var t;
-			let { key: n, metaKey: r } = e, { isSelectionInSameBlock: i } = (t = this.selection.getSelection()) == null ? {} : t;
-			i || /Alt|Option|Meta|Shift|CapsLock|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/.test(n) || r || ((n === "Backspace" || n === "Delete") && e.preventDefault(), this.cutHandler());
+			let { key: n, metaKey: r, ctrlKey: i } = e, { isSelectionInSameBlock: a } = (t = this.selection.getSelection()) == null ? {} : t;
+			a || /Alt|Option|Meta|Shift|CapsLock|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/.test(n) || r || i || ((n === "Backspace" || n === "Delete") && e.preventDefault(), this.cutHandler());
 		});
 	}
 	getClipboardData() {
