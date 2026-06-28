@@ -11,7 +11,7 @@ on:
         required: false
         default: 'https://todo.marlon.life/api'
       release_tag:
-        description: 'Release tag for manual runs. Leave empty to use electron-v<version>-<run_number>.'
+        description: 'Release tag for manual runs, for example v0.1.5. Leave empty to use electron/package.json version.'
         required: false
         default: ''
       draft:
@@ -37,10 +37,16 @@ jobs:
             artifact: Todo-Electron-macOS
             paths: |
               electron/dist/*.dmg
+              electron/dist/*.zip
+              electron/dist/*.blockmap
+              electron/dist/latest-mac.yml
           - os: windows-latest
             artifact: Todo-Electron-Windows
             paths: |
               electron/dist/*.exe
+              electron/dist/*.msi
+              electron/dist/*.blockmap
+              electron/dist/latest.yml
 
     runs-on: ${{ matrix.os }}
 
@@ -65,8 +71,36 @@ jobs:
         run: npm ci
         working-directory: electron
 
+      - name: Resolve Electron version
+        id: electron-version
+        shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag || '' }}
+        run: |
+          version=""
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${RELEASE_TAG_INPUT}"
+          fi
+
+          if [[ -n "${tag}" ]]; then
+            if [[ "${tag}" != v* ]]; then
+              echo "::error::Release tag must start with v, for example v0.1.5."
+              exit 1
+            fi
+            version="${tag#v}"
+            npm version "${version}" --no-git-tag-version
+          else
+            version="$(node -p "require('./package.json').version")"
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        working-directory: electron
+
       - name: Build Electron app
-        run: npm run build
+        run: npm run build -- --publish never
         working-directory: electron
         env:
           VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://todo.marlon.life/api' }}
@@ -93,12 +127,17 @@ jobs:
       - name: Resolve release metadata
         id: release
         shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag || '' }}
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ github.event.inputs.release_tag }}"
+            tag="${RELEASE_TAG_INPUT}"
             if [[ -z "${tag}" ]]; then
               version="$(node -p "require('./electron/package.json').version")"
-              tag="electron-v${version}-${GITHUB_RUN_NUMBER}"
+              tag="v${version}"
+            elif [[ "${tag}" != v* ]]; then
+              echo "::error::Release tag must start with v, for example v0.1.5."
+              exit 1
             fi
           else
             tag="${GITHUB_REF_NAME}"

@@ -7,12 +7,14 @@ import {
   Bot,
   CalendarClock,
   Cloud,
+  Download,
   Eye,
   EyeOff,
   KeyRound,
   MonitorCog,
   Power,
   Shield,
+  Sparkles,
   UserCircle,
   X,
 } from 'lucide-react';
@@ -35,6 +37,13 @@ import {
 } from '../utils/aiConfig';
 import { getShowCategoryEmoji, setShowCategoryEmoji, getShowChineseHolidays, setShowChineseHolidays } from '../utils/uiPrefs';
 import { getStartupStatus, setStartupEnabled } from '../platform/startup';
+import {
+  checkForDesktopUpdates,
+  getDesktopUpdateStatus,
+  installDesktopUpdate,
+  isDesktopUpdateRuntimeAvailable,
+  onDesktopUpdateStatus,
+} from '../platform/desktopUpdates';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { aiConfigAPI, authAPI, caldavAPI } from '../api/client';
@@ -184,6 +193,19 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     status: 'unknown',
   });
   const [startupBusy, setStartupBusy] = useState(false);
+  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState({
+    supported: false,
+    currentVersion: '',
+    status: 'unavailable',
+    checking: false,
+    downloading: false,
+    downloaded: false,
+    available: false,
+    version: '',
+    error: '',
+    progress: null,
+  });
+  const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
   const [aiConfig, setAIConfig] = useState(() => readAIConfig());
   const [aiConfigBusy, setAIConfigBusy] = useState(false);
   const [showAIKey, setShowAIKey] = useState(false);
@@ -289,6 +311,27 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
       active = false;
     };
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'general' || !isDesktopUpdateRuntimeAvailable()) return undefined;
+    let active = true;
+    const applyStatus = (status) => {
+      if (!active) return;
+      setDesktopUpdateStatus(status || {});
+    };
+
+    getDesktopUpdateStatus()
+      .then(applyStatus)
+      .catch(() => {
+        applyStatus({ supported: false, status: 'error', error: t('settings.desktopUpdateCheckFailed') });
+      });
+
+    const unsubscribe = onDesktopUpdateStatus(applyStatus);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [activeTab, t]);
 
   useEffect(() => {
     let active = true;
@@ -573,6 +616,41 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     } finally {
       setStartupBusy(false);
     }
+  };
+
+  const handleDesktopUpdateCheck = async () => {
+    setDesktopUpdateBusy(true);
+    try {
+      const status = await checkForDesktopUpdates();
+      setDesktopUpdateStatus(status || {});
+      if (status?.downloaded) {
+        showToast('success', t('settings.desktopUpdateReady'));
+      } else if (status?.available) {
+        showToast('success', t('settings.desktopUpdateDownloading'));
+      } else {
+        showToast('success', t('settings.desktopUpdateNone'));
+      }
+    } catch (err) {
+      showToast('error', err?.message || t('settings.desktopUpdateCheckFailed'));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  };
+
+  const handleDesktopUpdateInstall = async () => {
+    setDesktopUpdateBusy(true);
+    try {
+      await installDesktopUpdate();
+    } catch (err) {
+      setDesktopUpdateBusy(false);
+      showToast('error', err?.message || t('settings.desktopUpdateInstallFailed'));
+    }
+  };
+
+  const formatUpdateProgress = (progress) => {
+    const percent = Number(progress?.percent || 0);
+    if (!Number.isFinite(percent) || percent <= 0) return '';
+    return `${Math.round(percent)}%`;
   };
 
   const handleMobileDefaultTabChange = async (nextValue) => {
@@ -1186,6 +1264,71 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                     </button>
                   </div>
                 </div>
+
+                {isDesktopUpdateRuntimeAvailable() && (
+                  <div className="rounded-xl border border-border bg-card p-4">
+                    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 gap-3">
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                          <Download className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-foreground">{t('settings.desktopUpdateTitle')}</div>
+                          <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                            {desktopUpdateStatus.supported
+                              ? t('settings.desktopUpdateHint', { version: desktopUpdateStatus.currentVersion || '-' })
+                              : t('settings.desktopUpdateUnavailable')}
+                          </p>
+                          {desktopUpdateStatus.version && (
+                            <p className="mt-1 text-xs font-medium text-primary">
+                              {t('settings.desktopUpdateNewVersion', { version: desktopUpdateStatus.version })}
+                            </p>
+                          )}
+                          {desktopUpdateStatus.downloading && (
+                            <p className="mt-1 text-xs font-medium text-primary">
+                              {t('settings.desktopUpdateDownloading')} {formatUpdateProgress(desktopUpdateStatus.progress)}
+                            </p>
+                          )}
+                          {desktopUpdateStatus.downloaded && (
+                            <p className="mt-1 text-xs font-medium text-emerald-700">
+                              {t('settings.desktopUpdateReady')}
+                            </p>
+                          )}
+                          {desktopUpdateStatus.error && (
+                            <p className="mt-1 text-xs font-medium text-rose-700">
+                              {desktopUpdateStatus.error}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        {desktopUpdateStatus.downloaded ? (
+                          <button
+                            type="button"
+                            onClick={handleDesktopUpdateInstall}
+                            disabled={desktopUpdateBusy}
+                            className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Sparkles className="h-4 w-4" />
+                            {t('settings.desktopUpdateRestart')}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleDesktopUpdateCheck}
+                            disabled={!desktopUpdateStatus.supported || desktopUpdateStatus.checking || desktopUpdateStatus.downloading || desktopUpdateBusy}
+                            className="btn-secondary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Download className="h-4 w-4" />
+                            {desktopUpdateStatus.checking
+                              ? t('settings.desktopUpdateChecking')
+                              : t('settings.desktopUpdateCheck')}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Language */}
                 <div>

@@ -1,6 +1,6 @@
 {
   "name": "todo-electron",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "private": true,
   "description": "Electron desktop shell for Todo.",
   "author": "marlon",
@@ -25,6 +25,15 @@
     "directories": {
       "output": "dist"
     },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "marlonfan",
+        "repo": "todo",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "main.cjs",
       "preload.cjs",
@@ -50,6 +59,7 @@
     },
     "win": {
       "icon": "icons/icon.ico",
+      "verifyUpdateCodeSignature": false,
       "target": [
         "nsis",
         "msi"
@@ -67,5 +77,8 @@
         "deb"
       ]
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

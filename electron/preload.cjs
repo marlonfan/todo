@@ -13,4 +13,15 @@ contextBridge.exposeInMainWorld('todoElectron', {
     get: () => ipcRenderer.invoke('todo:startup:get'),
     setEnabled: (enabled) => ipcRenderer.invoke('todo:startup:set-enabled', Boolean(enabled)),
   },
+  updates: {
+    getStatus: () => ipcRenderer.invoke('todo:updates:get-status'),
+    check: () => ipcRenderer.invoke('todo:updates:check'),
+    install: () => ipcRenderer.invoke('todo:updates:install'),
+    onStatus: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, status) => callback(status);
+      ipcRenderer.on('todo:updates:status', listener);
+      return () => ipcRenderer.removeListener('todo:updates:status', listener);
+    },
+  },
 });

@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, nativeImage, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 
 const isMac = process.platform === 'darwin';
@@ -20,6 +21,7 @@ const NOTIFICATION_DELIVERY_TIMEOUT_MS = 3000;
 const NOTIFICATION_REF_TTL_MS = 5 * 60 * 1000;
 const MAC_TRAY_ICON_SIZE = 18;
 const MAC_TRAY_TEMPLATE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAAAfElEQVR4nO3VUQrAIAwDUO9/aXeCimlTU1gC/jiID6e4lvOT7MsxCtOKQhGtOBaGgmJjyqioDFm4FaTuoR5IgwyK5m+vt0FSkKzLoGxJ5uGkPB8GZUGVHvmhRnaxHYT+VriQgaGCdvANwdBBjFHKKAwb9SSyhU8ZB3Ke5QM4aGimfd1r3QAAAABJRU5ErkJggg==';
+const UPDATE_CHECK_DELAY_MS = 15 * 1000;
 
 function resolveResourcePath(...segments) {
   if (app.isPackaged) {
@@ -66,6 +68,230 @@ function getTrayIcon() {
     return resized;
   }
   return image;
+}
+
+function isUpdaterSupported() {
+  return app.isPackaged && !isDev;
+}
+
+let updateStatus = {
+  supported: false,
+  platform: process.platform,
+  currentVersion: app.getVersion(),
+  status: 'unavailable',
+  checking: false,
+  downloading: false,
+  downloaded: false,
+  available: false,
+  version: '',
+  releaseName: '',
+  releaseDate: '',
+  lastCheckedAt: '',
+  error: '',
+  progress: null,
+};
+let updateCheckInFlight = null;
+let autoUpdaterConfigured = false;
+let updateDownloadedNotificationShown = false;
+
+function getUpdateStatus() {
+  return {
+    ...updateStatus,
+    supported: isUpdaterSupported(),
+    platform: process.platform,
+    currentVersion: app.getVersion(),
+  };
+}
+
+function broadcastUpdateStatus() {
+  const status = getUpdateStatus();
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window || window.isDestroyed()) return;
+    window.webContents.send('todo:updates:status', status);
+  });
+}
+
+function setUpdateStatus(patch = {}) {
+  updateStatus = {
+    ...updateStatus,
+    ...patch,
+    supported: isUpdaterSupported(),
+    platform: process.platform,
+    currentVersion: app.getVersion(),
+  };
+  broadcastUpdateStatus();
+  updateTrayContextMenu();
+}
+
+function normalizeUpdateInfo(info = {}) {
+  return {
+    version: String(info.version || ''),
+    releaseName: String(info.releaseName || ''),
+    releaseDate: String(info.releaseDate || ''),
+  };
+}
+
+function normalizeUpdateError(error) {
+  return String(error?.message || error || 'Update check failed');
+}
+
+function showUpdateDownloadedNotification(info = {}) {
+  if (updateDownloadedNotificationShown || !Notification.isSupported()) return;
+  updateDownloadedNotificationShown = true;
+  const version = String(info.version || updateStatus.version || '').trim();
+  const notification = new Notification({
+    title: 'Todo update ready',
+    body: version
+      ? `Version ${version} has been downloaded. Restart Todo to install it.`
+      : 'A new version has been downloaded. Restart Todo to install it.',
+  });
+  activeNotifications.add(notification);
+  notification.once('click', showMainWindow);
+  notification.once('close', () => activeNotifications.delete(notification));
+  notification.show();
+}
+
+function configureAutoUpdater() {
+  if (autoUpdaterConfigured) return;
+  autoUpdaterConfigured = true;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  if (!isUpdaterSupported()) {
+    setUpdateStatus({ status: isDev ? 'development' : 'unavailable' });
+    return;
+  }
+
+  setUpdateStatus({
+    supported: true,
+    status: 'idle',
+    error: '',
+  });
+
+  autoUpdater.on('checking-for-update', () => {
+    setUpdateStatus({
+      status: 'checking',
+      checking: true,
+      downloading: false,
+      error: '',
+      progress: null,
+    });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    updateDownloadedNotificationShown = false;
+    setUpdateStatus({
+      ...normalizeUpdateInfo(info),
+      status: 'available',
+      checking: false,
+      downloading: false,
+      downloaded: false,
+      available: true,
+      error: '',
+      progress: null,
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    setUpdateStatus({
+      status: 'idle',
+      checking: false,
+      downloading: false,
+      downloaded: false,
+      available: false,
+      error: '',
+      progress: null,
+      lastCheckedAt: new Date().toISOString(),
+    });
+  });
+
+  autoUpdater.on('download-progress', (progress = {}) => {
+    setUpdateStatus({
+      status: 'downloading',
+      checking: false,
+      downloading: true,
+      downloaded: false,
+      available: true,
+      error: '',
+      progress: {
+        percent: Number(progress.percent || 0),
+        transferred: Number(progress.transferred || 0),
+        total: Number(progress.total || 0),
+        bytesPerSecond: Number(progress.bytesPerSecond || 0),
+      },
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdateStatus({
+      ...normalizeUpdateInfo(info),
+      status: 'downloaded',
+      checking: false,
+      downloading: false,
+      downloaded: true,
+      available: true,
+      error: '',
+      progress: null,
+      lastCheckedAt: new Date().toISOString(),
+    });
+    showUpdateDownloadedNotification(info);
+  });
+
+  autoUpdater.on('error', (error) => {
+    setUpdateStatus({
+      status: 'error',
+      checking: false,
+      downloading: false,
+      error: normalizeUpdateError(error),
+      lastCheckedAt: new Date().toISOString(),
+    });
+  });
+}
+
+async function checkForUpdates(options = {}) {
+  configureAutoUpdater();
+  if (!isUpdaterSupported()) {
+    return getUpdateStatus();
+  }
+  if (updateCheckInFlight) {
+    await updateCheckInFlight;
+    return getUpdateStatus();
+  }
+
+  setUpdateStatus({
+    status: 'checking',
+    checking: true,
+    error: '',
+    lastCheckedAt: '',
+  });
+
+  updateCheckInFlight = autoUpdater.checkForUpdates();
+  try {
+    await updateCheckInFlight;
+  } catch (error) {
+    setUpdateStatus({
+      status: 'error',
+      checking: false,
+      downloading: false,
+      error: normalizeUpdateError(error),
+      lastCheckedAt: new Date().toISOString(),
+    });
+    if (options.manual) {
+      throw error;
+    }
+  } finally {
+    updateCheckInFlight = null;
+  }
+  return getUpdateStatus();
+}
+
+function installDownloadedUpdate() {
+  if (!isUpdaterSupported() || !updateStatus.downloaded) {
+    throw new Error('No downloaded update is ready to install.');
+  }
+  isQuitting = true;
+  autoUpdater.quitAndInstall(false, true);
+  return true;
 }
 
 function setDockIcon() {
@@ -194,16 +420,42 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
-function createTray() {
-  if (tray || !keepsRunningInTray) return;
-
-  tray = new Tray(getTrayIcon());
-  tray.setToolTip('Todo');
-  tray.setContextMenu(Menu.buildFromTemplate([
+function buildTrayMenuTemplate() {
+  const template = [
     {
       label: '显示 Todo',
       click: showMainWindow,
     },
+  ];
+
+  const status = getUpdateStatus();
+  if (status.supported) {
+    template.push(
+      { type: 'separator' },
+      status.downloaded
+        ? {
+            label: '重启安装更新',
+            click: () => {
+              try {
+                installDownloadedUpdate();
+              } catch (error) {
+                console.error('Failed to install downloaded update:', error);
+              }
+            },
+          }
+        : {
+            label: status.checking || status.downloading ? '正在检查更新...' : '检查更新',
+            enabled: !status.checking && !status.downloading,
+            click: () => {
+              checkForUpdates({ manual: true }).catch((error) => {
+                console.error('Failed to check for updates:', error);
+              });
+            },
+          },
+    );
+  }
+
+  template.push(
     { type: 'separator' },
     {
       label: '退出',
@@ -212,7 +464,22 @@ function createTray() {
         app.quit();
       },
     },
-  ]));
+  );
+
+  return template;
+}
+
+function updateTrayContextMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
+}
+
+function createTray() {
+  if (tray || !keepsRunningInTray) return;
+
+  tray = new Tray(getTrayIcon());
+  tray.setToolTip('Todo');
+  updateTrayContextMenu();
   if (isMac) {
     tray.on('click', () => {
       tray.popUpContextMenu();
@@ -491,6 +758,9 @@ function registerIPC() {
   });
   ipcMain.handle('todo:startup:get', () => getStartupSettings());
   ipcMain.handle('todo:startup:set-enabled', (_event, enabled) => setStartupEnabled(enabled));
+  ipcMain.handle('todo:updates:get-status', () => getUpdateStatus());
+  ipcMain.handle('todo:updates:check', () => checkForUpdates({ manual: true }));
+  ipcMain.handle('todo:updates:install', () => installDownloadedUpdate());
 }
 
 app.setName('Todo');
@@ -512,10 +782,18 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     startHidden = shouldStartHiddenAtLogin();
+    configureAutoUpdater();
     registerIPC();
     setDockIcon();
     createTray();
     createWindow();
+    if (isUpdaterSupported()) {
+      setTimeout(() => {
+        checkForUpdates({ manual: false }).catch((error) => {
+          console.error('Initial update check failed:', error);
+        });
+      }, UPDATE_CHECK_DELAY_MS);
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
