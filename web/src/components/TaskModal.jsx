@@ -52,6 +52,7 @@ import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
 import { RecurrencePanel } from './task/RecurrencePanel';
+import { getTaskInstanceID, getTaskModalSessionKey, getTaskMutationID } from './taskModalSession';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
@@ -564,50 +565,6 @@ function buildInitialTaskModalValues(task, initialRange) {
   };
 }
 
-function getTaskMutationID(task) {
-  const candidates = [
-    task?.source_task_id,
-    task?.sourceTaskID,
-    task?.task_id,
-    task?.taskID,
-    task?.id,
-  ];
-  for (const candidate of candidates) {
-    const value = Number(candidate || 0);
-    if (Number.isFinite(value) && value > 0) return value;
-  }
-  return 0;
-}
-
-function getTaskInstanceID(task) {
-  const value = String(task?.instanceId || task?.instance_id || '').trim();
-  return /^\d+_\d{8}$/.test(value) ? value : '';
-}
-
-function normalizeTaskModalOccurrenceKey(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
-  return raw;
-}
-
-function getTaskModalSessionKey(task, initialRange) {
-  if (!task) {
-    return [
-      'new',
-      String(initialRange?.start || ''),
-      String(initialRange?.end || ''),
-      initialRange?.allDay ? 'all-day' : 'timed',
-    ].join('|');
-  }
-
-  const occurrenceKey = getTaskInstanceID(task)
-    || normalizeTaskModalOccurrenceKey(task?.occurrenceDate || task?.occurrence_date)
-    || normalizeTaskModalOccurrenceKey(task?.occurrenceStart || task?.occurrence_start);
-  const taskID = getTaskMutationID(task) || String(task?.id || '');
-  return ['task', taskID, occurrenceKey].join('|');
-}
-
 function normalizeTaskModalCategoryIDs(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -662,6 +619,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
   const { register, handleSubmit, watch, setValue, getValues } = useForm({
     defaultValues: buildInitialTaskModalValues(task, initialRange),
   });
+  const setValueRef = useRef(setValue);
   const { data: categories = [] } = useCategoriesQuery();
   const { data: tasksRaw = [] } = useTasksQuery();
   const [loading, setLoading] = useState(false);
@@ -715,6 +673,10 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     modalBodyScrollCleanupRef.current?.();
     modalBodyScrollCleanupRef.current = null;
   }, []);
+
+  useEffect(() => {
+    setValueRef.current = setValue;
+  }, [setValue]);
 
   const isEditing = !!task;
   const mutationTaskID = getTaskMutationID(task);
@@ -1093,6 +1055,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
   };
 
   useEffect(() => {
+    const setFormValue = setValueRef.current;
     setTimeTouched(false);
     setParsePreview('');
     setTimeRangeEditing('start');
@@ -1100,11 +1063,11 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     
     if (task) {
       // 编辑模式：填充表单数据
-      setValue('title', task.title || '');
+      setFormValue('title', task.title || '');
       descriptionDraftRef.current = String(task.description || '');
-      setValue('description', descriptionDraftRef.current);
-      setValue('priority', task.priority?.toString() || '0');
-      setValue('status', task.status || 'pending');
+      setFormValue('description', descriptionDraftRef.current);
+      setFormValue('priority', task.priority?.toString() || '0');
+      setFormValue('status', task.status || 'pending');
       
       // 处理时间字段（支持 snake_case 和 camelCase）
       const baseStartTime = task.start_time || task.startTime;
@@ -1164,9 +1127,9 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
         }
         endInput = coerceEndNotBeforeStart(startInput, endInput, getUserTimezone());
       }
-      setValue('start_time', startInput || '');
-      setValue('end_time', endInput || '');
-      setValue('all_day', allDay || false);
+      setFormValue('start_time', startInput || '');
+      setFormValue('end_time', endInput || '');
+      setFormValue('all_day', allDay || false);
       setTimeRangeEnabled(!!endInput);
       
       // 处理重复规则
@@ -1212,14 +1175,14 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
       
       // 处理分类
       if (task.categories && task.categories.length > 0) {
-        setValue('category_ids', task.categories.map(c => c.id.toString()));
+        setFormValue('category_ids', task.categories.map(c => c.id.toString()));
       } else {
-        setValue('category_ids', []);
+        setFormValue('category_ids', []);
       }
     } else {
       // 新建模式：默认当前时间
       descriptionDraftRef.current = '';
-      setValue('description', '');
+      setFormValue('description', '');
       setShowRecurrence(false);
       setRecurrenceType('daily');
       setSelectedDays([]);
@@ -1237,26 +1200,26 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
       setShowCustomRecurrenceMenu(false);
       setShowMonthlyDatePicker(false);
       if (initialRange?.start) {
-        setValue('all_day', !!initialRange.allDay);
-        setValue('start_time', initialRange.start);
-        setValue('end_time', initialRange.end || '');
+        setFormValue('all_day', !!initialRange.allDay);
+        setFormValue('start_time', initialRange.start);
+        setFormValue('end_time', initialRange.end || '');
         setTimeRangeEnabled(!!initialRange.end);
         setMonthlyDate(clampMonthlyDate(dayjs(initialRange.start).date(), 1));
       } else {
         const timezone = getUserTimezone();
         const defaultStart = getDefaultStartInputValue(timezone);
-        setValue('start_time', defaultStart);
-        setValue('end_time', '');
-        setValue('all_day', false);
+        setFormValue('start_time', defaultStart);
+        setFormValue('end_time', '');
+        setFormValue('all_day', false);
         setTimeRangeEnabled(false);
         setMonthlyDate(clampMonthlyDate(dayjs(defaultStart).date(), 1));
       }
-      setValue('priority', '0');
-      setValue('category_ids', []);
+      setFormValue('priority', '0');
+      setFormValue('category_ids', []);
     }
     detailPanelSnapshotRef.current = null;
     setBasicPanel('');
-  }, [modalSessionKey, setValue]);
+  }, [modalSessionKey]);
 
   useEffect(() => {
     const startTime = getValues('start_time');
