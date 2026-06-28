@@ -584,6 +584,30 @@ function getTaskInstanceID(task) {
   return /^\d+_\d{8}$/.test(value) ? value : '';
 }
 
+function normalizeTaskModalOccurrenceKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  return raw;
+}
+
+function getTaskModalSessionKey(task, initialRange) {
+  if (!task) {
+    return [
+      'new',
+      String(initialRange?.start || ''),
+      String(initialRange?.end || ''),
+      initialRange?.allDay ? 'all-day' : 'timed',
+    ].join('|');
+  }
+
+  const occurrenceKey = getTaskInstanceID(task)
+    || normalizeTaskModalOccurrenceKey(task?.occurrenceDate || task?.occurrence_date)
+    || normalizeTaskModalOccurrenceKey(task?.occurrenceStart || task?.occurrence_start);
+  const taskID = getTaskMutationID(task) || String(task?.id || '');
+  return ['task', taskID, occurrenceKey].join('|');
+}
+
 function normalizeTaskModalCategoryIDs(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -694,6 +718,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
 
   const isEditing = !!task;
   const mutationTaskID = getTaskMutationID(task);
+  const modalSessionKey = getTaskModalSessionKey(task, initialRange);
   const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
   const hasOccurrenceContext = !!(
     isEditing
@@ -1231,7 +1256,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     }
     detailPanelSnapshotRef.current = null;
     setBasicPanel('');
-  }, [task, initialRange, setValue]);
+  }, [modalSessionKey, setValue]);
 
   useEffect(() => {
     const startTime = getValues('start_time');
