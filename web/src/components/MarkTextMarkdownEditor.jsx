@@ -269,6 +269,30 @@ function selectWholeEditorContent(instance, host) {
   return selectEditorDomRange(host);
 }
 
+function keepEditorSelectionVisible(scrollNode) {
+  if (!(scrollNode instanceof HTMLElement) || typeof window === 'undefined') return;
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0) return;
+  const anchorElement = getSelectionNodeElement(selection.anchorNode);
+  if (!anchorElement || !scrollNode.contains(anchorElement)) return;
+
+  const scrollRect = scrollNode.getBoundingClientRect();
+  const range = selection.getRangeAt(0).cloneRange();
+  range.collapse(false);
+  let cursorRect = range.getBoundingClientRect();
+  if (!cursorRect || (cursorRect.width === 0 && cursorRect.height === 0)) {
+    cursorRect = anchorElement.getBoundingClientRect();
+  }
+
+  const lineHeight = Number.parseFloat(window.getComputedStyle(anchorElement).lineHeight) || 22;
+  const padding = Math.max(12, lineHeight * 0.75);
+  if (cursorRect.bottom > scrollRect.bottom - padding) {
+    scrollNode.scrollTop += cursorRect.bottom - (scrollRect.bottom - padding);
+  } else if (cursorRect.top < scrollRect.top + padding) {
+    scrollNode.scrollTop -= (scrollRect.top + padding) - cursorRect.top;
+  }
+}
+
 const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor({
   value,
   onChange,
@@ -494,6 +518,9 @@ const MarkTextMarkdownEditor = React.forwardRef(function MarkTextMarkdownEditor(
       if (typeof onChangeRef.current === 'function') {
         onChangeRef.current(nextValue);
       }
+      window.requestAnimationFrame?.(() => {
+        if (!disposed) keepEditorSelectionVisible(scrollNode);
+      });
     };
 
     const preserveTaskCheckboxScroll = (event, options = {}) => {
