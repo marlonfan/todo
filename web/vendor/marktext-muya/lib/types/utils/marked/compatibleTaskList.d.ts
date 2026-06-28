@@ -1,4 +1,0 @@
-import { Token } from 'marked';
-import { ListItemToken, ListToken } from './types';
-declare function compatibleTaskList(tokens?: (Token | ListToken | ListItemToken)[]): (import("marked").Tokens.Heading | import("marked").Tokens.ListItem | import("marked").Tokens.List | import("marked").Tokens.Blockquote | import("marked").Tokens.Br | import("marked").Tokens.Code | import("marked").Tokens.Codespan | import("marked").Tokens.Def | import("marked").Tokens.Del | import("marked").Tokens.Em | import("marked").Tokens.Escape | import("marked").Tokens.Hr | import("marked").Tokens.HTML | import("marked").Tokens.Image | import("marked").Tokens.Link | import("marked").Tokens.Paragraph | import("marked").Tokens.Space | import("marked").Tokens.Strong | import("marked").Tokens.Table | import("marked").Tokens.Tag | import("marked").Tokens.Text | import("marked").Tokens.Generic)[];
-export default compatibleTaskList;

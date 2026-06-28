@@ -10,21 +10,25 @@ function getPackageName(id) {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    host: true,
+    port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('/vendor/marktext-muya/') || id.includes('/node_modules/@todo/vendor-marktext-muya/')) {
-            return undefined;
-          }
           if (!id.includes('node_modules')) return undefined;
 
           const packageName = getPackageName(id);
-          if (packageName === '@todo/vendor-marktext-muya') {
-            return undefined;
-          }
           if (['react', 'react-dom', 'scheduler', 'loose-envify', 'js-tokens'].includes(packageName)) {
             return 'vendor-react';
           }
@@ -37,7 +41,7 @@ export default defineConfig({
           if (packageName?.startsWith('@fullcalendar/') || packageName === 'rrule' || packageName === 'lunar-javascript') {
             return 'vendor-calendar';
           }
-          if (packageName === 'react-datepicker' || packageName === 'date-fns') {
+          if (packageName === 'vditor' || packageName === 'react-datepicker' || packageName === 'date-fns') {
             return 'vendor-editor';
           }
           if (packageName?.startsWith('@radix-ui/') || packageName === 'lucide-react') {
@@ -45,16 +49,6 @@ export default defineConfig({
           }
           return 'vendor-core';
         },
-      },
-    },
-  },
-  server: {
-    host: true,
-    port: 3000,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
       },
     },
   },
