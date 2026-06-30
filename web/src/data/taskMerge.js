@@ -51,13 +51,24 @@ function shouldKeepLocalTask(localTask, incomingTask, outboxOps, options = {}) {
   const state = String(localTask.sync_state || '');
   const localTs = getTaskTimestamp(localTask);
   const incomingTs = getTaskTimestamp(incomingTask);
-  if (!isUnsyncedTaskState(state)) {
-    return localTs > incomingTs;
+  const preserveLocalChangedAfter = Number(options.preserveLocalChangedAfter || 0);
+  const isUnsynced = isUnsyncedTaskState(state);
+  if (isUnsynced && preserveLocalChangedAfter > 0 && localTs > preserveLocalChangedAfter) {
+    return true;
   }
 
-  const preserveLocalChangedAfter = Number(options.preserveLocalChangedAfter || 0);
-  if (preserveLocalChangedAfter > 0 && localTs > preserveLocalChangedAfter) {
-    return true;
+  const localRevision = Number(localTask.revision || 0);
+  const incomingRevision = Number(incomingTask.revision || 0);
+  if (
+    options.preferIncomingRevisionAtLeastLocal
+    && incomingRevision > 0
+    && localRevision > 0
+    && incomingRevision >= localRevision
+  ) {
+    return false;
+  }
+  if (!isUnsynced) {
+    return localTs > incomingTs;
   }
 
   const hasQueuedMutation = hasPendingOutboxForTask(outboxOps, incomingTask.id);

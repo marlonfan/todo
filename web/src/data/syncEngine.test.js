@@ -70,6 +70,48 @@ test('mergeIncomingTasksWithLocal keeps edit made after sync request started', (
   assert.equal(merged[0].sync_state, 'pending');
 });
 
+test('mergeIncomingTasksWithLocal accepts server ack for locally submitted revision', () => {
+  const merged = mergeIncomingTasksWithLocal(
+    [{ id: 18, title: 'server accepted title', revision: 4, sync_state: 'synced', updated_at: '2026-03-02T09:00:01.000Z' }],
+    [{ id: 18, title: 'local pending title', revision: 4, sync_state: 'syncing', client_updated_at: '2026-03-02T09:00:00.000Z' }],
+    { preferIncomingRevisionAtLeastLocal: true }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 18);
+  assert.equal(merged[0].title, 'server accepted title');
+  assert.equal(merged[0].sync_state, 'synced');
+});
+
+test('mergeIncomingTasksWithLocal keeps newer local edit over earlier server ack', () => {
+  const merged = mergeIncomingTasksWithLocal(
+    [{ id: 19, title: 'server ack for earlier edit', revision: 4, sync_state: 'synced', updated_at: '2026-03-02T09:00:01.000Z' }],
+    [{ id: 19, title: 'new local edit after submit', revision: 5, sync_state: 'staged', client_updated_at: '2026-03-02T09:00:03.000Z' }],
+    {
+      preserveLocalChangedAfter: Date.parse('2026-03-02T09:00:02.000Z'),
+      preferIncomingRevisionAtLeastLocal: true,
+    }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 19);
+  assert.equal(merged[0].title, 'new local edit after submit');
+  assert.equal(merged[0].sync_state, 'staged');
+});
+
+test('mergeIncomingTasksWithLocal does not preserve synced local cache just because it changed after pull started', () => {
+  const merged = mergeIncomingTasksWithLocal(
+    [{ id: 20, title: 'server title', revision: 6, sync_state: 'synced', updated_at: '2026-03-02T09:00:02.000Z' }],
+    [{ id: 20, title: 'synced local cache', revision: 5, sync_state: 'synced', client_updated_at: '2026-03-02T09:00:03.000Z' }],
+    { preserveLocalChangedAfter: Date.parse('2026-03-02T09:00:01.000Z') }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 20);
+  assert.equal(merged[0].title, 'server title');
+  assert.equal(merged[0].revision, 6);
+});
+
 test('mergeServerAndLocalTasks accepts server over older staged local edit', () => {
   const merged = mergeServerAndLocalTasks(
     [{ id: 15, title: 'server new title', revision: 4, updated_at: '2026-03-02T11:00:00.000Z' }],

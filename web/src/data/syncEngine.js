@@ -253,6 +253,7 @@ async function applyServerTask(task, replaceTempID = null, options = {}) {
     const list = replaceTempID !== null ? base.filter((item) => item.id !== replaceTempID) : base;
     const merged = mergeIncomingTasksWithLocal([normalizedTask], list, {
       preserveLocalChangedAfter: Number(options?.preserveLocalChangedAfter || 0),
+      preferIncomingRevisionAtLeastLocal: !!options?.preferIncomingRevisionAtLeastLocal,
     });
     const mergedTask = merged.find((item) => item?.id === normalizedTask.id) || normalizedTask;
     taskToPersist = mergedTask;
@@ -406,6 +407,7 @@ async function executeOutboxOperation(op) {
       if (res?.data?.id) {
         await applyServerTask(res.data, null, {
           preserveLocalChangedAfter: Number(op.created_at || 0),
+          preferIncomingRevisionAtLeastLocal: true,
         });
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
@@ -425,6 +427,7 @@ async function executeOutboxOperation(op) {
       if (res?.data?.id) {
         await applyServerTask(res.data, null, {
           preserveLocalChangedAfter: Number(op.created_at || 0),
+          preferIncomingRevisionAtLeastLocal: true,
         });
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
@@ -444,6 +447,7 @@ async function executeOutboxOperation(op) {
       if (res?.data?.id) {
         await applyServerTask(res.data, null, {
           preserveLocalChangedAfter: Number(op.created_at || 0),
+          preferIncomingRevisionAtLeastLocal: true,
         });
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
