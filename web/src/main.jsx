@@ -11,9 +11,27 @@ import { initializeSyncEngine } from './data/syncEngine'
 import { initPlatform } from './platform/init'
 import { initInputModality } from './utils/inputModality'
 
+const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1.0, viewport-fit=cover';
+
+function ensureMobileViewport() {
+  if (typeof document === 'undefined') return;
+
+  let viewport = document.querySelector('meta[name="viewport"]');
+  if (!viewport) {
+    viewport = document.createElement('meta');
+    viewport.setAttribute('name', 'viewport');
+    document.head.appendChild(viewport);
+  }
+
+  if (viewport.getAttribute('content') !== VIEWPORT_CONTENT) {
+    viewport.setAttribute('content', VIEWPORT_CONTENT);
+  }
+}
+
 (async () => {
   const isDesktopRuntime = Boolean(window.todoElectron);
   const shouldUseServiceWorker = 'serviceWorker' in navigator && !isDesktopRuntime && !import.meta.env.DEV;
+  ensureMobileViewport();
   initInputModality();
 
   // Dev servers need fresh modules for HMR, so clear any SW left from older runs.
@@ -39,6 +57,14 @@ import { initInputModality } from './utils/inputModality'
 
   // Service Worker：桌面端和 Vite 开发模式不需要
   if (shouldUseServiceWorker) {
+    let refreshing = false;
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js')
@@ -49,6 +75,8 @@ import { initInputModality } from './utils/inputModality'
 
             worker.addEventListener('statechange', () => {
               if (worker.state === 'activated' && navigator.serviceWorker.controller) {
+                if (refreshing) return;
+                refreshing = true;
                 window.location.reload();
               }
             });

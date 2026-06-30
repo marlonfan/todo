@@ -3957,6 +3957,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     void updateTaskLocal(queryClient, taskID, built.payload, {
       scheduleSync: false,
       localOnly: true,
+      awaitPersist: true,
       submitMeta: {
         submittedAt: new Date().toISOString(),
         submitSource,
@@ -4142,6 +4143,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const savedTask = await updateTaskLocal(queryClient, targetTaskID, built.payload, {
         scheduleSync: false,
         localOnly: true,
+        awaitPersist: true,
       });
       if (draftSourceTaskIDRef.current !== targetTaskID) {
         return false;

@@ -29,6 +29,33 @@ test('mergeServerAndLocalTasks discards orphan pending local draft without outbo
   assert.equal(merged[0].sync_state, 'synced');
 });
 
+test('mergeServerAndLocalTasks keeps newer staged local edit before outbox enqueue completes', () => {
+  const merged = mergeServerAndLocalTasks(
+    [{ id: 14, title: 'server old title', revision: 3, updated_at: '2026-03-02T09:00:00.000Z' }],
+    [{ id: 14, title: 'local new title', sync_state: 'staged', client_updated_at: '2026-03-02T10:00:00.000Z' }],
+    { outboxOps: [] }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 14);
+  assert.equal(merged[0].title, 'local new title');
+  assert.equal(merged[0].sync_state, 'staged');
+  assert.equal(merged[0].updated_at, '2026-03-02T09:00:00.000Z');
+});
+
+test('mergeServerAndLocalTasks accepts server over older staged local edit', () => {
+  const merged = mergeServerAndLocalTasks(
+    [{ id: 15, title: 'server new title', revision: 4, updated_at: '2026-03-02T11:00:00.000Z' }],
+    [{ id: 15, title: 'local old title', sync_state: 'staged', client_updated_at: '2026-03-02T10:00:00.000Z' }],
+    { outboxOps: [] }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 15);
+  assert.equal(merged[0].title, 'server new title');
+  assert.equal(merged[0].sync_state, 'synced');
+});
+
 test('mergeServerAndLocalTasks drops orphan pending local task missing on server', () => {
   const merged = mergeServerAndLocalTasks(
     [],

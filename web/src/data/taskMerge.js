@@ -64,6 +64,16 @@ export function mergeServerAndLocalTasks(serverTasks, localTasks, options = {}) 
         updated_at: task.updated_at,
       };
     }
+    if (localTask && localTask.sync_state === 'staged') {
+      const localTs = getTaskTimestamp(localTask);
+      const serverTs = getTaskTimestamp(task);
+      if (localTs > serverTs) {
+        return {
+          ...localTask,
+          updated_at: task.updated_at,
+        };
+      }
+    }
     if (localTask && localTask.sync_state === 'error') {
       const localTs = getTaskTimestamp(localTask);
       const serverTs = getTaskTimestamp(task);
@@ -82,7 +92,7 @@ export function mergeServerAndLocalTasks(serverTasks, localTasks, options = {}) 
     if (!task) return;
     if (pendingDeleteIDs.has(Number(task.id))) return;
     const state = String(task.sync_state || '');
-    const isUnsyncedLocal = state === 'pending' || state === 'syncing' || state === 'error';
+    const isUnsyncedLocal = state === 'pending' || state === 'syncing' || state === 'staged' || state === 'error';
     if (isUnsyncedLocal && !serverIDSet.has(task.id) && hasPendingOutboxForTask(outboxOps, task.id)) {
       merged.push(task);
     }

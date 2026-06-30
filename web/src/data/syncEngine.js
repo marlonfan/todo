@@ -653,7 +653,9 @@ async function pullServerData() {
       const localTs = getTaskTimestamp(local);
       const serverTs = getTaskTimestamp(task);
       const hasQueuedMutation = outboxTaskIDs.has(taskID);
-      if (hasQueuedMutation && (state === 'pending' || state === 'syncing' || (state === 'error' && localTs > serverTs))) {
+      const shouldKeepLocal = (hasQueuedMutation && (state === 'pending' || state === 'syncing' || (state === 'error' && localTs > serverTs)))
+        || (state === 'staged' && localTs > serverTs);
+      if (shouldKeepLocal) {
         byID.set(taskID, {
           ...local,
           updated_at: task?.updated_at || local.updated_at,

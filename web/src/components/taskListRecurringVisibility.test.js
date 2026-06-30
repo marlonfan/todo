@@ -5,9 +5,10 @@ import {
   shouldHideRecurringSeriesAnchorInPending,
 } from './taskListRecurringVisibility.js';
 
-test('isTaskUnsyncedLocally treats pending/syncing/error as unsynced', () => {
+test('isTaskUnsyncedLocally treats pending/syncing/staged/error as unsynced', () => {
   assert.equal(isTaskUnsyncedLocally({ sync_state: 'pending' }), true);
   assert.equal(isTaskUnsyncedLocally({ sync_state: 'syncing' }), true);
+  assert.equal(isTaskUnsyncedLocally({ sync_state: 'staged' }), true);
   assert.equal(isTaskUnsyncedLocally({ sync_state: 'error' }), true);
 });
 
@@ -48,4 +49,3 @@ test('should hide recurring anchor only when next occurrences are fetched and ta
     nextOccurrencesFetched: true,
   }), false);
 });
-

@@ -1698,6 +1698,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
         const localSavedTask = await updateTaskLocal(queryClient, mutationTaskID, payload, {
           localOnly: true,
           scheduleSync: false,
+          awaitPersist: true,
         });
         savePromise = updateTaskLocal(queryClient, mutationTaskID, payload, {
           localOnly: false,

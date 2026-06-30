@@ -1,4 +1,4 @@
-const UNSYNCED_TASK_STATES = new Set(['pending', 'syncing', 'error']);
+const UNSYNCED_TASK_STATES = new Set(['pending', 'syncing', 'staged', 'error']);
 
 function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
@@ -21,4 +21,3 @@ export function shouldHideRecurringSeriesAnchorInPending(options = {}) {
   if (isTaskUnsyncedLocally(task)) return false;
   return true;
 }
-

@@ -87,14 +87,18 @@ export function setTasksCache(queryClient, updater) {
   });
 }
 
-function runMutationSideEffects(label, work, rollback) {
-  void (async () => {
+function runMutationSideEffects(label, work, rollback, options = {}) {
+  const rethrow = !!options?.rethrow;
+  return (async () => {
     try {
       await work();
     } catch (error) {
       console.error(`[taskMutations] ${label} failed:`, error);
       if (rollback) {
         try { rollback(); } catch (e) { console.error(`[taskMutations] rollback failed:`, e); }
+      }
+      if (rethrow) {
+        throw error;
       }
     }
   })();
@@ -331,7 +335,7 @@ function patchRecurringOccurrenceStatus(queryClient, taskID, payload) {
 
 function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
   if (!currentTask) return currentTask;
-  const { incrementRevision = true } = options;
+  const { incrementRevision = true, syncState = 'pending' } = options;
   const currentRevision = Number(currentTask.revision || 1);
   const occurrenceScoped = isOccurrenceScopedPayload(payload);
   const nextStatus = payload.status || currentTask.status;
@@ -362,7 +366,7 @@ function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
       ? payload.recurrence_end_date
       : currentTask.recurrence_end_date,
     revision: incrementRevision ? (currentRevision + 1) : currentRevision,
-    sync_state: 'pending',
+    sync_state: syncState,
     last_error: '',
     client_updated_at: nowValue,
   };
@@ -449,6 +453,7 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
       baseRevision = Number(task.revision || 1);
       nextTask = applyTaskPatch(task, payload, queryClient, {
         incrementRevision: !localOnly,
+        syncState: localOnly ? 'staged' : 'pending',
       });
       return nextTask;
     }));
@@ -489,9 +494,9 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
     };
     const rollback = snapshot ? () => setTasksCache(queryClient, snapshot) : undefined;
     if (awaitPersist) {
-      await persistWork();
+      await runMutationSideEffects('updateTaskLocal', persistWork, rollback, { rethrow: true });
     } else {
-      runMutationSideEffects('updateTaskLocal', persistWork, rollback);
+      void runMutationSideEffects('updateTaskLocal', persistWork, rollback);
     }
     return nextTask;
   }
@@ -518,9 +523,9 @@ export async function updateTaskLocal(queryClient, taskID, payload, options = {}
     }
   };
   if (awaitPersist) {
-    await persistNoTaskWork();
+    await runMutationSideEffects('updateTaskLocalNoTask', persistNoTaskWork, undefined, { rethrow: true });
   } else {
-    runMutationSideEffects('updateTaskLocalNoTask', persistNoTaskWork);
+    void runMutationSideEffects('updateTaskLocalNoTask', persistNoTaskWork);
   }
 
   return nextTask;
