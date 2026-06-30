@@ -67,6 +67,13 @@ function shouldKeepLocalTask(localTask, incomingTask, outboxOps, options = {}) {
   ) {
     return false;
   }
+  if (
+    incomingRevision > localRevision
+    && state !== 'staged'
+    && !hasPendingOutboxForTask(outboxOps, incomingTask.id)
+  ) {
+    return false;
+  }
   if (!isUnsynced) {
     return localTs > incomingTs;
   }

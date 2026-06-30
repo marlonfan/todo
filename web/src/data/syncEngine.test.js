@@ -112,6 +112,33 @@ test('mergeIncomingTasksWithLocal does not preserve synced local cache just beca
   assert.equal(merged[0].revision, 6);
 });
 
+test('mergeIncomingTasksWithLocal accepts higher remote revision over stale local draft without outbox', () => {
+  const merged = mergeIncomingTasksWithLocal(
+    [{ id: 23, title: 'remote edit', revision: 8, sync_state: 'synced', updated_at: '2026-03-02T09:00:02.000Z' }],
+    [{ id: 23, title: 'stale local draft', revision: 7, sync_state: 'syncing', client_updated_at: '2026-03-02T09:00:03.000Z' }],
+    { outboxOps: [] }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 23);
+  assert.equal(merged[0].title, 'remote edit');
+  assert.equal(merged[0].revision, 8);
+  assert.equal(merged[0].sync_state, 'synced');
+});
+
+test('mergeIncomingTasksWithLocal keeps local draft when matching outbox still exists', () => {
+  const merged = mergeIncomingTasksWithLocal(
+    [{ id: 24, title: 'remote edit', revision: 8, sync_state: 'synced', updated_at: '2026-03-02T09:00:02.000Z' }],
+    [{ id: 24, title: 'local queued draft', revision: 7, sync_state: 'pending', client_updated_at: '2026-03-02T09:00:03.000Z' }],
+    { outboxOps: [{ entity_type: 'task', entity_id: 24, op_type: 'update' }] }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 24);
+  assert.equal(merged[0].title, 'local queued draft');
+  assert.equal(merged[0].sync_state, 'pending');
+});
+
 test('mergeServerAndLocalTasks accepts server over older staged local edit', () => {
   const merged = mergeServerAndLocalTasks(
     [{ id: 15, title: 'server new title', revision: 4, updated_at: '2026-03-02T11:00:00.000Z' }],

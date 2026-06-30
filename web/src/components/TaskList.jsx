@@ -2657,20 +2657,38 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   useEffect(() => {
     const overlayEntries = Object.entries(taskDraftOverlays || {});
     if (overlayEntries.length === 0) return;
-    const currentTasks = Array.isArray(tasksRaw) ? tasksRaw : [];
+    const currentTasks = Array.isArray(tasks) ? tasks : [];
     setTaskDraftOverlays((prev) => {
       let changed = false;
       const next = { ...(prev || {}) };
       overlayEntries.forEach(([taskID, overlay]) => {
-        const currentTask = currentTasks.find((task) => Number(task?.id || 0) === Number(taskID));
-        if (currentTask && taskMatchesOverlay(currentTask, overlay) && !isTaskUnsyncedLocally(currentTask)) {
+        const numericTaskID = Number(taskID);
+        const currentTask = currentTasks.find((task) => getTaskOverlayKey(task) === String(taskID));
+        if (!currentTask || isTaskUnsyncedLocally(currentTask)) return;
+        const pendingTaskID = Number(pendingDraftSubmitRef.current?.taskID || 0);
+        const activeDraftTaskID = Number(draftSourceTaskIDRef.current || 0);
+        const hasLocalDraftWork = !!(
+          numericTaskID > 0
+          && (
+            pendingTaskID === numericTaskID
+            || (
+              activeDraftTaskID === numericTaskID
+              && (
+                draftTouchedRef.current
+                || savingDraftRef.current
+                || submittingDraftRef.current
+              )
+            )
+          )
+        );
+        if (taskMatchesOverlay(currentTask, overlay) || !hasLocalDraftWork) {
           delete next[taskID];
           changed = true;
         }
       });
       return changed ? next : prev;
     });
-  }, [taskDraftOverlays, tasksRaw]);
+  }, [taskDraftOverlays, tasks]);
 
   const getTaskWithDraftOverlay = useCallback((task) => {
     const key = getTaskOverlayKey(task);
