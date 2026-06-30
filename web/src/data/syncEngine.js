@@ -312,6 +312,16 @@ async function refreshOccurrenceScopedViews(taskID) {
   ]);
 }
 
+async function refreshRecurringDerivedViews() {
+  if (!queryClientRef) return;
+  await Promise.all([
+    queryClientRef.refetchQueries({ queryKey: queryKeys.tasks.nextOccurrences(), type: 'active' }),
+    queryClientRef.refetchQueries({ queryKey: ['tasks', 'occurrences'], type: 'active' }),
+    queryClientRef.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences(), refetchType: 'none' }),
+    queryClientRef.invalidateQueries({ queryKey: ['tasks', 'occurrences'], refetchType: 'none' }),
+  ]);
+}
+
 async function runTaskReconcileIfNeeded(outboxOps = [], options = {}) {
   if (!queryClientRef || !hasToken()) return;
   const reconcileStartedAt = Date.now();
@@ -719,8 +729,7 @@ async function pullServerData() {
     }
     await Promise.all([
       queryClientRef.invalidateQueries({ queryKey: ['calendar'] }),
-      queryClientRef.invalidateQueries({ queryKey: queryKeys.tasks.nextOccurrences() }),
-      queryClientRef.invalidateQueries({ queryKey: ['tasks', 'occurrences'] }),
+      refreshRecurringDerivedViews(),
     ]);
   }
   emitSyncTrace('pull_merged', {

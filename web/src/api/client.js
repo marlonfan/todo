@@ -97,42 +97,11 @@ async function attemptTokenRefresh() {
   return newToken;
 }
 
-function isCrossOriginDesktopAPI() {
-  if (!isDesktopRuntime()) return false;
-  const base = getDefaultAPIBaseURL();
-  try {
-    const resolved = new URL(base, window.location.origin);
-    return resolved.origin !== window.location.origin;
-  } catch {
-    return false;
-  }
-}
-
-function removeTaskMutationHeaders(config) {
-  if (!config?.headers) return;
-  ['If-Match', 'X-Client-Op-Id', 'X-Client-Submitted-At', 'X-Client-Submit-Source'].forEach((key) => {
-    delete config.headers[key];
-    delete config.headers[key.toLowerCase()];
-  });
-}
-
-function shouldRetryWithoutTaskMutationHeaders(error) {
-  const config = error?.config;
-  if (!config?.__todoTaskMutationHeaders || config._retriedWithoutTaskMutationHeaders) return false;
-  if (error?.response) return false;
-  return isCrossOriginDesktopAPI();
-}
-
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    if (shouldRetryWithoutTaskMutationHeaders(error)) {
-      originalRequest._retriedWithoutTaskMutationHeaders = true;
-      removeTaskMutationHeaders(originalRequest);
-      return apiClient(originalRequest);
-    }
     if (error.response?.status === 401 && !originalRequest._retried) {
       originalRequest._retried = true;
 
