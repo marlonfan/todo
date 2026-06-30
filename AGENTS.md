@@ -35,6 +35,7 @@
 - Backend tests use Go `testing` package; keep tests close to implementation in the same package.
 - Frontend tests use `node --test` with `*.test.js` naming (for example `calendarEventMerge.test.js`).
 - Add regression tests for behavior changes in services, data sync, and calendar logic before merging.
+- Before any frontend release, update the Service Worker cache version in `web/public/sw.js` when shipped frontend assets or static files change, and verify the production static cache policy still serves hashed `/assets/*` files with long-lived immutable caching while keeping `index.html`, `sw.js`, and `manifest.webmanifest` uncached/revalidated.
 
 ## Commit & Pull Request Guidelines
 - Follow Conventional Commit style seen in history: `feat(scope): ...`, `fix(scope): ...`, `chore: ...`, `ci: ...`, `build: ...`, `revert(scope): ...`.

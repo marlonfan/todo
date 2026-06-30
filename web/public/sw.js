@@ -1,4 +1,4 @@
-const CACHE_NAME = "todo-kimi-cache-v6";
+const CACHE_NAME = "todo-kimi-cache-v7";
 const STATIC_ASSETS = [
   "/index.html",
   "/manifest.webmanifest",
@@ -59,13 +59,16 @@ self.addEventListener("fetch", (event) => {
 
   if (isStaticAsset) {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((response) => {
+          if (response && response.ok) {
+            const responseClone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          }
           return response;
-        })
-        .catch(() => caches.match(request))
+        });
+      })
     );
   }
 });

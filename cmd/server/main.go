@@ -185,9 +185,11 @@ func setupStaticFiles(r *gin.Engine) {
 		return
 	}
 
-	// Serve static files from assets directory
-	// URL: /assets/xxx -> assetsFS/xxx
-	r.StaticFS("/assets", http.FS(assetsFS))
+	// Vite assets are content-hashed, so they can be cached aggressively.
+	r.GET("/assets/*filepath", func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		http.StripPrefix("/assets/", http.FileServer(http.FS(assetsFS))).ServeHTTP(c.Writer, c.Request)
+	})
 
 	// Serve index.html for root path and non-API routes (SPA behavior)
 	r.NoRoute(func(c *gin.Context) {
@@ -203,7 +205,10 @@ func setupStaticFiles(r *gin.Engine) {
 			if f, err := staticFS.Open(requestPath); err == nil {
 				if info, statErr := f.Stat(); statErr == nil && !info.IsDir() {
 					f.Close()
-					if requestPath == "sw.js" || requestPath == "index.html" {
+					switch {
+					case strings.HasPrefix(requestPath, "assets/"):
+						c.Header("Cache-Control", "public, max-age=31536000, immutable")
+					case requestPath == "sw.js" || requestPath == "index.html" || requestPath == "manifest.webmanifest":
 						c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 					}
 					c.FileFromFS(requestPath, http.FS(staticFS))

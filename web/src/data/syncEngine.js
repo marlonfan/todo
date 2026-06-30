@@ -26,7 +26,7 @@ import {
 import { getCoalescePlan } from './outboxCoalesce';
 import {
   collectPendingDeleteTaskIDs,
-  getTaskTimestamp,
+  mergeIncomingTasksWithLocal,
   mergeServerAndLocalTasks,
   normalizeServerTask,
 } from './taskMerge';
@@ -236,27 +236,33 @@ async function patchTaskSyncState(taskID, patch) {
   }
 }
 
-async function applyServerTask(task, replaceTempID = null) {
+async function applyServerTask(task, replaceTempID = null, options = {}) {
   if (!queryClientRef || !task?.id) return;
   const normalizedTask = normalizeServerTask(task);
+  let taskToPersist = normalizedTask;
 
   queryClientRef.setQueryData(queryKeys.tasks.all, (prev) => {
     const base = Array.isArray(prev) ? prev : [];
     const list = replaceTempID !== null ? base.filter((item) => item.id !== replaceTempID) : base;
-    const exists = list.some((item) => item.id === normalizedTask.id);
+    const merged = mergeIncomingTasksWithLocal([normalizedTask], list, {
+      preserveLocalChangedAfter: Number(options?.preserveLocalChangedAfter || 0),
+    });
+    const mergedTask = merged.find((item) => item?.id === normalizedTask.id) || normalizedTask;
+    taskToPersist = mergedTask;
+    const exists = list.some((item) => item.id === mergedTask.id);
     if (exists) {
-      return list.map((item) => (item.id === normalizedTask.id ? normalizedTask : item));
+      return list.map((item) => (item.id === mergedTask.id ? mergedTask : item));
     }
-    return [normalizedTask, ...list];
+    return [mergedTask, ...list];
   });
 
   if (replaceTempID !== null) {
-    taskIDRemappedListeners.forEach((listener) => listener({ fromID: replaceTempID, toID: normalizedTask.id }));
-    await replaceTaskID(replaceTempID, normalizedTask);
-    await remapOutboxEntityID(replaceTempID, normalizedTask.id);
+    taskIDRemappedListeners.forEach((listener) => listener({ fromID: replaceTempID, toID: taskToPersist.id }));
+    await replaceTaskID(replaceTempID, taskToPersist);
+    await remapOutboxEntityID(replaceTempID, taskToPersist.id);
     return;
   }
-  await upsertTask(normalizedTask);
+  await upsertTask(taskToPersist);
 }
 
 function getErrorMessage(error) {
@@ -300,6 +306,7 @@ async function refreshOccurrenceScopedViews(taskID) {
 
 async function runTaskReconcileIfNeeded(outboxOps = [], options = {}) {
   if (!queryClientRef || !hasToken()) return;
+  const reconcileStartedAt = Date.now();
   const [lastReconcileAt, forceReconcileRaw, localTasks] = await Promise.all([
     safeLocalCall(() => getMeta(TASK_FULL_RECONCILE_AT_KEY, ''), '', `getMeta:${TASK_FULL_RECONCILE_AT_KEY}`),
     safeLocalCall(() => getMeta(TASK_FORCE_RECONCILE_KEY, ''), '', `getMeta:${TASK_FORCE_RECONCILE_KEY}`),
@@ -316,7 +323,13 @@ async function runTaskReconcileIfNeeded(outboxOps = [], options = {}) {
   const res = await tasksAPI.list();
   const serverTasks = Array.isArray(res?.data) ? res.data : [];
   const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
-  const reconciledTasks = mergeServerAndLocalTasks(serverTasks, localTasks, { pendingDeleteIDs, outboxOps });
+  const latestLocalTasks = queryClientRef.getQueryData(queryKeys.tasks.all);
+  const localBaseline = Array.isArray(latestLocalTasks) ? latestLocalTasks : localTasks;
+  const reconciledTasks = mergeServerAndLocalTasks(serverTasks, localBaseline, {
+    pendingDeleteIDs,
+    outboxOps,
+    preserveLocalChangedAfter: reconcileStartedAt,
+  });
 
   queryClientRef.setQueryData(queryKeys.tasks.all, reconciledTasks);
   await clearTasksAndSet(reconciledTasks);
@@ -384,7 +397,9 @@ async function executeOutboxOperation(op) {
         await queryClientRef?.refetchQueries({ queryKey: queryKeys.tasks.nextOccurrences() });
       }
       if (res?.data?.id) {
-        await applyServerTask(res.data);
+        await applyServerTask(res.data, null, {
+          preserveLocalChangedAfter: Number(op.created_at || 0),
+        });
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
       }
@@ -401,7 +416,9 @@ async function executeOutboxOperation(op) {
         clientOpID: op.op_id,
       });
       if (res?.data?.id) {
-        await applyServerTask(res.data);
+        await applyServerTask(res.data, null, {
+          preserveLocalChangedAfter: Number(op.created_at || 0),
+        });
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
       }
@@ -418,7 +435,9 @@ async function executeOutboxOperation(op) {
         clientOpID: op.op_id,
       });
       if (res?.data?.id) {
-        await applyServerTask(res.data);
+        await applyServerTask(res.data, null, {
+          preserveLocalChangedAfter: Number(op.created_at || 0),
+        });
       } else {
         await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
       }
@@ -592,6 +611,7 @@ async function processOutbox(options = {}) {
 
 async function pullServerData() {
   if (!queryClientRef || !hasToken()) return;
+  const pullStartedAt = Date.now();
 
   const [categoriesRes, outboxOps, lastCursor] = await Promise.all([
     categoriesAPI.list(),
@@ -601,12 +621,6 @@ async function pullServerData() {
   let nextCursor = String(lastCursor || '');
   const categories = Array.isArray(categoriesRes?.data) ? categoriesRes.data : [];
   const pendingDeleteIDs = collectPendingDeleteTaskIDs(outboxOps);
-  const outboxTaskIDs = new Set(
-    (Array.isArray(outboxOps) ? outboxOps : [])
-      .filter((op) => op?.entity_type === 'task')
-      .map((op) => Number(op?.entity_id || 0))
-      .filter((id) => Number.isFinite(id) && id !== 0)
-  );
   const changedTaskIDs = new Set();
   const deletedTaskIDs = new Set();
 
@@ -644,24 +658,6 @@ async function pullServerData() {
       if (!taskID || pendingDeleteIDs.has(taskID)) return;
       changedTaskIDs.add(taskID);
       const normalized = normalizeServerTask(task);
-      const local = byID.get(taskID);
-      if (!local) {
-        byID.set(taskID, normalized);
-        return;
-      }
-      const state = String(local.sync_state || '');
-      const localTs = getTaskTimestamp(local);
-      const serverTs = getTaskTimestamp(task);
-      const hasQueuedMutation = outboxTaskIDs.has(taskID);
-      const shouldKeepLocal = (hasQueuedMutation && (state === 'pending' || state === 'syncing' || (state === 'error' && localTs > serverTs)))
-        || (state === 'staged' && localTs > serverTs);
-      if (shouldKeepLocal) {
-        byID.set(taskID, {
-          ...local,
-          updated_at: task?.updated_at || local.updated_at,
-        });
-        return;
-      }
       byID.set(taskID, normalized);
     });
 
@@ -671,6 +667,13 @@ async function pullServerData() {
     nextCursor = String(payload.next_since || nextCursor || '');
     hasMore = Boolean(payload.has_more);
   }
+
+  const latestLocalTasks = queryClientRef.getQueryData(queryKeys.tasks.all);
+  mergedTasks = mergeIncomingTasksWithLocal(mergedTasks, latestLocalTasks, {
+    pendingDeleteIDs,
+    outboxOps,
+    preserveLocalChangedAfter: pullStartedAt,
+  });
 
   queryClientRef.setQueryData(queryKeys.tasks.all, (prev) => {
     if (!Array.isArray(prev)) return mergedTasks;
@@ -821,8 +824,8 @@ async function runSyncCycle(options = {}) {
   }
 }
 
-export function scheduleSync() {
-  runSyncCycle({ silent: true });
+export function scheduleSync(options = {}) {
+  runSyncCycle({ silent: true, ...options });
 }
 
 export async function enqueueTaskOperation(op, options = {}) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeServerAndLocalTasks } from './taskMerge.js';
+import { mergeIncomingTasksWithLocal, mergeServerAndLocalTasks } from './taskMerge.js';
 import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
 
 test('mergeServerAndLocalTasks keeps unsynced local task when server does not have it and outbox has mutation', () => {
@@ -41,6 +41,33 @@ test('mergeServerAndLocalTasks keeps newer staged local edit before outbox enque
   assert.equal(merged[0].title, 'local new title');
   assert.equal(merged[0].sync_state, 'staged');
   assert.equal(merged[0].updated_at, '2026-03-02T09:00:00.000Z');
+});
+
+test('mergeServerAndLocalTasks keeps newer pending local edit with queued mutation', () => {
+  const merged = mergeServerAndLocalTasks(
+    [{ id: 16, title: 'server old title', revision: 3, updated_at: '2026-03-02T09:00:00.000Z' }],
+    [{ id: 16, title: 'local new title', sync_state: 'pending', client_updated_at: '2026-03-02T10:00:00.000Z' }],
+    { outboxOps: [{ entity_type: 'task', entity_id: 16, op_type: 'update' }] }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 16);
+  assert.equal(merged[0].title, 'local new title');
+  assert.equal(merged[0].sync_state, 'pending');
+  assert.equal(merged[0].updated_at, '2026-03-02T09:00:00.000Z');
+});
+
+test('mergeIncomingTasksWithLocal keeps edit made after sync request started', () => {
+  const merged = mergeIncomingTasksWithLocal(
+    [{ id: 17, title: 'server old title', sync_state: 'synced', updated_at: '2026-03-02T09:00:00.000Z' }],
+    [{ id: 17, title: 'local new title', sync_state: 'pending', client_updated_at: '2026-03-02T10:00:00.000Z' }],
+    { preserveLocalChangedAfter: Date.parse('2026-03-02T09:30:00.000Z') }
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 17);
+  assert.equal(merged[0].title, 'local new title');
+  assert.equal(merged[0].sync_state, 'pending');
 });
 
 test('mergeServerAndLocalTasks accepts server over older staged local edit', () => {

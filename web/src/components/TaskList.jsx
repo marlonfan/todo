@@ -222,6 +222,78 @@ function normalizeDraftForCompare(draft) {
   };
 }
 
+function buildTaskOverlayFromDraft(draft) {
+  if (!draft) return null;
+  const title = String(draft.title || '').trim();
+  if (!title) return null;
+  return {
+    title: draft.title || '',
+    description: draft.description ?? '',
+    priority: Number.parseInt(draft.priority, 10) || 0,
+    status: draft.status || 'pending',
+    all_day: !!draft.all_day,
+    start_time: draft.start_time || '',
+    end_time: draft.end_time || '',
+    category_ids: Array.isArray(draft.category_ids) ? draft.category_ids.map(String) : [],
+  };
+}
+
+function buildTaskOverlayFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const overlay = {};
+  if (typeof payload.title === 'string') overlay.title = payload.title;
+  if (typeof payload.description === 'string') overlay.description = payload.description;
+  if (typeof payload.priority !== 'undefined') overlay.priority = Number.parseInt(payload.priority, 10) || 0;
+  if (typeof payload.status === 'string') overlay.status = payload.status;
+  if (typeof payload.all_day === 'boolean') overlay.all_day = payload.all_day;
+  if (typeof payload.start_time !== 'undefined') overlay.start_time = payload.start_time || '';
+  if (typeof payload.end_time !== 'undefined') overlay.end_time = payload.end_time || '';
+  if (Array.isArray(payload.category_ids)) overlay.category_ids = payload.category_ids.map(String);
+  return Object.keys(overlay).length > 0 ? overlay : null;
+}
+
+function applyTaskOverlay(task, overlay, categories) {
+  if (!task || !overlay) return task;
+  const nextTask = { ...task };
+  if (typeof overlay.title === 'string' && overlay.title.trim()) nextTask.title = overlay.title;
+  if (typeof overlay.description === 'string') nextTask.description = overlay.description;
+  if (typeof overlay.priority !== 'undefined') nextTask.priority = Number.parseInt(overlay.priority, 10) || 0;
+  if (typeof overlay.status === 'string') nextTask.status = overlay.status;
+  if (typeof overlay.all_day === 'boolean') nextTask.all_day = overlay.all_day;
+  if (typeof overlay.start_time !== 'undefined') nextTask.start_time = overlay.start_time || '';
+  if (typeof overlay.end_time !== 'undefined') nextTask.end_time = overlay.end_time || '';
+  if (Array.isArray(overlay.category_ids)) {
+    const categoryIDs = new Set(overlay.category_ids.map(String));
+    nextTask.categories = (Array.isArray(categories) ? categories : [])
+      .filter((cat) => categoryIDs.has(String(cat.id)));
+  }
+  return nextTask;
+}
+
+function taskMatchesOverlay(task, overlay) {
+  if (!task || !overlay) return false;
+  if (typeof overlay.title === 'string' && String(task.title || '') !== overlay.title) return false;
+  if (typeof overlay.description === 'string' && String(task.description || '') !== overlay.description) return false;
+  if (typeof overlay.priority !== 'undefined' && (Number.parseInt(task.priority, 10) || 0) !== (Number.parseInt(overlay.priority, 10) || 0)) return false;
+  if (typeof overlay.status === 'string' && String(task.status || 'pending') !== overlay.status) return false;
+  if (typeof overlay.all_day === 'boolean' && !!task.all_day !== overlay.all_day) return false;
+  if (typeof overlay.start_time !== 'undefined' && String(task.start_time || '') !== String(overlay.start_time || '')) return false;
+  if (typeof overlay.end_time !== 'undefined' && String(task.end_time || '') !== String(overlay.end_time || '')) return false;
+  if (Array.isArray(overlay.category_ids)) {
+    const current = (Array.isArray(task.categories) ? task.categories : []).map((cat) => String(cat.id)).sort();
+    const expected = overlay.category_ids.map(String).sort();
+    if (current.length !== expected.length || current.some((id, index) => id !== expected[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function getTaskOverlayKey(task) {
+  const id = Number(task?.source_task_id || task?.sourceTaskID || task?.task_id || task?.taskID || task?.id || 0);
+  return id ? String(id) : '';
+}
+
 function stableSerializeForDraft(value) {
   try {
     const seen = new WeakSet();
@@ -1537,6 +1609,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const [taskSplitRatio, setTaskSplitRatio] = useState(readTaskSplitRatio);
   const [isTaskSplitDragging, setIsTaskSplitDragging] = useState(false);
   const [taskRowAnimations, setTaskRowAnimations] = useState({});
+  const [taskDraftOverlays, setTaskDraftOverlays] = useState({});
   const detailPanelRef = useRef(null);
   const detailPanelTriggerRefs = useRef({});
   const taskWorkspaceRef = useRef(null);
@@ -1571,6 +1644,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const recurringCompleteStageTimersRef = useRef(new Set());
   const selectedTaskSnapshotRef = useRef(null);
   const draftSnapshotRef = useRef(null);
+  const taskDraftOverlaysRef = useRef({});
   const isDraftDirtyRef = useRef(false);
   const isSavingDraftRef = useRef(false);
   const isSubmittingDraftRef = useRef(false);
@@ -1588,6 +1662,31 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const latestDescriptionSessionByTaskRef = useRef(new Map());
   const latestEditedDescriptionSessionByTaskRef = useRef(new Map());
   const [taskPullRefresh, setTaskPullRefresh] = useState({ state: 'idle', distance: 0 });
+
+  useEffect(() => {
+    taskDraftOverlaysRef.current = taskDraftOverlays;
+  }, [taskDraftOverlays]);
+
+  const rememberTaskDraftOverlay = useCallback((taskID, payload, draftValue = null) => {
+    const numericTaskID = Number(taskID || 0);
+    if (!numericTaskID) return;
+    const overlay = buildTaskOverlayFromPayload(payload) || buildTaskOverlayFromDraft(draftValue);
+    if (!overlay) return;
+    const key = String(numericTaskID);
+    setTaskDraftOverlays((prev) => {
+      const current = prev || {};
+      const existing = current[key];
+      if (existing && stableSerializeForDraft(existing) === stableSerializeForDraft(overlay)) {
+        return prev;
+      }
+      const next = {
+        ...current,
+        [key]: overlay,
+      };
+      taskDraftOverlaysRef.current = next;
+      return next;
+    });
+  }, []);
 
   const bindDetailBodyScroll = useCallback((node) => {
     detailBodyScrollCleanupRef.current?.();
@@ -2540,6 +2639,55 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [effectiveGroupBy, showCategoryEmoji, sortedTasks, t, timezone]);
 
   const filteredTasks = useMemo(() => taskGroups.flatMap((group) => group.tasks), [taskGroups]);
+  useEffect(() => {
+    const overlayEntries = Object.entries(taskDraftOverlays || {});
+    if (overlayEntries.length === 0) return;
+    const currentTasks = Array.isArray(tasksRaw) ? tasksRaw : [];
+    setTaskDraftOverlays((prev) => {
+      let changed = false;
+      const next = { ...(prev || {}) };
+      overlayEntries.forEach(([taskID, overlay]) => {
+        const currentTask = currentTasks.find((task) => Number(task?.id || 0) === Number(taskID));
+        if (currentTask && taskMatchesOverlay(currentTask, overlay) && !isTaskUnsyncedLocally(currentTask)) {
+          delete next[taskID];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [taskDraftOverlays, tasksRaw]);
+
+  const getTaskWithDraftOverlay = useCallback((task) => {
+    const key = getTaskOverlayKey(task);
+    const overlay = key ? taskDraftOverlaysRef.current[key] : null;
+    return overlay ? applyTaskOverlay(task, overlay, categories) : task;
+  }, [categories]);
+
+  const displayTaskGroups = useMemo(() => {
+    const overlayEntries = Object.entries(taskDraftOverlays || {});
+    if (overlayEntries.length === 0) return taskGroups;
+    const overlayMap = new Map(
+      overlayEntries
+        .map(([taskID, overlay]) => [Number(taskID), overlay])
+        .filter(([taskID, overlay]) => taskID > 0 && overlay)
+    );
+    if (overlayMap.size === 0) return taskGroups;
+    let changed = false;
+    const nextGroups = taskGroups.map((group) => {
+      let groupChanged = false;
+      const nextTasks = group.tasks.map((task) => {
+        const overlay = overlayMap.get(getEffectiveTaskID(task));
+        if (!overlay) return task;
+        const nextTask = applyTaskOverlay(task, overlay, categories);
+        if (nextTask === task) return task;
+        groupChanged = true;
+        changed = true;
+        return nextTask;
+      });
+      return groupChanged ? { ...group, tasks: nextTasks } : group;
+    });
+    return changed ? nextGroups : taskGroups;
+  }, [categories, getEffectiveTaskID, taskDraftOverlays, taskGroups]);
 
   // Stable primitives for the auto-reset effect — only changes when task IDs change,
   // so background syncs that fetch the same tasks don't trigger the effect.
@@ -2669,7 +2817,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     navigate(`${location.pathname}${nextQuery ? `?${nextQuery}` : ''}`, { replace: true });
   }, [filteredTasks, focusTaskID, location.pathname, location.search, navigate, selectedTaskID]);
 
-  const selectedTask = useMemo(() => {
+  const selectedTaskBase = useMemo(() => {
     // 支持虚拟实例的字符串 ID（如 "occ_123_20260413"）
     const fromFiltered = filteredTasks.find((task) => String(task?.id) === String(selectedTaskID || ''));
     if (fromFiltered) return fromFiltered;
@@ -2684,6 +2832,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
     return null;
   }, [filteredTasks, getEffectiveTaskID, selectedTaskID, tasks]);
+  const selectedTask = useMemo(
+    () => getTaskWithDraftOverlay(selectedTaskBase),
+    [getTaskWithDraftOverlay, selectedTaskBase, taskDraftOverlays]
+  );
   // 对于虚拟实例，使用源任务的数字 ID
   activeRenderTaskIDRef.current = getEffectiveTaskID(selectedTask);
   const selectedRecurrenceRule = parseRecurrenceRule(selectedTask?.recurrence_rule || selectedTask?.recurrenceRule);
@@ -2900,6 +3052,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     // Keep detail draft synced with external updates (drag/drop, modal save, etc.)
     // unless the user is actively editing this draft.
     if (!draftTouchedRef.current && !isDetailPanelRequiringConfirm(detailPanel)) {
+      if (isTaskUnsyncedLocally(selectedTask)) {
+        return;
+      }
       const current = normalizeDraftForCompare(draft);
       const incoming = normalizeDraftForCompare(nextDraft);
       if (JSON.stringify(current) !== JSON.stringify(incoming)) {
@@ -2951,14 +3106,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [draft, setDraftWithSnapshot]);
 
   const isDraftDirty = useMemo(() => {
-    if (!selectedTask || !draft) return false;
+    if (!selectedTaskBase || !draft) return false;
     const current = normalizeDraftForCompare(draft);
-    const original = normalizeDraftForCompare(buildDraftFromTask(selectedTask));
+    const original = normalizeDraftForCompare(buildDraftFromTask(selectedTaskBase));
     return JSON.stringify(current) !== JSON.stringify(original);
-  }, [draft, selectedTask]);
+  }, [draft, selectedTaskBase]);
   useEffect(() => {
-    selectedTaskSnapshotRef.current = selectedTask || null;
-  }, [selectedTask]);
+    selectedTaskSnapshotRef.current = selectedTaskBase || null;
+  }, [selectedTaskBase]);
   useEffect(() => {
     draftSnapshotRef.current = draft || null;
   }, [draft]);
@@ -3954,6 +4109,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       return false;
     }
 
+    rememberTaskDraftOverlay(taskID, built.payload, draftValue);
     void updateTaskLocal(queryClient, taskID, built.payload, {
       scheduleSync: false,
       localOnly: true,
@@ -3973,7 +4129,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       payload_keys: Object.keys(built.payload || {}),
     });
     return true;
-  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, queryClient]);
+  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, queryClient, rememberTaskDraftOverlay]);
 
   const submitPendingDraft = useCallback(async (taskIDOverride = 0, submitSource = 'idle') => {
     const pending = pendingDraftSubmitRef.current;
@@ -4031,6 +4187,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         if_match_revision: Number(selectedTaskSnapshotRef.current?.revision || 0) || undefined,
         payload: pending.payload,
       });
+      rememberTaskDraftOverlay(taskID, pending.payload, draftSnapshotRef.current);
       await updateTaskLocal(queryClient, taskID, pending.payload, {
         scheduleSync: true,
         localOnly: false,
@@ -4062,7 +4219,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         preservingSavedSelectionTaskIDRef.current = 0;
       }
     }
-  }, [queryClient, submittingDraft]);
+  }, [queryClient, rememberTaskDraftOverlay, submittingDraft]);
 
   const scheduleIdleDraftSubmit = useCallback((taskID) => {
     if (draftSyncTimerRef.current) {
@@ -4140,6 +4297,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         } : prev));
       }
 
+      rememberTaskDraftOverlay(targetTaskID, built.payload, draftValue);
       const savedTask = await updateTaskLocal(queryClient, targetTaskID, built.payload, {
         scheduleSync: false,
         localOnly: true,
@@ -4276,6 +4434,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           const built = buildDraftPayload(taskValue, draftValue);
           if (built?.payload) {
             const targetTaskID = getEffectiveTaskID(taskValue);
+            rememberTaskDraftOverlay(targetTaskID, built.payload, draftValue);
             await updateTaskLocal(queryClient, targetTaskID, built.payload, {
               scheduleSync: false,
               localOnly: true,
@@ -4304,6 +4463,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             });
           }
         } else if (hasPendingSubmit) {
+          rememberTaskDraftOverlay(pendingTaskID, pendingPayload);
           await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
             scheduleSync: false,
             localOnly: true,
@@ -4344,7 +4504,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const queued = flushDraftQueueRef.current.then(runFlush, runFlush);
     flushDraftQueueRef.current = queued.catch(() => {});
     return queued;
-  }, [buildDraftFromTask, buildDraftPayload, queryClient]);
+  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, queryClient, rememberTaskDraftOverlay]);
 
   useEffect(() => {
     flushDraftOnLeaveRef.current = flushDraftOnLeave;
@@ -4432,14 +4592,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, []);
 
   const handleSubmitDraft = async () => {
-    const closureTaskID = getEffectiveTaskID(selectedTask);
+    const taskValue = selectedTaskSnapshotRef.current || selectedTaskBase || selectedTask;
+    const closureTaskID = getEffectiveTaskID(taskValue);
     if (hasStaleDraftEventContext(closureTaskID)) return;
-    if (!selectedTask || selectedTask.read_only) return;
+    if (!taskValue || taskValue.read_only) return;
     const draftValue = draftSnapshotRef.current;
     const snapshotDirty = !!(
       draftValue
       && JSON.stringify(normalizeDraftForCompare(draftValue))
-        !== JSON.stringify(normalizeDraftForCompare(buildDraftFromTask(selectedTask)))
+        !== JSON.stringify(normalizeDraftForCompare(buildDraftFromTask(taskValue)))
     );
     if (isDraftDirtyRef.current || snapshotDirty) {
       let queued = await handleSaveDraft({ submitAfter: false, submitSource: 'manual' });
@@ -4448,7 +4609,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       }
       if (!queued) return;
     }
-    await submitPendingDraft(selectedTask.id, 'manual');
+    await submitPendingDraft(getEffectiveTaskID(taskValue), 'manual');
   };
 
   const handleDraftEditorSaveShortcut = useCallback(() => {
@@ -4980,7 +5141,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 />
               ) : (
                 <div className="space-y-5 px-0 py-1 md:px-5">
-                  {taskGroups.map((group) => (
+                  {displayTaskGroups.map((group) => (
                     <div key={group.key} className="space-y-1">
                       {group.title ? (
                         <div className="sticky top-0 z-[2] flex items-center gap-2 bg-card/95 px-4 py-2 text-base font-semibold text-foreground backdrop-blur md:px-5 md:bg-card/95">
@@ -5502,6 +5663,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                           handleDraftFieldChange('title', priorityNormalizedTitle);
                         }
                         setDraftParsePreview('');
+                        submitDraftImmediately('title_blur');
                         return;
                       }
                       const cleanedTitle = parsed.cleanedTitle || priorityNormalizedTitle;
@@ -5509,6 +5671,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         handleDraftFieldChange('title', cleanedTitle);
                       }
                       setDraftParsePreview(`${t('task.timeParsedHint')}: ${parsed.parsedAtDisplay}`);
+                      submitDraftImmediately('title_blur');
                     }}
                     className={`w-full border-none bg-transparent px-0 text-[1.55rem] font-semibold leading-9 text-foreground outline-none placeholder:text-muted-foreground sm:text-[1.65rem] ${
                       selectedIsSeriesTemplateContext ? 'pr-20' : ''
