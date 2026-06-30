@@ -24,6 +24,7 @@ test('task: add, edit, complete', async ({ page, request }) => {
 
   const detailTitleInput = page.getByTestId('task-detail-title-input');
   await detailTitleInput.fill(editedTitle);
+  await expect(page.locator('[data-testid="task-row"]').filter({ hasText: editedTitle }).first()).toBeVisible();
   await detailTitleInput.blur();
 
   const requestCtx = await getAuthedRequestContext(request, page);

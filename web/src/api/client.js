@@ -222,7 +222,7 @@ function withTaskMutationHeaders(options = {}) {
 // Tasks API
 export const tasksAPI = {
   list: (params) => apiClient.get('/tasks', { params }),
-  sync: (params) => apiClient.get('/tasks/sync', { params }),
+  sync: (params, config = {}) => apiClient.get('/tasks/sync', { ...config, params }),
   listOccurrences: (params) => apiClient.get('/tasks/occurrences', { params }),
   listNextOccurrences: (params) => apiClient.get('/tasks/next-occurrences', { params }),
   get: (id) => apiClient.get(`/tasks/${id}`),

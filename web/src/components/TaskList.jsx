@@ -2035,6 +2035,20 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     draftEditVersionRef.current += 1;
   }, []);
 
+  const rememberActiveDraftOverlay = useCallback((nextDraft, taskValue = null) => {
+    if (!nextDraft) return;
+    const sourceTask = taskValue || selectedTaskSnapshotRef.current;
+    if (sourceTask?.read_only) return;
+    const taskID = Number(
+      draftSourceTaskIDRef.current
+      || getEffectiveTaskID(sourceTask)
+      || activeRenderTaskIDRef.current
+      || 0
+    );
+    if (!taskID) return;
+    rememberTaskDraftOverlay(taskID, null, nextDraft);
+  }, [getEffectiveTaskID, rememberTaskDraftOverlay]);
+
   const scheduleDescriptionDraftRender = useCallback((taskIDInput = 0, sessionIDInput = 0) => {
     if (typeof window === 'undefined') {
       setDraft(draftSnapshotRef.current || null);
@@ -2061,9 +2075,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       description: String(value || ''),
     };
     draftSnapshotRef.current = nextSnapshot;
+    rememberActiveDraftOverlay(nextSnapshot);
     scheduleDescriptionDraftRender(taskIDInput, sessionIDInput);
     return nextSnapshot;
-  }, [scheduleDescriptionDraftRender]);
+  }, [rememberActiveDraftOverlay, scheduleDescriptionDraftRender]);
 
   const beginDescriptionSession = useCallback((taskIDInput, reason = '') => {
     const taskID = Number(taskIDInput || 0);
@@ -3354,7 +3369,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const submitNow = !!options?.submitNow;
     const submitSource = options?.submitSource || 'realtime';
     markDraftTouched();
-    setDraftWithSnapshot((prev) => {
+    const nextDraft = setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       if (field !== 'start_time') return { ...prev, [field]: value };
 
@@ -3375,6 +3390,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const alignedEnd = coerceEndNotBeforeStartLocal(nextStart, prev.end_time);
       return { ...prev, start_time: nextStart, end_time: alignedEnd };
     });
+    rememberActiveDraftOverlay(nextDraft);
     if (submitNow) {
       submitDraftImmediately(submitSource);
     }
@@ -3484,7 +3500,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (hasStaleDraftEventContext(closureTaskID)) return;
     const nextStart = String(nextValue || '');
     markDraftTouched();
-    setDraftWithSnapshot((prev) => {
+    const nextDraft = setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       if (!draftTimeRangeEnabled) {
         return { ...prev, start_time: nextStart, end_time: '' };
@@ -3495,20 +3511,22 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const alignedEnd = coerceEndNotBeforeStartLocal(nextStart, prev.end_time);
       return { ...prev, start_time: nextStart, end_time: alignedEnd };
     });
+    rememberActiveDraftOverlay(nextDraft);
   };
 
   const handleDraftEndDateTimeChange = (nextValue) => {
     const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraftWithSnapshot((prev) => (prev ? { ...prev, end_time: String(nextValue || '') } : prev));
+    const nextDraft = setDraftWithSnapshot((prev) => (prev ? { ...prev, end_time: String(nextValue || '') } : prev));
+    rememberActiveDraftOverlay(nextDraft);
   };
 
   const applyQuickDatePreset = (preset) => {
     const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraftWithSnapshot((prev) => {
+    const nextDraft = setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       if (preset === 'clear') {
         return { ...prev, start_time: '', end_time: '' };
@@ -3545,13 +3563,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         end_time: draftTimeRangeEnabled ? nextEnd : '',
       };
     });
+    rememberActiveDraftOverlay(nextDraft);
   };
 
   const toggleDraftCategory = (catID) => {
     const closureTaskID = getEffectiveTaskID(selectedTask);
     if (hasStaleDraftEventContext(closureTaskID)) return;
     markDraftTouched();
-    setDraftWithSnapshot((prev) => {
+    const nextDraft = setDraftWithSnapshot((prev) => {
       if (!prev) return prev;
       const id = String(catID);
       const exists = prev.category_ids.includes(id);
@@ -3562,6 +3581,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           : [...prev.category_ids, id],
       };
     });
+    rememberActiveDraftOverlay(nextDraft);
     submitDraftImmediately('realtime_category');
   };
 

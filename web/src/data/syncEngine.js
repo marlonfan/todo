@@ -86,12 +86,19 @@ const TASK_FULL_RECONCILE_AT_KEY = 'tasks_last_full_reconcile_at';
 const TASK_FORCE_RECONCILE_KEY = 'tasks_force_reconcile';
 const FULL_RECONCILE_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
+const LONG_POLL_WAIT_SECONDS = 25;
+const LONG_POLL_REQUEST_TIMEOUT_MS = (LONG_POLL_WAIT_SECONDS + 10) * 1000;
+const LONG_POLL_IDLE_DELAY_MS = 300;
+const LONG_POLL_RETRY_DELAY_MS = 5000;
 
 let queryClientRef = null;
 let initialized = false;
 let running = false;
 let rerunRequested = false;
 let intervalCancelFn = null;
+let longPollActive = false;
+let longPollAbortController = null;
+let longPollRetryTimer = null;
 let platformUnlisteners = [];
 const syncFinishedListeners = new Set();
 const taskIDRemappedListeners = new Set();
@@ -722,6 +729,118 @@ async function pullServerData() {
   });
 }
 
+function clearLongPollRetryTimer() {
+  if (longPollRetryTimer) {
+    clearTimeout(longPollRetryTimer);
+    longPollRetryTimer = null;
+  }
+}
+
+function abortLongPollRequest() {
+  if (longPollAbortController) {
+    longPollAbortController.abort();
+    longPollAbortController = null;
+  }
+}
+
+function stopLongPollLoop() {
+  clearLongPollRetryTimer();
+  abortLongPollRequest();
+}
+
+function shouldRunLongPoll() {
+  return initialized
+    && queryClientRef
+    && hasToken()
+    && isAutoSyncEnabled()
+    && platform.isVisible();
+}
+
+function scheduleLongPollRestart(delayMs = LONG_POLL_IDLE_DELAY_MS) {
+  clearLongPollRetryTimer();
+  if (!shouldRunLongPoll()) return;
+  longPollRetryTimer = setTimeout(() => {
+    longPollRetryTimer = null;
+    startLongPollLoop();
+  }, delayMs);
+}
+
+async function runLongPollOnce() {
+  const lastCursor = await safeLocalCall(
+    () => getMeta(TASK_SYNC_CURSOR_KEY, ''),
+    '',
+    `getMeta:${TASK_SYNC_CURSOR_KEY}:longPoll`,
+  );
+  const since = String(lastCursor || '').trim();
+  if (!since) {
+    scheduleSync();
+    await waitForIdle(LONG_POLL_REQUEST_TIMEOUT_MS).catch(() => {});
+    await wait(LONG_POLL_IDLE_DELAY_MS);
+    return;
+  }
+
+  const controller = new AbortController();
+  longPollAbortController = controller;
+  try {
+    const syncRes = await tasksAPI.sync(
+      {
+        since,
+        limit: 1,
+        wait: LONG_POLL_WAIT_SECONDS,
+      },
+      {
+        signal: controller.signal,
+        timeout: LONG_POLL_REQUEST_TIMEOUT_MS,
+      },
+    );
+    const payload = syncRes?.data || {};
+    const changed = Array.isArray(payload.tasks) ? payload.tasks : [];
+    const deleted = Array.isArray(payload.deleted) ? payload.deleted : [];
+    if (changed.length > 0 || deleted.length > 0 || payload.has_more || payload.woke) {
+      emitSyncTrace('long_poll_wakeup', {
+        changed_task_count: changed.length,
+        deleted_task_count: deleted.length,
+        has_more: Boolean(payload.has_more),
+        woke: Boolean(payload.woke),
+      });
+      scheduleSync();
+      await waitForIdle(LONG_POLL_REQUEST_TIMEOUT_MS).catch(() => {});
+    }
+  } finally {
+    if (longPollAbortController === controller) {
+      longPollAbortController = null;
+    }
+  }
+}
+
+async function startLongPollLoop() {
+  if (longPollActive || !shouldRunLongPoll()) return;
+  clearLongPollRetryTimer();
+  longPollActive = true;
+  emitSyncTrace('long_poll_started');
+  try {
+    while (shouldRunLongPoll()) {
+      try {
+        await runLongPollOnce();
+        await wait(LONG_POLL_IDLE_DELAY_MS);
+      } catch (error) {
+        if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+          break;
+        }
+        emitSyncTrace('long_poll_failed', { error: getErrorMessage(error) });
+        await wait(LONG_POLL_RETRY_DELAY_MS);
+      }
+    }
+  } finally {
+    longPollActive = false;
+    abortLongPollRequest();
+    emitSyncTrace('long_poll_stopped');
+    if (shouldRunLongPoll()) {
+      scheduleLongPollRestart(LONG_POLL_RETRY_DELAY_MS);
+    }
+  }
+}
+
 async function hydrateFromLocal() {
   if (!queryClientRef) return;
   const [tasks, categories, lastPullAt, calendarRanges] = await Promise.all([
@@ -826,6 +945,7 @@ async function runSyncCycle(options = {}) {
 
 export function scheduleSync(options = {}) {
   runSyncCycle({ silent: true, ...options });
+  startLongPollLoop();
 }
 
 export async function enqueueTaskOperation(op, options = {}) {
@@ -921,17 +1041,25 @@ export function initializeSyncEngine(queryClient) {
   queryClientRef = queryClient;
 
   hydrateFromLocal().finally(() => {
-    runSyncCycle({ silent: true, forceReconcile: true });
+    runSyncCycle({ silent: true, forceReconcile: true }).finally(() => {
+      startLongPollLoop();
+    });
   });
   startLocalNotificationScheduler();
 
   const onOnline = () => {
     if (!isAutoSyncEnabled()) return;
     scheduleSync();
+    startLongPollLoop();
   };
   const onVisible = () => {
-    if (!platform.isVisible() || !isAutoSyncEnabled()) return;
+    if (!platform.isVisible()) {
+      stopLongPollLoop();
+      return;
+    }
+    if (!isAutoSyncEnabled()) return;
     scheduleSync();
+    startLongPollLoop();
   };
   platformUnlisteners = [
     platform.onOnline(onOnline),
@@ -941,6 +1069,7 @@ export function initializeSyncEngine(queryClient) {
 }
 
 export function stopSyncEngine() {
+  stopLongPollLoop();
   if (intervalCancelFn) {
     intervalCancelFn();
     intervalCancelFn = null;
@@ -967,6 +1096,11 @@ export function setConfiguredSyncIntervalSeconds(seconds) {
   }
   if (initialized) {
     resetSyncIntervalTimer();
+    if (normalized > 0) {
+      startLongPollLoop();
+    } else {
+      stopLongPollLoop();
+    }
   }
   return normalized;
 }

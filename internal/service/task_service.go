@@ -24,6 +24,7 @@ type TaskService struct {
 	userRepo         *repository.UserRepository
 	notifyRepo       *repository.NotificationRepository
 	caldavSvc        *CaldavService
+	changeNotifier   *TaskChangeNotifier
 }
 
 type RevisionConflictError struct {
@@ -111,11 +112,29 @@ func NewTaskService(
 		catRepo:          catRepo,
 		userRepo:         userRepo,
 		notifyRepo:       notifyRepo,
+		changeNotifier:   NewTaskChangeNotifier(),
 	}
 }
 
 func (s *TaskService) SetCaldavService(caldavSvc *CaldavService) {
 	s.caldavSvc = caldavSvc
+}
+
+func (s *TaskService) notifyTaskChanged(userID int64) {
+	if s.changeNotifier != nil {
+		s.changeNotifier.Notify(userID)
+	}
+}
+
+func (s *TaskService) touchTaskForSync(task *models.Task) error {
+	if task == nil || task.ID <= 0 {
+		return nil
+	}
+	if task.Revision <= 0 {
+		task.Revision = 1
+	}
+	task.Revision += 1
+	return s.taskRepo.Update(task)
 }
 
 func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*models.Task, error) {
@@ -175,6 +194,7 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 		log.Printf("Warning: failed to sync reminder after task create for user %d task %d: %v", userID, savedTask.ID, err)
 	}
 
+	s.notifyTaskChanged(userID)
 	return savedTask, nil
 }
 
@@ -615,6 +635,11 @@ func (s *TaskService) Update(
 				log.Printf("Warning: failed to sync reminder after recurring occurrence update for user %d task %d: %v", userID, task.ID, err)
 			}
 		}
+		if !baseChanged {
+			if err := s.touchTaskForSync(task); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// Update categories
@@ -630,6 +655,11 @@ func (s *TaskService) Update(
 			return nil, err
 		}
 		categoriesChanged = true
+		if !baseChanged {
+			if err := s.touchTaskForSync(task); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	updatedTask := task
@@ -648,6 +678,9 @@ func (s *TaskService) Update(
 		}
 	}
 
+	if baseChanged || categoriesChanged || hasCompletedAnchor || occurrencePatchNeeded {
+		s.notifyTaskChanged(userID)
+	}
 	return updatedTask, nil
 }
 
@@ -689,6 +722,10 @@ func (s *TaskService) UpdateStatus(
 			if err := s.syncTaskReminder(userID, task); err != nil {
 				log.Printf("Warning: failed to sync reminder after recurring occurrence status update for user %d task %d: %v", userID, task.ID, err)
 			}
+			if err := s.touchTaskForSync(task); err != nil {
+				return nil, err
+			}
+			s.notifyTaskChanged(userID)
 			return task, nil
 		}
 	}
@@ -722,6 +759,9 @@ func (s *TaskService) UpdateStatus(
 	afterSnapshot := snapshotTaskForActivity(updatedTask)
 	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
 		log.Printf("Warning: failed to record task activity after task status update for user %d task %d: %v", userID, updatedTask.ID, err)
+	}
+	if changed {
+		s.notifyTaskChanged(userID)
 	}
 	return updatedTask, nil
 }
@@ -819,6 +859,7 @@ func (s *TaskService) UpdateSchedule(
 	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
 		log.Printf("Warning: failed to record task activity after task schedule update for user %d task %d: %v", userID, updatedTask.ID, err)
 	}
+	s.notifyTaskChanged(userID)
 	return updatedTask, nil
 }
 
@@ -839,7 +880,11 @@ func (s *TaskService) Delete(userID, taskID int64, expectedRevision *int64) erro
 	if err := s.notifyRepo.DeleteByTask(taskID); err != nil {
 		return err
 	}
-	return s.taskRepo.DeleteWithDeleteLog(userID, taskID, time.Now().UTC())
+	if err := s.taskRepo.DeleteWithDeleteLog(userID, taskID, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.notifyTaskChanged(userID)
+	return nil
 }
 
 func (s *TaskService) ListChangedSince(userID int64, since time.Time, limit int) ([]models.Task, []models.TaskDeleteLog, error) {
@@ -852,6 +897,13 @@ func (s *TaskService) ListChangedSince(userID int64, since time.Time, limit int)
 		return nil, nil, err
 	}
 	return changed, deleted, nil
+}
+
+func (s *TaskService) SubscribeTaskChanges(userID int64) (<-chan struct{}, func()) {
+	if s.changeNotifier == nil || userID <= 0 {
+		return nil, func() {}
+	}
+	return s.changeNotifier.Subscribe(userID)
 }
 
 func (s *TaskService) resolveUserTimezone(userID int64) string {

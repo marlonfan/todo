@@ -142,7 +142,7 @@ func main() {
 		Addr:         addr,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 35 * time.Second,
 	}
 
 	// Graceful shutdown

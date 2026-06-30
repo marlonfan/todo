@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 )
+
+const taskSyncMaxWaitDuration = 25 * time.Second
 
 type TaskHandler struct {
 	taskService         *service.TaskService
@@ -393,6 +396,39 @@ func resolveTaskSyncCursor(
 	return nextSince, false
 }
 
+func parseTaskSyncWaitDuration(raw string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, nil
+	}
+
+	var waitDuration time.Duration
+	if strings.ContainsAny(value, "hms") {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, err
+		}
+		waitDuration = parsed
+	} else {
+		seconds, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, err
+		}
+		waitDuration = time.Duration(seconds) * time.Second
+	}
+	if waitDuration <= 0 {
+		return 0, nil
+	}
+	if waitDuration > taskSyncMaxWaitDuration {
+		return taskSyncMaxWaitDuration, nil
+	}
+	return waitDuration, nil
+}
+
+func hasTaskSyncChanges(changed []models.Task, deleted []models.TaskDeleteLog) bool {
+	return len(changed) > 0 || len(deleted) > 0
+}
+
 func (h *TaskHandler) Sync(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 
@@ -419,21 +455,67 @@ func (h *TaskHandler) Sync(c *gin.Context) {
 		limit = parsed
 	}
 
-	changed, deleted, err := h.taskService.ListChangedSince(userID, since, limit)
+	waitDuration, err := parseTaskSyncWaitDuration(c.Query("wait"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid wait duration"})
+		return
+	}
+
+	queryChanges := func() ([]models.Task, []models.TaskDeleteLog, time.Time, error) {
+		cursorUpperBound := time.Now().UTC()
+		changed, deleted, err := h.taskService.ListChangedSince(userID, since, limit)
+		return changed, deleted, cursorUpperBound, err
+	}
+
+	changed, deleted, cursorUpperBound, err := queryChanges()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	waited := false
+	woke := false
+	if waitDuration > 0 && !hasTaskSyncChanges(changed, deleted) {
+		changes, unsubscribe := h.taskService.SubscribeTaskChanges(userID)
+		defer unsubscribe()
 
-	now := time.Now().UTC()
-	nextSince, hasMore := resolveTaskSyncCursor(since, changed, deleted, limit, now)
+		changed, deleted, cursorUpperBound, err = queryChanges()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if !hasTaskSyncChanges(changed, deleted) {
+			waited = true
+			waitCtx, cancel := context.WithTimeout(c.Request.Context(), waitDuration)
+			defer cancel()
+			select {
+			case <-changes:
+				woke = true
+			case <-waitCtx.Done():
+				if c.Request.Context().Err() != nil {
+					return
+				}
+			}
+
+			changed, deleted, cursorUpperBound, err = queryChanges()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+	}
+
+	nextSince, hasMore := resolveTaskSyncCursor(since, changed, deleted, limit, cursorUpperBound)
+	serverAt := time.Now().UTC()
 
 	c.JSON(http.StatusOK, gin.H{
 		"tasks":      changed,
 		"deleted":    deleted,
 		"next_since": nextSince.Format(time.RFC3339Nano),
 		"has_more":   hasMore,
-		"server_at":  now.Format(time.RFC3339Nano),
+		"server_at":  serverAt.Format(time.RFC3339Nano),
+		"waited":     waited,
+		"woke":       woke,
 	})
 }
 

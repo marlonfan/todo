@@ -52,3 +52,35 @@ func TestResolveTaskSyncCursorAdvancesToNowWhenFullyDrained(t *testing.T) {
 		t.Fatalf("nextSince = %s, want now %s", nextSince, now)
 	}
 }
+
+func TestParseTaskSyncWaitDuration(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "empty", raw: "", want: 0},
+		{name: "seconds", raw: "7", want: 7 * time.Second},
+		{name: "duration", raw: "1500ms", want: 1500 * time.Millisecond},
+		{name: "negative", raw: "-1", want: 0},
+		{name: "clamped", raw: "120", want: taskSyncMaxWaitDuration},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseTaskSyncWaitDuration(tt.raw)
+			if err != nil {
+				t.Fatalf("parseTaskSyncWaitDuration(%q): %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Fatalf("wait duration = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseTaskSyncWaitDurationRejectsInvalid(t *testing.T) {
+	if _, err := parseTaskSyncWaitDuration("not-a-duration"); err == nil {
+		t.Fatalf("parseTaskSyncWaitDuration returned nil error for invalid input")
+	}
+}
