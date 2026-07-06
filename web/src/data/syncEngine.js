@@ -30,6 +30,12 @@ import {
   mergeServerAndLocalTasks,
   normalizeServerTask,
 } from './taskMerge';
+import {
+  isOccurrenceScopedPayload,
+  normalizeClientSubmittedAt,
+  nowISO,
+  sanitizeConflictPayload,
+} from './syncPayload.js';
 import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
 import { pushSyncConflict } from '../state/syncConflictCenter';
 import { logTimeDebug } from '../utils/time';
@@ -132,6 +138,14 @@ function isAutoSyncEnabled() {
   return getSyncIntervalMs() > 0;
 }
 
+function shouldRunSyncIntervalFallback() {
+  return initialized
+    && queryClientRef
+    && hasToken()
+    && isAutoSyncEnabled()
+    && !shouldRunLongPoll();
+}
+
 function resetSyncIntervalTimer() {
   if (intervalCancelFn) {
     intervalCancelFn();
@@ -139,9 +153,13 @@ function resetSyncIntervalTimer() {
   }
   const intervalMs = getSyncIntervalMs();
   if (intervalMs <= 0) return;
+  if (!shouldRunSyncIntervalFallback()) return;
   intervalCancelFn = platform.setInterval(() => {
     scheduleSync();
   }, intervalMs);
+  emitSyncTrace('interval_fallback_started', {
+    interval_ms: intervalMs,
+  });
 }
 
 function emitSyncTrace(type, detail = {}) {
@@ -186,33 +204,11 @@ function hasToken() {
   return Boolean(getToken());
 }
 
-function nowISO() {
-  return new Date().toISOString();
-}
-
 function shouldRunTaskReconcile(lastReconcileAt, forceFlag) {
   if (forceFlag) return true;
   const parsed = Date.parse(String(lastReconcileAt || '').trim());
   if (!Number.isFinite(parsed) || parsed <= 0) return true;
   return (Date.now() - parsed) >= FULL_RECONCILE_INTERVAL_MS;
-}
-
-function sanitizeConflictPayload(payload) {
-  if (!payload || typeof payload !== 'object') return {};
-  const sanitized = { ...payload };
-  delete sanitized.client_timezone;
-  delete sanitized.start_time_local;
-  delete sanitized.end_time_local;
-  return sanitized;
-}
-
-function normalizeClientSubmittedAt(value) {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const parsed = Date.parse(trimmed);
-  if (!Number.isFinite(parsed)) return '';
-  return new Date(parsed).toISOString();
 }
 
 async function patchTaskSyncState(taskID, patch) {
@@ -277,11 +273,6 @@ function getErrorMessage(error) {
   if (error?.response?.data?.error) return String(error.response.data.error);
   if (error?.message) return String(error.message);
   return 'sync failed';
-}
-
-function isOccurrenceScopedPayload(payload) {
-  const body = payload && typeof payload === 'object' ? payload : {};
-  return !!(String(body.instance_id || '').trim() || String(body.occurrence_date || '').trim());
 }
 
 function shouldRefreshRecurringViewsForUpdatePayload(payload) {
@@ -377,6 +368,65 @@ function isTaskMissingFailure(status, message) {
   return status === 400 && normalized.includes('task not found');
 }
 
+function buildOutboxMutationOptions(op) {
+  return {
+    ifMatchRevision: op.if_match_revision,
+    clientSubmittedAt: op.client_submitted_at,
+    submitSource: op.submit_source,
+    clientOpID: op.op_id,
+  };
+}
+
+function shouldRefreshViewsAfterOutboxMutation(op) {
+  if (op?.op_type === 'update') {
+    return shouldRefreshRecurringViewsForUpdatePayload(op?.payload);
+  }
+  if (op?.op_type === 'status' || op?.op_type === 'schedule') {
+    return isOccurrenceScopedPayload(op?.payload);
+  }
+  return false;
+}
+
+async function applyOutboxMutationResult(op, res) {
+  // When recurrence_rule changes, the server generates occurrence data synchronously.
+  // Refetch nextOccurrences BEFORE applying the server task (which sets sync_state:'synced'),
+  // so that shouldHideRecurringSeriesAnchorInPending never sees the state where
+  // sync_state='synced' but nextOccurrences has no pending entry for this task.
+  if (
+    op?.op_type === 'update'
+    && res?.data?.id
+    && Object.prototype.hasOwnProperty.call(op?.payload || {}, 'recurrence_rule')
+  ) {
+    await queryClientRef?.refetchQueries({ queryKey: queryKeys.tasks.nextOccurrences() });
+  }
+
+  if (res?.data?.id) {
+    await applyServerTask(res.data, null, {
+      preserveLocalChangedAfter: Number(op.created_at || 0),
+      preferIncomingRevisionAtLeastLocal: true,
+    });
+  } else {
+    await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
+  }
+
+  if (shouldRefreshViewsAfterOutboxMutation(op)) {
+    await refreshOccurrenceScopedViews(op?.entity_id);
+  }
+}
+
+async function executeTaskMutationOperation(op, request) {
+  if (op?.op_type === 'update') {
+    logTimeDebug('syncEngine.outbox.update.request', {
+      entity_id: Number(op.entity_id || 0),
+      if_match_revision: Number(op.if_match_revision || 0) || undefined,
+      payload: op.payload || {},
+    });
+  }
+
+  const res = await request(op.entity_id, op.payload, buildOutboxMutationOptions(op));
+  await applyOutboxMutationResult(op, res);
+}
+
 async function executeOutboxOperation(op) {
   emitSyncTrace('outbox_executing', {
     op_id: op.op_id,
@@ -396,75 +446,15 @@ async function executeOutboxOperation(op) {
       return;
     }
     case 'update': {
-      logTimeDebug('syncEngine.outbox.update.request', {
-        entity_id: Number(op.entity_id || 0),
-        if_match_revision: Number(op.if_match_revision || 0) || undefined,
-        payload: op.payload || {},
-      });
-      const res = await tasksAPI.update(op.entity_id, op.payload, {
-        ifMatchRevision: op.if_match_revision,
-        clientSubmittedAt: op.client_submitted_at,
-        submitSource: op.submit_source,
-        clientOpID: op.op_id,
-      });
-      // When recurrence_rule changes, the server generates occurrence data synchronously.
-      // Refetch nextOccurrences BEFORE applying the server task (which sets sync_state:'synced'),
-      // so that shouldHideRecurringSeriesAnchorInPending never sees the state where
-      // sync_state='synced' but nextOccurrences has no pending entry for this task.
-      if (res?.data?.id && Object.prototype.hasOwnProperty.call(op?.payload || {}, 'recurrence_rule')) {
-        await queryClientRef?.refetchQueries({ queryKey: queryKeys.tasks.nextOccurrences() });
-      }
-      if (res?.data?.id) {
-        await applyServerTask(res.data, null, {
-          preserveLocalChangedAfter: Number(op.created_at || 0),
-          preferIncomingRevisionAtLeastLocal: true,
-        });
-      } else {
-        await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
-      }
-      if (shouldRefreshRecurringViewsForUpdatePayload(op?.payload)) {
-        await refreshOccurrenceScopedViews(op?.entity_id);
-      }
+      await executeTaskMutationOperation(op, tasksAPI.update);
       return;
     }
     case 'status': {
-      const res = await tasksAPI.updateStatus(op.entity_id, op.payload, {
-        ifMatchRevision: op.if_match_revision,
-        clientSubmittedAt: op.client_submitted_at,
-        submitSource: op.submit_source,
-        clientOpID: op.op_id,
-      });
-      if (res?.data?.id) {
-        await applyServerTask(res.data, null, {
-          preserveLocalChangedAfter: Number(op.created_at || 0),
-          preferIncomingRevisionAtLeastLocal: true,
-        });
-      } else {
-        await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
-      }
-      if (isOccurrenceScopedPayload(op?.payload)) {
-        await refreshOccurrenceScopedViews(op?.entity_id);
-      }
+      await executeTaskMutationOperation(op, tasksAPI.updateStatus);
       return;
     }
     case 'schedule': {
-      const res = await tasksAPI.updateSchedule(op.entity_id, op.payload, {
-        ifMatchRevision: op.if_match_revision,
-        clientSubmittedAt: op.client_submitted_at,
-        submitSource: op.submit_source,
-        clientOpID: op.op_id,
-      });
-      if (res?.data?.id) {
-        await applyServerTask(res.data, null, {
-          preserveLocalChangedAfter: Number(op.created_at || 0),
-          preferIncomingRevisionAtLeastLocal: true,
-        });
-      } else {
-        await patchTaskSyncState(op.entity_id, { sync_state: 'synced', last_error: '' });
-      }
-      if (isOccurrenceScopedPayload(op?.payload)) {
-        await refreshOccurrenceScopedViews(op?.entity_id);
-      }
+      await executeTaskMutationOperation(op, tasksAPI.updateSchedule);
       return;
     }
     case 'delete': {
@@ -829,6 +819,7 @@ async function runLongPollOnce() {
 async function startLongPollLoop() {
   if (longPollActive || !shouldRunLongPoll()) return;
   clearLongPollRetryTimer();
+  resetSyncIntervalTimer();
   longPollActive = true;
   emitSyncTrace('long_poll_started');
   try {
@@ -850,6 +841,8 @@ async function startLongPollLoop() {
     emitSyncTrace('long_poll_stopped');
     if (shouldRunLongPoll()) {
       scheduleLongPollRestart(LONG_POLL_RETRY_DELAY_MS);
+    } else {
+      resetSyncIntervalTimer();
     }
   }
 }
@@ -1064,15 +1057,18 @@ export function initializeSyncEngine(queryClient) {
     if (!isAutoSyncEnabled()) return;
     scheduleSync();
     startLongPollLoop();
+    resetSyncIntervalTimer();
   };
   const onVisible = () => {
     if (!platform.isVisible()) {
       stopLongPollLoop();
+      resetSyncIntervalTimer();
       return;
     }
     if (!isAutoSyncEnabled()) return;
     scheduleSync();
     startLongPollLoop();
+    resetSyncIntervalTimer();
   };
   platformUnlisteners = [
     platform.onOnline(onOnline),
@@ -1111,6 +1107,7 @@ export function setConfiguredSyncIntervalSeconds(seconds) {
     resetSyncIntervalTimer();
     if (normalized > 0) {
       startLongPollLoop();
+      resetSyncIntervalTimer();
     } else {
       stopLongPollLoop();
     }

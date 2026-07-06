@@ -8,6 +8,7 @@ import '@fontsource-variable/inter';
 import './index.css'
 import { queryClient } from './query/client'
 import { initializeSyncEngine } from './data/syncEngine'
+import { installTaskMutationUnloadGuard } from './data/pendingTaskMutationPersistence'
 import { initPlatform } from './platform/init'
 import { initInputModality } from './utils/inputModality'
 
@@ -90,6 +91,7 @@ function ensureMobileViewport() {
 
   // 不阻塞——先渲染，平台初始化在后台进行
   initPlatform();
+  installTaskMutationUnloadGuard();
 
   initializeSyncEngine(queryClient);
   const Router = isDesktopRuntime ? HashRouter : BrowserRouter;

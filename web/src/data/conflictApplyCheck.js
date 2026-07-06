@@ -1,3 +1,8 @@
+import {
+  isOccurrenceScopedPayload,
+  sanitizeConflictPayload,
+} from './syncPayload.js';
+
 const CONFLICT_EXCLUDED_FIELDS = new Set([
   'client_timezone',
   'start_time_local',
@@ -6,26 +11,12 @@ const CONFLICT_EXCLUDED_FIELDS = new Set([
   'occurrence_date',
 ]);
 
-function sanitizeConflictPayload(payload) {
-  if (!payload || typeof payload !== 'object') return {};
-  const sanitized = { ...payload };
-  delete sanitized.client_timezone;
-  delete sanitized.start_time_local;
-  delete sanitized.end_time_local;
-  return sanitized;
-}
-
 function stableSerialize(value) {
   try {
     return JSON.stringify(value);
   } catch {
     return String(value);
   }
-}
-
-function isOccurrenceScopedPayload(payload) {
-  const body = payload && typeof payload === 'object' ? payload : {};
-  return !!(String(body.instance_id || '').trim() || String(body.occurrence_date || '').trim());
 }
 
 function readLatestTaskField(latestTask, field) {

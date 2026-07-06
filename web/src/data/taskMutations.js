@@ -7,6 +7,8 @@ import {
 } from './localStore';
 import { enqueueTaskOperation } from './syncEngine';
 import { scheduleLocalNotificationRefresh } from '../platform/localNotifications';
+import { trackTaskMutationPersistence } from './pendingTaskMutationPersistence.js';
+import { nowISO } from './syncPayload.js';
 import {
   hasBaseTaskPatchPayload,
   isOccurrenceScopedPayload,
@@ -15,10 +17,6 @@ import {
   patchOccurrenceScheduleInItems,
 } from './taskMutationHelpers.js';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
-
-function nowISO() {
-  return new Date().toISOString();
-}
 
 function deriveStatusTimestamps(currentStatus, nextStatus, currentCompletedAt, currentDeletedAt, nowValue) {
   const status = String(nextStatus || currentStatus || 'pending');
@@ -89,7 +87,7 @@ export function setTasksCache(queryClient, updater) {
 
 function runMutationSideEffects(label, work, rollback, options = {}) {
   const rethrow = !!options?.rethrow;
-  return (async () => {
+  return trackTaskMutationPersistence(async () => {
     try {
       await work();
     } catch (error) {
@@ -101,7 +99,7 @@ function runMutationSideEffects(label, work, rollback, options = {}) {
         throw error;
       }
     }
-  })();
+  });
 }
 
 const CALENDAR_AFFECTING_FIELDS = new Set([
@@ -203,41 +201,37 @@ function patchOccurrenceStatusInItems(items, taskID, scopedInstanceID, scopedDat
   return changed ? next : items;
 }
 
-function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
-  if (!queryClient || !payload || typeof payload !== 'object') return;
-  if (!Object.prototype.hasOwnProperty.call(payload, 'description')) return;
-  const nextDescription = String(payload?.description || '');
+function getOccurrenceScope(payload) {
+  if (!payload || typeof payload !== 'object') return null;
   const scopedInstanceID = String(payload?.instance_id || '').trim();
   const scopedDate = normalizeOccurrenceDateText(payload?.occurrence_date || '');
-  if (!scopedInstanceID && !scopedDate) return;
+  if (!scopedInstanceID && !scopedDate) return null;
+  return { scopedInstanceID, scopedDate };
+}
 
-  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
-    patchOccurrenceDescriptionInItems(prev, Number(taskID) || 0, scopedInstanceID, scopedDate, nextDescription)
-  ));
+function patchOccurrenceQueryCaches(queryClient, taskID, scope, patchItems) {
+  const numericTaskID = Number(taskID) || 0;
+  if (!queryClient || !numericTaskID || !scope || typeof patchItems !== 'function') return;
+  const applyPatch = (items) => patchItems(
+    items,
+    numericTaskID,
+    scope.scopedInstanceID,
+    scope.scopedDate,
+  );
+
+  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), applyPatch);
 
   const occurrenceQueries = queryClient.getQueriesData({ queryKey: ['tasks', 'occurrences'] });
   occurrenceQueries.forEach(([queryKey, value]) => {
     if (Array.isArray(value)) {
-      const nextItems = patchOccurrenceDescriptionInItems(
-        value,
-        Number(taskID) || 0,
-        scopedInstanceID,
-        scopedDate,
-        nextDescription,
-      );
+      const nextItems = applyPatch(value);
       if (nextItems !== value) {
         queryClient.setQueryData(queryKey, nextItems);
       }
       return;
     }
     if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return;
-    const nextItems = patchOccurrenceDescriptionInItems(
-      value.items,
-      Number(taskID) || 0,
-      scopedInstanceID,
-      scopedDate,
-      nextDescription,
-    );
+    const nextItems = applyPatch(value.items);
     if (nextItems !== value.items) {
       queryClient.setQueryData(queryKey, {
         ...value,
@@ -247,90 +241,35 @@ function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
   });
 }
 
+function patchRecurringOccurrenceDescription(queryClient, taskID, payload) {
+  if (!queryClient || !payload || typeof payload !== 'object') return;
+  if (!Object.prototype.hasOwnProperty.call(payload, 'description')) return;
+  const nextDescription = String(payload?.description || '');
+  const scope = getOccurrenceScope(payload);
+  if (!scope) return;
+  patchOccurrenceQueryCaches(queryClient, taskID, scope, (items, numericTaskID, scopedInstanceID, scopedDate) => (
+    patchOccurrenceDescriptionInItems(items, numericTaskID, scopedInstanceID, scopedDate, nextDescription)
+  ));
+}
+
 function patchRecurringOccurrenceSchedule(queryClient, taskID, payload) {
   if (!queryClient || !payload || typeof payload !== 'object') return;
-  const scopedInstanceID = String(payload?.instance_id || '').trim();
-  const scopedDate = normalizeOccurrenceDateText(payload?.occurrence_date || '');
-  if (!scopedInstanceID && !scopedDate) return;
-
-  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
-    patchOccurrenceScheduleInItems(prev, Number(taskID) || 0, scopedInstanceID, scopedDate, payload)
+  const scope = getOccurrenceScope(payload);
+  if (!scope) return;
+  patchOccurrenceQueryCaches(queryClient, taskID, scope, (items, numericTaskID, scopedInstanceID, scopedDate) => (
+    patchOccurrenceScheduleInItems(items, numericTaskID, scopedInstanceID, scopedDate, payload)
   ));
-
-  const occurrenceQueries = queryClient.getQueriesData({ queryKey: ['tasks', 'occurrences'] });
-  occurrenceQueries.forEach(([queryKey, value]) => {
-    if (Array.isArray(value)) {
-      const nextItems = patchOccurrenceScheduleInItems(
-        value,
-        Number(taskID) || 0,
-        scopedInstanceID,
-        scopedDate,
-        payload,
-      );
-      if (nextItems !== value) {
-        queryClient.setQueryData(queryKey, nextItems);
-      }
-      return;
-    }
-    if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return;
-    const nextItems = patchOccurrenceScheduleInItems(
-      value.items,
-      Number(taskID) || 0,
-      scopedInstanceID,
-      scopedDate,
-      payload,
-    );
-    if (nextItems !== value.items) {
-      queryClient.setQueryData(queryKey, {
-        ...value,
-        items: nextItems,
-      });
-    }
-  });
 }
 
 function patchRecurringOccurrenceStatus(queryClient, taskID, payload) {
   if (!queryClient || !payload || typeof payload !== 'object') return;
   const nextStatus = String(payload?.status || '').trim();
   if (!nextStatus) return;
-  const scopedInstanceID = String(payload?.instance_id || '').trim();
-  const scopedDate = normalizeOccurrenceDateText(payload?.occurrence_date || '');
-  if (!scopedInstanceID && !scopedDate) return;
-
-  queryClient.setQueryData(queryKeys.tasks.nextOccurrences(), (prev) => (
-    patchOccurrenceStatusInItems(prev, Number(taskID) || 0, scopedInstanceID, scopedDate, nextStatus)
+  const scope = getOccurrenceScope(payload);
+  if (!scope) return;
+  patchOccurrenceQueryCaches(queryClient, taskID, scope, (items, numericTaskID, scopedInstanceID, scopedDate) => (
+    patchOccurrenceStatusInItems(items, numericTaskID, scopedInstanceID, scopedDate, nextStatus)
   ));
-
-  const occurrenceQueries = queryClient.getQueriesData({ queryKey: ['tasks', 'occurrences'] });
-  occurrenceQueries.forEach(([queryKey, value]) => {
-    if (Array.isArray(value)) {
-      const nextItems = patchOccurrenceStatusInItems(
-        value,
-        Number(taskID) || 0,
-        scopedInstanceID,
-        scopedDate,
-        nextStatus,
-      );
-      if (nextItems !== value) {
-        queryClient.setQueryData(queryKey, nextItems);
-      }
-      return;
-    }
-    if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return;
-    const nextItems = patchOccurrenceStatusInItems(
-      value.items,
-      Number(taskID) || 0,
-      scopedInstanceID,
-      scopedDate,
-      nextStatus,
-    );
-    if (nextItems !== value.items) {
-      queryClient.setQueryData(queryKey, {
-        ...value,
-        items: nextItems,
-      });
-    }
-  });
 }
 
 function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
@@ -602,7 +541,7 @@ export async function updateTaskStatusLocal(queryClient, taskID, statusInput, op
   scheduleLocalReminderRefresh('task-status-local');
   const rollback = snapshot ? () => setTasksCache(queryClient, snapshot) : undefined;
   if (awaitPersist) {
-    await persistWork();
+    await runMutationSideEffects('updateTaskStatusLocal', persistWork, rollback, { rethrow: true });
   } else {
     runMutationSideEffects('updateTaskStatusLocal', persistWork, rollback);
   }

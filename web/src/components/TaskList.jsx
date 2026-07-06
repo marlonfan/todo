@@ -4594,7 +4594,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const handleBeforeUnload = () => {
+    const handleBeforeUnload = (event) => {
       const pending = pendingDraftSubmitRef.current;
       const hasPendingSubmit = !!(
         Number(pending?.taskID || 0) > 0
@@ -4622,6 +4622,13 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       if (typeof flush === 'function') {
         void flush('beforeunload');
       }
+      if (event && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+      }
+      if (event) {
+        event.returnValue = '';
+      }
+      return '';
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {

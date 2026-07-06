@@ -1,7 +1,6 @@
-export function isOccurrenceScopedPayload(payload) {
-  const body = payload && typeof payload === 'object' ? payload : {};
-  return !!(body.instance_id || body.occurrence_date);
-}
+import { isOccurrenceScopedPayload } from './syncPayload.js';
+
+export { isOccurrenceScopedPayload } from './syncPayload.js';
 
 export function hasBaseTaskPatchPayload(payload) {
   const body = payload && typeof payload === 'object' ? payload : {};

@@ -1,6 +1,4 @@
-function nowISO() {
-  return new Date().toISOString();
-}
+import { nowISO } from './syncPayload.js';
 
 export function getTaskTimestamp(task) {
   const value = task?.client_updated_at || task?.updated_at || task?.created_at || '';
