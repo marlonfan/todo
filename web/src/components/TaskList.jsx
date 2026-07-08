@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
@@ -68,7 +68,6 @@ import {
   IconSunrise,
   IconTag,
 } from './icons/TaskIcons';
-import LiveMarkdownEditor from './LiveMarkdownEditor';
 import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
 import { RecurrencePanel } from './task/RecurrencePanel';
 import TaskDescriptionAI from './TaskDescriptionAI';
@@ -153,6 +152,8 @@ import {
   isTaskCompactMobileLayout,
   shouldUseTaskModalLayout,
 } from './taskListSplit';
+
+const LiveMarkdownEditor = lazy(() => import('./LiveMarkdownEditor'));
 
 function isDraftSwitchDebugEnabled() {
   if (typeof window === 'undefined') return false;
@@ -5827,22 +5828,24 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     onApply={handleApplyAIDraftDescription}
                     disabled={selectedTask.read_only}
                   />
-                  <LiveMarkdownEditor
-                    ref={draftDescriptionEditorRef}
-                    key={`task-editor-${selectedTask.id}`}
-                    value={draft.description}
-                    onChange={(nextValue) => handleDraftDescriptionChange(nextValue, {
-                      taskID: getEffectiveTaskID(selectedTask),
-                      sessionID: activeDescriptionSessionRef.current,
-                      taskValue: selectedTask,
-                      draftValue: draft,
-                    })}
-                    onSaveShortcut={handleDraftEditorSaveShortcut}
-                    placeholder={t('task.description')}
-                    className="min-h-0 min-w-0 flex-1 overflow-hidden"
-                    fill
-                    minHeight={280}
-                  />
+                  <Suspense fallback={<div className="min-h-0 min-w-0 flex-1 overflow-hidden bg-card" />}>
+                    <LiveMarkdownEditor
+                      ref={draftDescriptionEditorRef}
+                      key={`task-editor-${selectedTask.id}`}
+                      value={draft.description}
+                      onChange={(nextValue) => handleDraftDescriptionChange(nextValue, {
+                        taskID: getEffectiveTaskID(selectedTask),
+                        sessionID: activeDescriptionSessionRef.current,
+                        taskValue: selectedTask,
+                        draftValue: draft,
+                      })}
+                      onSaveShortcut={handleDraftEditorSaveShortcut}
+                      placeholder={t('task.description')}
+                      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+                      fill
+                      minHeight={280}
+                    />
+                  </Suspense>
                 </div>
               </div>
             </div>

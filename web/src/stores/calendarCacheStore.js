@@ -8,6 +8,9 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const EMPTY_EVENTS_BY_DATE = Object.freeze({});
+const EMPTY_EVENTS = Object.freeze([]);
+const RANGE_SNAPSHOT_CACHE_LIMIT = 100;
+const rangeSnapshotCache = new Map();
 
 function normalizeTimezoneName(value) {
   const next = String(value || '').trim();
@@ -54,6 +57,50 @@ function getOrCreateTimezoneBucket(state, timezoneName) {
   return state.eventsByDateByTimezone[timezoneName];
 }
 
+function clearRangeSnapshotCache() {
+  rangeSnapshotCache.clear();
+}
+
+function trimRangeSnapshotCache() {
+  while (rangeSnapshotCache.size > RANGE_SNAPSHOT_CACHE_LIMIT) {
+    const firstKey = rangeSnapshotCache.keys().next().value;
+    if (!firstKey) return;
+    rangeSnapshotCache.delete(firstKey);
+  }
+}
+
+function getEventsMapForRangeSnapshot(state, startDate, endDate, timezoneName) {
+  const dayKeys = getRangeDayKeys(startDate, endDate, timezoneName);
+  if (dayKeys.length === 0) return EMPTY_EVENTS_BY_DATE;
+
+  const bucket = getTimezoneBucket(state, timezoneName);
+  const cacheKey = `${timezoneName}|${String(startDate || '')}|${String(endDate || '')}`;
+  const previous = rangeSnapshotCache.get(cacheKey);
+
+  if (previous && previous.dayKeys.length === dayKeys.length) {
+    let unchanged = true;
+    for (let i = 0; i < dayKeys.length; i += 1) {
+      const dayKey = dayKeys[i];
+      if (previous.dayKeys[i] !== dayKey || previous.dayEventRefs[i] !== (bucket[dayKey] || EMPTY_EVENTS)) {
+        unchanged = false;
+        break;
+      }
+    }
+    if (unchanged) return previous.eventsByDate;
+  }
+
+  const eventsByDate = {};
+  const dayEventRefs = [];
+  dayKeys.forEach((dayKey) => {
+    const dayEvents = bucket[dayKey] || EMPTY_EVENTS;
+    eventsByDate[dayKey] = dayEvents;
+    dayEventRefs.push(dayEvents);
+  });
+  rangeSnapshotCache.set(cacheKey, { dayKeys, dayEventRefs, eventsByDate });
+  trimRangeSnapshotCache();
+  return eventsByDate;
+}
+
 /**
  * 全局日历缓存池
  * 结构: Record<Timezone, Record<YYYY-MM-DD, CalendarEvent[]>>
@@ -80,6 +127,15 @@ const useCalendarCacheStore = create(
     getEventsMapForTimezone: (timezone) => {
       const timezoneName = normalizeTimezoneName(timezone);
       return getTimezoneBucket(get(), timezoneName);
+    },
+
+    /**
+     * 获取指定范围的稳定事件映射。范围内日期引用未变化时返回同一个对象，
+     * 避免无关日期更新触发整片日历重渲染。
+     */
+    getEventsMapForRange: (startDate, endDate, timezone = 'UTC') => {
+      const timezoneName = normalizeTimezoneName(timezone);
+      return getEventsMapForRangeSnapshot(get(), startDate, endDate, timezoneName);
     },
 
     /**
@@ -344,6 +400,7 @@ const useCalendarCacheStore = create(
         state.metadata.lastSyncAt = null;
         state.metadata.loadedRanges = [];
       });
+      clearRangeSnapshotCache();
     },
 
     /**

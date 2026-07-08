@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
@@ -46,7 +46,6 @@ import {
   IconTag,
   IconX,
 } from './icons/TaskIcons';
-import LiveMarkdownEditor from './LiveMarkdownEditor';
 import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
@@ -63,6 +62,7 @@ const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
 const DEFAULT_WORKDAY_KEYS = ['MO', 'TU', 'WE', 'TH', 'FR'];
 const RECURRENCE_INTERVAL_MAX = 99;
 const BASIC_PANELS_REQUIRING_CONFIRM = new Set(['time', 'recurrence']);
+const LiveMarkdownEditor = lazy(() => import('./LiveMarkdownEditor'));
 
 function getStoredUser() {
   try {
@@ -2513,21 +2513,23 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                     disabled={loading}
                     compact
                   />
-                  <LiveMarkdownEditor
-                    ref={descriptionEditorRef}
-                    key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
-                    value={descriptionValue}
-                    onChange={(nextValue) => {
-                      const description = String(nextValue || '');
-                      descriptionDraftRef.current = description;
-                      setValue('description', description, { shouldDirty: true });
-                    }}
-                    onSaveShortcut={handleDescriptionSaveShortcut}
-                    placeholder={t('task.description')}
-                    className="min-h-0 min-w-0 flex-1 overflow-hidden"
-                    fill
-                    minHeight={280}
-                  />
+                  <Suspense fallback={<div className="min-h-0 min-w-0 flex-1 overflow-hidden bg-card" />}>
+                    <LiveMarkdownEditor
+                      ref={descriptionEditorRef}
+                      key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}
+                      value={descriptionValue}
+                      onChange={(nextValue) => {
+                        const description = String(nextValue || '');
+                        descriptionDraftRef.current = description;
+                        setValue('description', description, { shouldDirty: true });
+                      }}
+                      onSaveShortcut={handleDescriptionSaveShortcut}
+                      placeholder={t('task.description')}
+                      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+                      fill
+                      minHeight={280}
+                    />
+                  </Suspense>
                 </div>
               </div>
             </div>

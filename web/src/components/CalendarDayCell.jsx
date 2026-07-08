@@ -19,8 +19,6 @@ const CalendarDayCell = memo(({ date, renderDay, renderEmpty }) => {
   // 精准订阅：只有当该日期的 events 引用变化时，组件才会重新渲染
   const events = useEventsForDate(date);
 
-  console.log(`[CalendarDayCell] Rendering ${date} with ${events.length} events`);
-
   // 使用传入的渲染函数
   if (events.length === 0) {
     return renderEmpty ? renderEmpty(date) : null;

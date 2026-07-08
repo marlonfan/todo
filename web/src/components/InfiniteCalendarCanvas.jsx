@@ -46,6 +46,8 @@ const INERTIA_STOP_VELOCITY = 0.0025; // px/ms
 const INERTIA_DECAY_PER_16MS = 0.955;
 const SNAP_TRANSITION_MS = 110;
 const NON_MONTH_MIN_SWITCH_PX = 22;
+const NOW_LINE_REFRESH_MS = 30 * 1000;
+const MIDNIGHT_REFRESH_FUZZ_MS = 1000;
 
 function clampDurationMinutes(start, end) {
   const s = dayjs(start);
@@ -75,6 +77,17 @@ function parseEventInTimezone(value, timezone) {
   return dayjs.tz(raw, timezone);
 }
 
+function getTodayDateKey(timezone) {
+  return dayjs().tz(timezone).format('YYYY-MM-DD');
+}
+
+function getMsUntilNextLocalDay(timezone) {
+  const now = dayjs().tz(timezone);
+  const nextDay = now.add(1, 'day').startOf('day');
+  const diffMs = nextDay.diff(now, 'millisecond');
+  return Math.max(1000, Math.min(diffMs + MIDNIGHT_REFRESH_FUZZ_MS, (25 * 60 * 60 * 1000)));
+}
+
 function resolveInclusiveEndDay(start, end) {
   let endDay = end.startOf('day');
   // Treat exact midnight as exclusive end for multi-day all-day events.
@@ -84,11 +97,9 @@ function resolveInclusiveEndDay(start, end) {
   return endDay;
 }
 
-function getAllDayEventDates(event, timezone) {
-  const start = parseEventInTimezone(event?.start, timezone);
+function getAllDayDatesForRange(start, rawEnd) {
   if (!start.isValid()) return [];
-  const rawEnd = event?.end ? parseEventInTimezone(event.end, timezone) : start.endOf('day');
-  const end = rawEnd.isValid() && rawEnd.isAfter(start) ? rawEnd : start.endOf('day');
+  const end = rawEnd?.isValid?.() && rawEnd.isAfter(start) ? rawEnd : start.endOf('day');
   const startDay = start.startOf('day');
   const endDay = resolveInclusiveEndDay(start, end);
   if (endDay.isBefore(startDay, 'day')) {
@@ -101,6 +112,15 @@ function getAllDayEventDates(event, timezone) {
     current = current.add(1, 'day');
   }
   return dates;
+}
+
+function buildParsedEventTiming(event, timezone) {
+  const start = parseEventInTimezone(event?.start, timezone);
+  const rawEnd = event?.end ? parseEventInTimezone(event.end, timezone) : null;
+  const validEnd = rawEnd?.isValid?.() && rawEnd.isAfter(start) ? rawEnd : null;
+  const timedEnd = start.isValid() ? (validEnd || start.add(30, 'minute')) : dayjs('');
+  const allDayDates = event?.allDay ? getAllDayDatesForRange(start, validEnd) : [];
+  return { start, timedEnd, allDayDates };
 }
 
 function isReadonlyEvent(event) {
@@ -203,7 +223,8 @@ export default function InfiniteCalendarCanvas({
   }));
   const [offsetPx, setOffsetPx] = useState(0);
   const [eventGestureLocked, setEventGestureLocked] = useState(false);
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [todayDateKey, setTodayDateKey] = useState(() => getTodayDateKey(timezone));
+  const [nowLineTick, setNowLineTick] = useState(() => Date.now());
   const [showChineseHolidays, setShowChineseHolidays] = useState(() => getShowChineseHolidays());
   const dayColumns = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const monthDayCellWidth = useMemo(
@@ -235,10 +256,6 @@ export default function InfiniteCalendarCanvas({
   const timelineHeight = timeGridBodyTop + TIMEGRID_BODY_HEIGHT;
   const timelineScrollableHeight = timelineHeight + timelineBottomSpacer;
   const snapMinutes = Math.max(5, Number.parseInt(timeGranularity, 10) || 30);
-  const todayDateKey = useMemo(
-    () => dayjs(nowTick).tz(timezone).format('YYYY-MM-DD'),
-    [nowTick, timezone],
-  );
   const eventEntries = useMemo(() => {
     const list = Array.isArray(events) ? events : [];
     const seen = new Map();
@@ -247,9 +264,9 @@ export default function InfiniteCalendarCanvas({
       const duplicateIndex = seen.get(baseKey) || 0;
       seen.set(baseKey, duplicateIndex + 1);
       const key = duplicateIndex === 0 ? baseKey : `${baseKey}#${duplicateIndex}`;
-      return { key, event };
+      return { key, event, ...buildParsedEventTiming(event, timezone) };
     });
-  }, [events]);
+  }, [events, timezone]);
   const eventByKey = useMemo(() => {
     const index = new Map();
     eventEntries.forEach((entry) => {
@@ -444,12 +461,46 @@ export default function InfiniteCalendarCanvas({
     return unsubscribe;
   }, []);
 
+  const refreshTodayDateKey = useCallback(() => {
+    setTodayDateKey((prev) => {
+      const next = getTodayDateKey(timezone);
+      return prev === next ? prev : next;
+    });
+  }, [timezone]);
+
   useEffect(() => {
+    let timer = 0;
+    const scheduleNextRefresh = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(refreshToday, getMsUntilNextLocalDay(timezone));
+    };
+    const refreshToday = () => {
+      refreshTodayDateKey();
+      scheduleNextRefresh();
+    };
+    const refreshWhenForegrounded = () => {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      refreshTodayDateKey();
+      scheduleNextRefresh();
+    };
+    refreshToday();
+    document.addEventListener('visibilitychange', refreshWhenForegrounded);
+    window.addEventListener('focus', refreshWhenForegrounded);
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', refreshWhenForegrounded);
+      window.removeEventListener('focus', refreshWhenForegrounded);
+    };
+  }, [refreshTodayDateKey, timezone]);
+
+  useEffect(() => {
+    if (isMonthView) return undefined;
+    setNowLineTick(Date.now());
     const timer = window.setInterval(() => {
-      setNowTick(Date.now());
-    }, 30 * 1000);
+      setNowLineTick(Date.now());
+    }, NOW_LINE_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isMonthView]);
 
   const commitOffsetPx = useCallback((nextOffset) => {
     if (!Number.isFinite(nextOffset)) return;
@@ -1424,7 +1475,7 @@ export default function InfiniteCalendarCanvas({
       );
     }
 
-    const nowLocal = dayjs(nowTick).tz(timezone);
+    const nowLocal = dayjs(nowLineTick).tz(timezone);
     const displayStart = reference.add(Math.floor(cameraSteps), 'day').startOf('day');
     const displayEndExclusive = displayStart.add(dayColumns, 'day');
     const showNowLine = (nowLocal.isAfter(displayStart) || nowLocal.isSame(displayStart))
@@ -1439,11 +1490,9 @@ export default function InfiniteCalendarCanvas({
     const renderWindowEndExclusive = reference.add(endIndex, 'day').startOf('day');
 
     const timedSegments = [];
-    eventEntries.forEach(({ key: eventKey, event }) => {
-      const start = parseEventInTimezone(event?.start, timezone);
+    eventEntries.forEach(({ key: eventKey, event, start, timedEnd }) => {
       if (!start.isValid() || event?.allDay) return;
-      const rawEnd = event?.end ? parseEventInTimezone(event.end, timezone) : start.add(30, 'minute');
-      const end = rawEnd.isAfter(start) ? rawEnd : start.add(30, 'minute');
+      const end = timedEnd;
 
       let cursor = start.startOf('day');
       while (cursor.isBefore(end)) {
@@ -1709,12 +1758,10 @@ export default function InfiniteCalendarCanvas({
     const allDayMoreIndicators = [];
     const allDayByDay = new Map();
 
-    eventEntries.forEach(({ key: eventKey, event }) => {
+    eventEntries.forEach(({ key: eventKey, event, start, allDayDates }) => {
       if (!event?.allDay) return;
-      const start = parseEventInTimezone(event?.start, timezone);
       if (!start.isValid()) return;
-      const dates = getAllDayEventDates(event, timezone);
-      dates.forEach((date) => {
+      allDayDates.forEach((date) => {
         const dayKey = date.format('YYYY-MM-DD');
         const list = allDayByDay.get(dayKey) || [];
         list.push({ eventKey, event, start, dayKey });
@@ -1949,12 +1996,10 @@ export default function InfiniteCalendarCanvas({
     }
 
     const byCell = new Map();
-    eventEntries.forEach(({ key: eventKey, event }) => {
-      const start = parseEventInTimezone(event?.start, timezone);
+    eventEntries.forEach(({ key: eventKey, event, start, allDayDates }) => {
       if (!start.isValid()) return;
       if (event?.allDay) {
-        const dates = getAllDayEventDates(event, timezone);
-        dates.forEach((date) => {
+        allDayDates.forEach((date) => {
           const weekIndex = date.startOf('week').diff(monthNativeStartWeek, 'week');
           if (weekIndex < 0 || weekIndex >= monthNativeWeeksCount) return;
           const day = date.day();

@@ -116,6 +116,65 @@ test('replaceFetchedSegments batches multiple segment updates', () => {
   assert.equal(next.metadata.loadedRanges.length, 2);
 });
 
+test('range event map snapshot stays stable when unrelated days change', () => {
+  const store = useCalendarCacheStore.getState();
+
+  store.replaceFetchedSegments([
+    {
+      start: '2026-03-01T00:00:00.000Z',
+      end: '2026-03-04T00:00:00.000Z',
+      timezone: 'UTC',
+      eventsByDate: {
+        '2026-03-01': [makeEvent('s1', 'S1', '2026-03-01T08:00:00.000Z')],
+        '2026-03-02': [makeEvent('s2', 'S2', '2026-03-02T08:00:00.000Z')],
+      },
+    },
+  ]);
+
+  const first = store.getEventsMapForRange(
+    '2026-03-01T00:00:00.000Z',
+    '2026-03-03T00:00:00.000Z',
+    'UTC',
+  );
+
+  store.replaceFetchedSegments([
+    {
+      start: '2026-04-01T00:00:00.000Z',
+      end: '2026-04-02T00:00:00.000Z',
+      timezone: 'UTC',
+      eventsByDate: {
+        '2026-04-01': [makeEvent('outside', 'Outside', '2026-04-01T08:00:00.000Z')],
+      },
+    },
+  ]);
+
+  const afterUnrelatedChange = store.getEventsMapForRange(
+    '2026-03-01T00:00:00.000Z',
+    '2026-03-03T00:00:00.000Z',
+    'UTC',
+  );
+  assert.equal(afterUnrelatedChange, first);
+
+  store.replaceFetchedSegments([
+    {
+      start: '2026-03-02T00:00:00.000Z',
+      end: '2026-03-03T00:00:00.000Z',
+      timezone: 'UTC',
+      eventsByDate: {
+        '2026-03-02': [makeEvent('s2b', 'S2 changed', '2026-03-02T09:00:00.000Z')],
+      },
+    },
+  ]);
+
+  const afterVisibleChange = store.getEventsMapForRange(
+    '2026-03-01T00:00:00.000Z',
+    '2026-03-03T00:00:00.000Z',
+    'UTC',
+  );
+  assert.notEqual(afterVisibleChange, first);
+  assert.equal(afterVisibleChange['2026-03-02'][0].id, 's2b');
+});
+
 test('removeTaskEvents keeps read-only subscription events visible', () => {
   const store = useCalendarCacheStore.getState();
 

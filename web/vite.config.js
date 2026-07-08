@@ -41,7 +41,10 @@ export default defineConfig({
           if (packageName?.startsWith('@fullcalendar/') || packageName === 'rrule' || packageName === 'lunar-javascript') {
             return 'vendor-calendar';
           }
-          if (packageName === 'vditor' || packageName === 'react-datepicker' || packageName === 'date-fns') {
+          if (packageName === 'vditor') {
+            return 'vendor-vditor';
+          }
+          if (packageName === 'react-datepicker' || packageName === 'date-fns') {
             return 'vendor-editor';
           }
           if (packageName?.startsWith('@radix-ui/') || packageName === 'lucide-react') {

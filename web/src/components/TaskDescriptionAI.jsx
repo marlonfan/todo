@@ -2,9 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Bot, Check, Copy, Wand2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import Vditor from 'vditor';
-import 'vditor/dist/index.css';
-import vditorLuteUrl from 'vditor/dist/js/lute/lute.min.js?url';
 import {
   AI_CONFIG_REQUIRED_CODE,
   cleanGeneratedTaskDescription,
@@ -13,8 +10,9 @@ import {
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 
 let vditorLuteScriptPromise = null;
+let vditorMarkdownRuntimePromise = null;
 
-function ensureVditorLuteScript() {
+function ensureVditorLuteScript(vditorLuteUrl) {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     return Promise.resolve();
   }
@@ -45,6 +43,20 @@ function ensureVditorLuteScript() {
   });
 
   return vditorLuteScriptPromise;
+}
+
+async function loadVditorMarkdownRuntime() {
+  if (!vditorMarkdownRuntimePromise) {
+    vditorMarkdownRuntimePromise = Promise.all([
+      import('vditor'),
+      import('vditor/dist/index.css'),
+      import('vditor/dist/js/lute/lute.min.js?url'),
+    ]).then(async ([vditorModule, , luteModule]) => {
+      await ensureVditorLuteScript(luteModule.default);
+      return vditorModule.default;
+    });
+  }
+  return vditorMarkdownRuntimePromise;
 }
 
 const TASK_AI_MARKDOWN_OPTIONS = {
@@ -81,7 +93,7 @@ export function TaskAIMarkdownPreview({ value, fallback }) {
 
     const renderMarkdown = async () => {
       try {
-        await ensureVditorLuteScript();
+        const Vditor = await loadVditorMarkdownRuntime();
         const html = await Vditor.md2html(text, TASK_AI_MARKDOWN_OPTIONS);
         if (cancelled || renderIDRef.current !== renderID || !previewRef.current) return;
         previewRef.current.innerHTML = html;

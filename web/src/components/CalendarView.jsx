@@ -549,7 +549,6 @@ function CalendarView() {
     // Expand the pool to cover the new range, never shrink
     setCalendarPool((prevPool) => {
       const expandedPool = expandCalendarPool(prevPool, dateRange.start, dateRange.end);
-      console.log('[Pool] Expanding from', prevPool?.start?.substring(0, 10), '-', prevPool?.end?.substring(0, 10), 'to', expandedPool.start.substring(0, 10), '-', expandedPool.end.substring(0, 10));
       return expandedPool;
     });
   }, [dateRange.end, dateRange.start]);

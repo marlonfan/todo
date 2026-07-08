@@ -37,6 +37,7 @@ import {
 } from '../state/syncConflictCenter';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { formatDateTime } from '../utils/time';
+import useCalendarCacheStore from '../stores/calendarCacheStore';
 
 const CalendarView = lazy(() => import('./CalendarView'));
 const TaskList = lazy(() => import('./TaskList'));
@@ -421,6 +422,7 @@ function MainLayout({ user, setUser }) {
   const initialRedirectConsumedRef = useRef(false);
 
   const handleLogout = () => {
+    useCalendarCacheStore.getState().clear();
     getTokenStore().remove();
     localStorage.removeItem('user');
     setUser(null);

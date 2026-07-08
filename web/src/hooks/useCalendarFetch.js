@@ -398,7 +398,10 @@ export function useEventsForDate(dateString, timezone = 'UTC') {
 export function useEventsForRange(startDate, endDate, timezone) {
   const timezoneName = String(timezone || 'UTC');
   return useCalendarCacheStore(
-    useCallback((state) => state.getEventsMapForTimezone(timezoneName), [timezoneName]),
+    useCallback(
+      (state) => state.getEventsMapForRange(startDate, endDate, timezoneName),
+      [endDate, startDate, timezoneName],
+    ),
   );
 }
 
