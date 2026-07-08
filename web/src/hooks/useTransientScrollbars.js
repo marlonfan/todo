@@ -16,12 +16,23 @@ function isScrollable(node) {
   return node.scrollHeight - node.clientHeight > 1;
 }
 
+function shouldSkipTransientScrollbar(node) {
+  const windowHost = getWindowHost(node);
+  const coarsePointer = windowHost.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches === true;
+  const narrowViewport = windowHost.matchMedia?.('(max-width: 767px)')?.matches === true;
+  if (coarsePointer) return true;
+  return narrowViewport && !!node.closest?.('.mobile-scrollbar-hidden');
+}
+
 export function attachTransientScrollbar(node, {
   className = 'is-scrolling',
   baseClassName = 'editor-scrollbar-overlay',
   timeout = 720,
 } = {}) {
   if (!node || typeof node.addEventListener !== 'function' || !node.classList) {
+    return () => {};
+  }
+  if (shouldSkipTransientScrollbar(node)) {
     return () => {};
   }
 

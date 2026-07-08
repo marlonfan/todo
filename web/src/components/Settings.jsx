@@ -46,6 +46,7 @@ import {
 } from '../platform/desktopUpdates';
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
+import { useConfirmDialog } from './ui/useConfirmDialog';
 import { aiConfigAPI, authAPI, caldavAPI } from '../api/client';
 import {
   forceManualSync,
@@ -217,6 +218,11 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const { data: categories = [] } = useCategoriesQuery();
   const [saveToast, setSaveToast] = useState(null);
   const toastTimerRef = useRef(null);
+  const { requestConfirm, confirmDialog } = useConfirmDialog({
+    title: t('common.confirm'),
+    cancelLabel: t('common.cancel'),
+    confirmLabel: t('common.confirm'),
+  });
   const defaultReminderOptions = buildReminderOptions(defaultTimeGranularity, defaultReminderMinutes);
 
   const showToast = (type, message) => {
@@ -703,7 +709,10 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   };
 
   const handleRebuildSync = async () => {
-    if (!window.confirm(t('settings.syncRebuildConfirm'))) return;
+    const confirmed = await requestConfirm(t('settings.syncRebuildConfirm'), {
+      confirmVariant: 'destructive',
+    });
+    if (!confirmed) return;
 
     setSyncBusy(true);
     try {
@@ -885,7 +894,11 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   };
 
   const handleCaldavDelete = async (sourceID) => {
-    if (!window.confirm(t('settings.caldav.deleteConfirm'))) return;
+    const confirmed = await requestConfirm(t('settings.caldav.deleteConfirm'), {
+      confirmLabel: t('common.delete'),
+      confirmVariant: 'destructive',
+    });
+    if (!confirmed) return;
     setCaldavBusy(true);
     try {
       await caldavAPI.deleteSource(sourceID);
@@ -1023,7 +1036,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
             </div>
           )}
           {/* Tab Navigation */}
-          <div className={`${modal ? 'settings-tabs mb-5 md:hidden' : 'settings-tabs'}`}>
+          <div className={`${modal ? 'settings-tabs settings-tabs-mobile-only mb-5' : 'settings-tabs'}`}>
             <button
               onClick={() => setActiveTab('account')}
               className={`settings-tab-btn ${
@@ -1908,6 +1921,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           )}
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

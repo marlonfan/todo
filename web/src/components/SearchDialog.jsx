@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { IconSearch } from './icons/TaskIcons';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 function SearchDialog({ open, initialQuery, onClose }) {
   const navigate = useNavigate();
@@ -36,6 +37,8 @@ function SearchDialog({ open, initialQuery, onClose }) {
     };
   }, [open, requestClose]);
 
+  useFocusTrap(open, dialogRef, { initialFocusRef: inputRef });
+
   if (!open) return null;
 
   const submit = () => {
@@ -50,6 +53,10 @@ function SearchDialog({ open, initialQuery, onClose }) {
       <div
         ref={dialogRef}
         className="w-full max-w-2xl rounded-lg border border-border bg-card shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('task.searchTasks')}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         onKeyDownCapture={(e) => {
           const isEscape = e.key === 'Escape' || e.key === 'Esc' || e.code === 'Escape' || e.keyCode === 27;
@@ -92,11 +99,6 @@ function SearchDialog({ open, initialQuery, onClose }) {
                 if (!isEscape) return;
                 e.preventDefault();
                 e.stopPropagation();
-                requestClose();
-              }}
-              onBlur={(e) => {
-                const next = e.relatedTarget;
-                if (next && dialogRef.current && dialogRef.current.contains(next)) return;
                 requestClose();
               }}
               placeholder={t('task.searchPlaceholder')}

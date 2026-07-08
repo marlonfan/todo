@@ -49,6 +49,7 @@ import {
 import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
+import EditorLoadingSkeleton from './EditorLoadingSkeleton';
 import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
 import { RecurrencePanel } from './task/RecurrencePanel';
 import { getTaskInstanceID, getTaskModalSessionKey, getTaskMutationID } from './taskModalSession';
@@ -2513,7 +2514,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                     disabled={loading}
                     compact
                   />
-                  <Suspense fallback={<div className="min-h-0 min-w-0 flex-1 overflow-hidden bg-card" />}>
+                  <Suspense fallback={<EditorLoadingSkeleton />}>
                     <LiveMarkdownEditor
                       ref={descriptionEditorRef}
                       key={isEditing ? `task-editor-${task?.id || 0}` : 'task-editor-new'}

@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import TaskModal from './TaskModal';
 import InfiniteCalendarCanvas from './InfiniteCalendarCanvas';
+import ConfirmDialog from './ui/ConfirmDialog';
+import InlineErrorState from './ui/InlineErrorState';
 import dayjs from 'dayjs';
 import { getUserTimeGranularity, getUserTimezone } from '../utils/time';
 import { toServerRangeBoundary } from '../utils/syncTime';
@@ -212,7 +214,11 @@ function normalizeReadonlyPeople(list) {
 function CalendarView() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
-  const { data: tasksForProjection = [] } = useTasksQuery();
+  const {
+    data: tasksForProjection = [],
+    error: tasksProjectionError,
+    refetch: refetchProjectionTasks,
+  } = useTasksQuery();
   const calendarRef = useRef(null);
   const stripViewportRef = useRef(null);
   const stripDragRef = useRef({ active: false, startX: 0, deltaX: 0 });
@@ -295,6 +301,7 @@ function CalendarView() {
   const [hasCalendarDataLoaded, setHasCalendarDataLoaded] = useState(false);
   const [canvasAnchorDate, setCanvasAnchorDate] = useState(() => dayjs().tz(getUserTimezone()).format('YYYY-MM-DD'));
   const [canvasNudgeDirection, setCanvasNudgeDirection] = useState(0);
+  const [calendarDialog, setCalendarDialog] = useState(null);
   const timezoneRef = useRef(timezone);
 
   const timeGranularity = getUserTimeGranularity();
@@ -497,6 +504,35 @@ function CalendarView() {
     return dayjs(isoString).utc().toISOString();
   }, []);
 
+  const settleCalendarDialog = useCallback((accepted) => {
+    setCalendarDialog((current) => {
+      current?.resolve?.(accepted);
+      return null;
+    });
+  }, []);
+
+  const requestCalendarConfirm = useCallback((message) => new Promise((resolve) => {
+    setCalendarDialog({
+      kind: 'confirm',
+      title: t('common.confirm'),
+      message,
+      cancelLabel: t('common.cancel'),
+      confirmLabel: t('common.confirm'),
+      resolve,
+    });
+  }), [t]);
+
+  const showCalendarMessage = useCallback((message) => {
+    setCalendarDialog({
+      kind: 'message',
+      title: message,
+      message: '',
+      cancelLabel: '',
+      confirmLabel: t('common.confirm'),
+      resolve: null,
+    });
+  }, [t]);
+
   const resolveEventTaskDescription = useCallback((eventLike, cachedTask = null) => {
     const ext = eventLike?.extendedProps || {};
     const isRecurring = !!ext?.isRecurring;
@@ -524,7 +560,11 @@ function CalendarView() {
   /**
    * 1. 数据获取：使用 TanStack Query 获取数据，自动写入 CacheSet
    */
-  const { isLoading: calendarLoading } = useCalendarFetch(
+  const {
+    isLoading: calendarLoading,
+    error: calendarError,
+    refetch: refetchCalendar,
+  } = useCalendarFetch(
     calendarPool.start,
     calendarPool.end,
     timezone,
@@ -596,6 +636,14 @@ function CalendarView() {
       setHasCalendarDataLoaded(true);
     }
   }, [events.length, calendarLoading]);
+
+  const calendarLoadError = !!(calendarError || tasksProjectionError) && events.length === 0 && !calendarLoading;
+  const handleRetryCalendarLoad = useCallback(() => {
+    void Promise.all([
+      refetchCalendar?.(),
+      refetchProjectionTasks?.(),
+    ]);
+  }, [refetchCalendar, refetchProjectionTasks]);
 
   const handleDatesSet = (dateInfo) => {
     clearTimeout(datesSetTimerRef.current);
@@ -1151,7 +1199,7 @@ function CalendarView() {
     }
 
     if (!cachedTask) {
-      alert(t('calendar.loadTaskFailed'));
+      showCalendarMessage(t('calendar.loadTaskFailed'));
     }
   };
 
@@ -1194,9 +1242,9 @@ function CalendarView() {
     }
 
     if (!cachedTask) {
-      alert(t('calendar.loadTaskFailed'));
+      showCalendarMessage(t('calendar.loadTaskFailed'));
     }
-  }, [openReadonlyEventModal, queryClient, resolveEventTaskDescription, t, timezone]);
+  }, [openReadonlyEventModal, queryClient, resolveEventTaskDescription, showCalendarMessage, t, timezone]);
 
   const handleMoreLinkClick = useCallback((info) => {
     const allSegs = Array.isArray(info?.allSegs) ? info.allSegs : [];
@@ -1271,8 +1319,10 @@ function CalendarView() {
     const newEnd = info.event.end ? toServerISO(info.event.end) : null;
 
     if (isRecurring) {
-      if (!confirm(t('calendar.recurringMoveConfirm'))) {
+      const accepted = await requestCalendarConfirm(t('calendar.recurringMoveConfirm'));
+      if (!accepted) {
         info.revert();
+        clearTouchDragUIState();
         return;
       }
     }
@@ -1302,8 +1352,10 @@ function CalendarView() {
     const newEnd = info.event.end ? toServerISO(info.event.end) : null;
 
     if (isRecurring) {
-      if (!confirm(t('calendar.recurringResizeConfirm'))) {
+      const accepted = await requestCalendarConfirm(t('calendar.recurringResizeConfirm'));
+      if (!accepted) {
         info.revert();
+        clearTouchDragUIState();
         return;
       }
     }
@@ -1322,10 +1374,20 @@ function CalendarView() {
     }
   };
 
-  const handleCanvasEventMove = useCallback(async ({ event, start, end, allDay }) => {
+  const handleCanvasEventMove = useCallback(async ({ type, event, start, end, allDay }) => {
     if (!event || isReadOnlyCalendarEvent(event)) return;
     const taskId = Number(event?.extendedProps?.taskId || 0);
     if (!taskId) return;
+    const isRecurring = !!event?.extendedProps?.isRecurring;
+
+    if (isRecurring) {
+      const accepted = await requestCalendarConfirm(
+        type === 'resize'
+          ? t('calendar.recurringResizeConfirm')
+          : t('calendar.recurringMoveConfirm')
+      );
+      if (!accepted) return;
+    }
 
     try {
       await updateTaskScheduleLocal(queryClient, taskId, {
@@ -1336,7 +1398,7 @@ function CalendarView() {
     } catch (err) {
       console.error('Failed to move canvas event:', err);
     }
-  }, [queryClient]);
+  }, [queryClient, requestCalendarConfirm, t]);
 
   const handleModalClose = () => {
     setModalOpen(false);
@@ -1606,10 +1668,34 @@ function CalendarView() {
         </button>
       )}
 
-      {!hasCalendarDataLoaded && calendarLoading && events.length === 0 && (
+      {calendarLoadError && (
+        <div className="absolute inset-0 z-40 bg-card/90 backdrop-blur-[1px]">
+          <InlineErrorState
+            title={t('calendar.loadFailed')}
+            message={t('common.tryAgainHint')}
+            retryLabel={t('common.retry')}
+            onRetry={handleRetryCalendarLoad}
+            className="h-full min-h-0"
+          />
+        </div>
+      )}
+
+      {!calendarLoadError && !hasCalendarDataLoaded && calendarLoading && events.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-card/50 z-40">
           <div className="text-lg">{t('common.loading')}</div>
         </div>
+      )}
+
+      {calendarDialog && (
+        <ConfirmDialog
+          open
+          title={calendarDialog.title}
+          message={calendarDialog.message}
+          cancelLabel={calendarDialog.cancelLabel}
+          confirmLabel={calendarDialog.confirmLabel}
+          onCancel={() => settleCalendarDialog(false)}
+          onConfirm={() => settleCalendarDialog(true)}
+        />
       )}
 
       {modalOpen && (

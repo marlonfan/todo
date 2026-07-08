@@ -7,6 +7,7 @@ import { useCategoriesQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import { replaceCategories } from '../data/localStore';
 import Select from './ui/Select';
+import { useConfirmDialog } from './ui/useConfirmDialog';
 
 const EMOJI_OPTIONS = ['📁', '📌', '🧠', '💼', '📚', '🏠', '💡', '🛒', '🏃', '🎯', '💰', '❤️', '🎮', '✈️', '🍜', '🧹'];
 
@@ -18,6 +19,11 @@ function CategoryManager() {
   const [error, setError] = useState('');
   const [editingCategory, setEditingCategory] = useState(null);
   const { register, handleSubmit, reset, setValue, watch } = useForm();
+  const { requestConfirm, confirmDialog } = useConfirmDialog({
+    title: t('common.confirm'),
+    cancelLabel: t('common.cancel'),
+    confirmLabel: t('common.delete'),
+  });
 
   const persistCategoriesSnapshot = async () => {
     const snapshot = queryClient.getQueryData(queryKeys.categories.all);
@@ -84,7 +90,8 @@ function CategoryManager() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm(t('category.deleteConfirm'))) return;
+    const confirmed = await requestConfirm(t('category.deleteConfirm'), { confirmVariant: 'destructive' });
+    if (!confirmed) return;
 
     setSubmitting(true);
     const previousCategories = queryClient.getQueryData(queryKeys.categories.all);
@@ -223,6 +230,7 @@ function CategoryManager() {
           </div>
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

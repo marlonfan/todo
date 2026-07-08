@@ -73,6 +73,8 @@ import { RecurrencePanel } from './task/RecurrencePanel';
 import TaskDescriptionAI from './TaskDescriptionAI';
 import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
+import EditorLoadingSkeleton from './EditorLoadingSkeleton';
+import InlineErrorState from './ui/InlineErrorState';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import {
   getTaskPrimaryLocalTime,
@@ -1308,7 +1310,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const location = routeLocation;
   const timezone = getUserTimezone();
   const timeGranularity = getUserTimeGranularity();
-  const { data: tasksRaw = [], isLoading: tasksLoading } = useTasksQuery();
+  const {
+    data: tasksRaw = [],
+    isLoading: tasksLoading,
+    error: tasksError,
+    refetch: refetchTasks,
+  } = useTasksQuery();
   const { data: categories = [] } = useCategoriesQuery();
   const [pinnedNextOccurrenceMap, setPinnedNextOccurrenceMap] = useState({});
   const pinnedNextOccurrenceMapRef = useRef(pinnedNextOccurrenceMap);
@@ -2449,6 +2456,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [listToolbarPanel]);
 
   const loading = tasksLoading && tasks.length === 0;
+  const taskLoadError = !!tasksError && tasks.length === 0;
 
   useEffect(() => {
     if (view === 'search') {
@@ -5175,7 +5183,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 transform: taskPullRefreshDistance > 0 ? `translate3d(0, ${taskPullRefreshDistance}px, 0)` : undefined,
               }}
             >
-              {loading ? (
+              {taskLoadError ? (
+                <InlineErrorState
+                  title={t('task.loadFailed')}
+                  message={t('common.tryAgainHint')}
+                  retryLabel={t('common.retry')}
+                  onRetry={() => { void refetchTasks(); }}
+                />
+              ) : loading ? (
                 <TaskListSkeleton />
               ) : filteredTasks.length === 0 ? (
                 <TaskListEmptyState
@@ -5828,7 +5843,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     onApply={handleApplyAIDraftDescription}
                     disabled={selectedTask.read_only}
                   />
-                  <Suspense fallback={<div className="min-h-0 min-w-0 flex-1 overflow-hidden bg-card" />}>
+                  <Suspense fallback={<EditorLoadingSkeleton />}>
                     <LiveMarkdownEditor
                       ref={draftDescriptionEditorRef}
                       key={`task-editor-${selectedTask.id}`}
@@ -5844,6 +5859,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                       className="min-h-0 min-w-0 flex-1 overflow-hidden"
                       fill
                       minHeight={280}
+                      typewriterMode={!isMobileViewport}
                     />
                   </Suspense>
                 </div>

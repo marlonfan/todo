@@ -9,6 +9,7 @@ import { queryKeys } from '../query/keys';
 import { AI_CONFIG_REQUIRED_CODE, cleanGeneratedTaskDescription, generateAIResponse } from '../utils/aiTaskDescription';
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { TaskAIMarkdownPreview } from './TaskDescriptionAI';
+import { useConfirmDialog } from './ui/useConfirmDialog';
 
 const EMPTY_FORM = {
   title: '',
@@ -64,6 +65,11 @@ function PromptManager() {
   const [asking, setAsking] = useState(false);
   const [askStreamStatus, setAskStreamStatus] = useState('idle');
   const [askCopied, setAskCopied] = useState(false);
+  const { requestConfirm, confirmDialog } = useConfirmDialog({
+    title: t('common.confirm'),
+    cancelLabel: t('common.cancel'),
+    confirmLabel: t('common.delete'),
+  });
   const askControllerRef = useRef(null);
   const outputScrollCleanupRef = useRef(null);
   const historyScrollCleanupRefs = useRef(new Map());
@@ -347,7 +353,8 @@ function PromptManager() {
   };
 
   const handleDelete = async (prompt) => {
-    if (!confirm(t('prompt.deleteConfirm'))) return;
+    const confirmed = await requestConfirm(t('prompt.deleteConfirm'), { confirmVariant: 'destructive' });
+    if (!confirmed) return;
     setSubmitting(true);
     setError('');
     const previous = queryClient.getQueryData(queryKeys.prompts.all);
@@ -1015,6 +1022,7 @@ function PromptManager() {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

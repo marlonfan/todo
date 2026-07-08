@@ -1,9 +1,11 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { authAPI, getToken, getTokenStore } from './api/client';
 import { tokenReady } from './platform/init';
 import { setUserTimezone } from './utils/time';
 import { scheduleSync } from './data/syncEngine';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const Login = lazy(() => import('./components/Login'));
 const Register = lazy(() => import('./components/Register'));
@@ -38,6 +40,7 @@ function AppLoadingSkeleton() {
 }
 
 function App() {
+  const { t } = useTranslation();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -79,30 +82,37 @@ function App() {
   }
 
   return (
-    <Suspense fallback={<AppLoadingSkeleton />}>
-      <Routes>
-        <Route
-          path="/login"
-          element={user ? <Navigate to="/" /> : <Login setUser={setUser} />}
-        />
-        <Route
-          path="/register"
-          element={user ? <Navigate to="/" /> : <Register setUser={setUser} />}
-        />
-        <Route
-          path="/*"
-          element={
-            user ? (
-              <MainLayout user={user} setUser={setUser} />
-            ) : isNativeApp ? (
-              <Navigate to="/login" />
-            ) : (
-              <Landing />
-            )
-          }
-        />
-      </Routes>
-    </Suspense>
+    <ErrorBoundary
+      title={t('common.somethingWentWrong')}
+      message={t('common.reloadPageHint')}
+      resetLabel={t('common.tryAgain')}
+      reloadLabel={t('common.reload')}
+    >
+      <Suspense fallback={<AppLoadingSkeleton />}>
+        <Routes>
+          <Route
+            path="/login"
+            element={user ? <Navigate to="/" /> : <Login setUser={setUser} />}
+          />
+          <Route
+            path="/register"
+            element={user ? <Navigate to="/" /> : <Register setUser={setUser} />}
+          />
+          <Route
+            path="/*"
+            element={
+              user ? (
+                <MainLayout user={user} setUser={setUser} />
+              ) : isNativeApp ? (
+                <Navigate to="/login" />
+              ) : (
+                <Landing />
+              )
+            }
+          />
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 

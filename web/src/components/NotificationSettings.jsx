@@ -14,6 +14,7 @@ import {
 } from '../platform/localNotifications';
 import Select from './ui/Select';
 import { Checkbox } from './ui/Checkbox';
+import { useConfirmDialog } from './ui/useConfirmDialog';
 
 function NotificationSettings() {
   const { t } = useTranslation();
@@ -30,6 +31,11 @@ function NotificationSettings() {
   const [selectedChannel, setSelectedChannel] = useState('');
   const [config, setConfig] = useState({});
   const [newSettingDefault, setNewSettingDefault] = useState(false);
+  const { requestConfirm, confirmDialog } = useConfirmDialog({
+    title: t('common.confirm'),
+    cancelLabel: t('common.cancel'),
+    confirmLabel: t('common.confirm'),
+  });
 
   useEffect(() => {
     fetchSettings();
@@ -83,7 +89,11 @@ function NotificationSettings() {
   };
 
   const handleDeleteSetting = async (id) => {
-    if (!confirm(t('common.confirm'))) return;
+    const confirmed = await requestConfirm(t('common.confirm'), {
+      confirmLabel: t('common.delete'),
+      confirmVariant: 'destructive',
+    });
+    if (!confirmed) return;
 
     try {
       await notifyAPI.deleteSetting(id);
@@ -125,7 +135,8 @@ function NotificationSettings() {
   };
 
   const handleReconcileReminders = async () => {
-    if (!confirm(t('notification.reconcileConfirm'))) return;
+    const confirmed = await requestConfirm(t('notification.reconcileConfirm'));
+    if (!confirmed) return;
 
     setLoading(true);
     setError('');
@@ -516,6 +527,7 @@ function NotificationSettings() {
           {t('notification.rebuildRemindersBtn')}
         </button>
       </div>
+      {confirmDialog}
     </div>
   );
 }

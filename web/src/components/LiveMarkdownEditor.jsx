@@ -124,6 +124,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
   minHeight = 220,
   fill = false,
   className = '',
+  typewriterMode = false,
 }, ref) {
   const { i18n } = useTranslation();
   const mountRef = useRef(null);
@@ -297,7 +298,7 @@ const LiveMarkdownEditor = React.forwardRef(function LiveMarkdownEditor({
         toolbar: [],
         counter: { enable: false },
         undoDelay: 240,
-        typewriterMode: false,
+        typewriterMode,
         placeholder: placeholder || '',
         image: { isPreview: true },
         lang: String(i18n?.language || '').toLowerCase().startsWith('zh') ? 'zh_CN' : 'en_US',

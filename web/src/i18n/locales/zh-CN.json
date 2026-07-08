@@ -26,7 +26,13 @@
     "search": "搜索",
     "filter": "筛选",
     "more": "更多",
-    "all": "全部"
+    "all": "全部",
+    "retry": "重试",
+    "tryAgain": "再试一次",
+    "reload": "刷新",
+    "somethingWentWrong": "页面出了点问题",
+    "tryAgainHint": "请稍后重试，或刷新页面。",
+    "reloadPageHint": "请刷新页面，或先重试恢复当前界面。"
   },
   "auth": {
     "login": "登录",
@@ -91,6 +97,7 @@
     "showCompleted": "显示已完成",
     "hideCompleted": "隐藏已完成",
     "noTasks": "暂无任务",
+    "loadFailed": "任务加载失败",
     "createFirst": "创建您的第一个任务",
     "emptyTitle": "这里还没有任务",
     "emptyHint": "先添加一条任务，后续可以再补充时间、分类和重复规则。",
@@ -520,6 +527,7 @@
     "recurringMoveConfirm": "这是重复任务，修改将影响整个系列。确定继续吗？",
     "recurringResizeConfirm": "这是重复任务，修改将影响整个系列。确定继续吗？",
     "loadTaskFailed": "加载任务详情失败",
+    "loadFailed": "日历加载失败",
     "untitledEvent": "未命名日程",
     "externalSubscription": "外部订阅",
     "eventSourceFeishu": "飞书日程",

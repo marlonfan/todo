@@ -752,6 +752,12 @@ body {
   transform: scale(0.98);
 }
 
+@media (min-width: 768px) {
+  .settings-page .settings-tabs-mobile-only {
+    display: none !important;
+  }
+}
+
 .settings-password-card {
   border: 1px solid #edf2f7;
   border-radius: 18px;
@@ -4394,6 +4400,15 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
   .task-row-animate-complete-exit,
   .task-row-animate-complete-feedback,
   .task-row-animate-insert {

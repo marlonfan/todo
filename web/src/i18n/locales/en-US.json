@@ -26,7 +26,13 @@
     "search": "Search",
     "filter": "Filter",
     "more": "More",
-    "all": "All"
+    "all": "All",
+    "retry": "Retry",
+    "tryAgain": "Try again",
+    "reload": "Reload",
+    "somethingWentWrong": "Something went wrong",
+    "tryAgainHint": "Try again in a moment, or reload the page.",
+    "reloadPageHint": "Reload the page, or try recovering this view first."
   },
   "auth": {
     "login": "Login",
@@ -91,6 +97,7 @@
     "showCompleted": "Show Completed",
     "hideCompleted": "Hide Completed",
     "noTasks": "No tasks",
+    "loadFailed": "Failed to load tasks",
     "createFirst": "Create your first task",
     "emptyTitle": "No tasks here yet",
     "emptyHint": "Add a task now. You can refine its time, category, and recurrence later.",
@@ -520,6 +527,7 @@
     "recurringMoveConfirm": "This is a recurring task. The change affects the whole series. Continue?",
     "recurringResizeConfirm": "This is a recurring task. The change affects the whole series. Continue?",
     "loadTaskFailed": "Failed to load task details",
+    "loadFailed": "Failed to load calendar",
     "untitledEvent": "Untitled event",
     "externalSubscription": "External subscription",
     "eventSourceFeishu": "Feishu calendar",

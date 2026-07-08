@@ -1,4 +1,4 @@
-const CACHE_NAME = "todo-kimi-cache-v13";
+const CACHE_NAME = "todo-kimi-cache-v14";
 const STATIC_ASSETS = [
   "/index.html",
   "/manifest.webmanifest",
