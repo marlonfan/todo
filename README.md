@@ -91,6 +91,42 @@ docker build -t yourname/todo-app:latest .
 docker run --rm -p 8080:8080 yourname/todo-app:latest
 ```
 
+## CLI 与 AI Skill 安装
+
+Todo CLI 通过 npm 安装，AI 工具使用的 `todo-cli` skill 可以直接从 GitHub 用 `npx skills add` 安装。
+
+安装 CLI：
+
+```bash
+npm install -g @marlonfan/todo-app-cli
+todo-cli init --base-url https://your-todo-server.example.com
+todo-cli auth login --username alice --password secret123
+```
+
+从公开 GitHub 仓库安装 Codex skill：
+
+```bash
+npx skills add marlonfan/todo@todo-cli -g -a codex -y
+```
+
+如果仓库是私有的，并且本机有 GitHub SSH 权限：
+
+```bash
+npx skills add 'git@github.com:marlonfan/todo.git#main@todo-cli' -g -a codex -y
+```
+
+安装到所有支持的 AI agent：
+
+```bash
+npx skills add marlonfan/todo@todo-cli -g --agent '*' -y
+```
+
+查看仓库中可安装的 skills：
+
+```bash
+npx skills add marlonfan/todo --list
+```
+
 ## 配置
 
 配置文件 `config.yaml`：
@@ -106,7 +142,7 @@ database:
 
 jwt:
   secret: "your-secret-key"
-  expire: 72h
+  expire: 8760h # 365 days
 
 notify:
   check_interval: 60s  # 通知检查间隔
@@ -122,6 +158,8 @@ plugins:
   webhook:
     enabled: true
 ```
+
+JWT 默认有效期为 365 天；过期后 30 天内可通过 `/api/auth/refresh` 或 `todo-cli auth refresh` 换取新 token，超过刷新窗口后需要重新登录。
 
 ## 数据库配置
 

@@ -32,6 +32,8 @@ type JWTConfig struct {
 	Expire time.Duration `yaml:"expire"`
 }
 
+const DefaultJWTExpire = 365 * 24 * time.Hour
+
 type NotifyConfig struct {
 	CheckInterval time.Duration `yaml:"check_interval"`
 }
@@ -80,7 +82,7 @@ func Load(path string) (*Config, error) {
 		cfg.JWT.Secret = "default-secret-change-in-production"
 	}
 	if cfg.JWT.Expire == 0 {
-		cfg.JWT.Expire = 180 * 24 * time.Hour
+		cfg.JWT.Expire = DefaultJWTExpire
 	}
 	if cfg.Notify.CheckInterval == 0 {
 		cfg.Notify.CheckInterval = 60 * time.Second
@@ -104,7 +106,7 @@ func Default() *Config {
 		},
 		JWT: JWTConfig{
 			Secret: "default-secret-change-in-production",
-			Expire: 180 * 24 * time.Hour,
+			Expire: DefaultJWTExpire,
 		},
 		Notify: NotifyConfig{
 			CheckInterval: 60 * time.Second,

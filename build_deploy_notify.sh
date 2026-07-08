@@ -79,7 +79,7 @@ database:
   dsn: "${ROOT_DIR}/todo.db"
 jwt:
   secret: "default-secret-change-in-production"
-  expire: 72h
+  expire: 8760h
 notify:
   check_interval: 60s
 caldav:

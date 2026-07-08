@@ -116,6 +116,13 @@ function resolveBaseURL(flags, config = {}) {
   return { value: DEFAULT_BASE_URL, source: 'default' };
 }
 
+function resolveAuthToken(flags, config = {}) {
+  if (flags.token) return { value: String(flags.token), source: 'flag' };
+  if (process.env.TODO_TOKEN) return { value: process.env.TODO_TOKEN, source: 'env' };
+  if (config.token) return { value: String(config.token), source: 'config' };
+  return { value: '', source: 'none' };
+}
+
 function connectionHint(ctx) {
   const configure = 'Run `todo-cli init --base-url https://your-todo-server.example.com` or set TODO_BASE_URL.';
   if (ctx.baseUrlSource === 'default') {
@@ -360,7 +367,7 @@ function addQueryParams(url, query = {}) {
   }
 }
 
-async function apiRequest(ctx, method, path, { query, data, headers = {}, auth = true } = {}) {
+async function apiRequest(ctx, method, path, { query, data, headers = {}, auth = true, autoRefresh = true } = {}) {
   if (flagEnabled(ctx.flags, ['dry-run'])) {
     return {
       dry_run: true,
@@ -413,6 +420,15 @@ async function apiRequest(ctx, method, path, { query, data, headers = {}, auth =
 
   if (!response.ok) {
     const detail = typeof body === 'object' && body?.error ? body.error : text || response.statusText;
+    if (response.status === 401 && auth && autoRefresh && path !== '/auth/refresh' && ctx.token) {
+      const shouldSaveRefresh = ctx.tokenSource === 'config';
+      try {
+        await refreshAuthToken(ctx, { save: shouldSaveRefresh });
+        return apiRequest(ctx, method, path, { query, data, headers, auth, autoRefresh: false });
+      } catch {
+        // Keep the original endpoint error; it is more useful for callers.
+      }
+    }
     throw new CliError(`HTTP ${response.status}: ${detail}`, response.status >= 500 ? 2 : 1);
   }
 
@@ -558,15 +574,37 @@ function printResult(result, flags = {}) {
 async function makeContext(flags) {
   const config = await readConfig(flags);
   const baseURL = resolveBaseURL(flags, config);
+  const authToken = resolveAuthToken(flags, config);
   return {
     flags,
     config,
     baseUrlSource: baseURL.source,
     serverBase: normalizeServerBaseURL(baseURL.value),
     apiBase: normalizeBaseURL(baseURL.value),
-    token: String(flags.token || process.env.TODO_TOKEN || config.token || ''),
+    token: authToken.value,
+    tokenSource: authToken.source,
     timeoutMs: parseTimeoutMS(flags, config),
   };
+}
+
+async function storeAuthToken(ctx, token) {
+  const next = { ...ctx.config, baseUrl: ctx.serverBase, token };
+  await writeConfig(next, ctx.flags);
+  ctx.config = next;
+  ctx.tokenSource = 'config';
+}
+
+async function refreshAuthToken(ctx, { save = false } = {}) {
+  const result = await apiRequest(ctx, 'POST', '/auth/refresh', { autoRefresh: false });
+  if (result?.dry_run) return result;
+  if (!result?.token) throw new CliError('refresh response missing token');
+  ctx.token = String(result.token);
+  if (save) {
+    await storeAuthToken(ctx, ctx.token);
+  } else {
+    ctx.tokenSource = 'refresh';
+  }
+  return result;
 }
 
 async function checkHealth(ctx) {
@@ -680,6 +718,9 @@ async function handleAuth(ctx, args) {
       await writeConfig({ ...ctx.config, baseUrl: ctx.serverBase, token: result.token, user: result.user }, ctx.flags);
     }
     return result;
+  }
+  if (action === 'refresh') {
+    return refreshAuthToken(ctx, { save: flagEnabled(ctx.flags, ['save'], true) });
   }
   if (action === 'register') {
     const data = {
@@ -1029,7 +1070,7 @@ async function handleDoctor(ctx) {
       report.auth.ok = true;
     } catch (err) {
       report.auth.error = err.message;
-      report.recommendations.push('Refresh credentials with `todo-cli auth login --username USER --password PASS`.');
+      report.recommendations.push('Refresh credentials with `todo-cli auth refresh`, or login again with `todo-cli auth login --username USER --password PASS` if the refresh window expired.');
     }
   }
 
@@ -1076,6 +1117,7 @@ First run:
 Auth:
   todo-cli auth register --username u --email u@example.com --password secret123
   todo-cli auth login --username u --password secret123
+  todo-cli auth refresh
   todo-cli auth status
   todo-cli auth logout
 
@@ -1281,12 +1323,15 @@ Examples:
   todo-cli auth register --username alice --email alice@example.com --password secret123
   todo-cli auth login --username alice --password secret123
   todo-cli auth login --username alice --password secret123 --no-save
+  todo-cli auth refresh
+  todo-cli auth refresh --no-save
   todo-cli auth status
   todo-cli auth me
   todo-cli auth logout
 
 Notes:
   Login stores token and user in ~/.todo-cli/config.json unless --no-save is passed.
+  auth refresh exchanges the stored or TODO_TOKEN bearer token for a new token and saves it unless --no-save is passed.
   auth me includes timezone and default reminder fields such as default_reminder_enabled and default_reminder_minutes.
 `;
 }

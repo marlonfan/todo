@@ -27,7 +27,7 @@ type AuthService struct {
 	jwtExpire time.Duration
 }
 
-const RefreshGracePeriod = 7 * 24 * time.Hour
+const RefreshGracePeriod = 30 * 24 * time.Hour
 
 func NewAuthService(userRepo *repository.UserRepository, cfg *config.JWTConfig) *AuthService {
 	return &AuthService{

@@ -140,10 +140,17 @@ todo-cli doctor
 ```bash
 todo-cli auth register --username alice --email alice@example.com --password secret123
 todo-cli auth login --username alice --password secret123
+todo-cli auth refresh
 todo-cli auth status
 todo-cli auth me
 todo-cli auth logout
 ```
+
+`auth refresh` exchanges the stored bearer token for a new token and saves it back to
+`~/.todo-cli/config.json` unless `--no-save` is passed. Resource commands automatically
+try one refresh and retry when a bearer token gets a 401 response; refreshed config-file
+tokens are saved back. If the refresh window has expired, log in again. The server refresh
+window is 30 days after token expiry.
 
 ### Tasks
 
@@ -226,6 +233,11 @@ Use `task detail` for user-facing "today/current/calendar/task detail" questions
 the effective record under `effective`; for recurring tasks that is the visible occurrence when
 one exists. Use `task get` only when you explicitly need the recurring series body, template,
 revision, or recurrence rule.
+
+When summarizing unfinished work, do not treat the `start_time` on a recurring series returned by
+`task list --status pending` as an overdue unfinished instance. For recurring tasks, use
+`task next-occurrences --task-id ID`, `task today --include-occurrences`, or `task detail ID --date YYYY-MM-DD`
+to identify the actual visible pending occurrence.
 
 If the user did not provide an ID, list today's visible records first:
 

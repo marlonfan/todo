@@ -72,7 +72,8 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - Use `todo_cli health` only when you need a narrow server liveness check.
 - If health fails against `127.0.0.1:8080`, ask for the user's Todo server URL and run `todo_cli init --base-url URL`.
 - Check auth with `todo_cli auth status`.
-- If unauthenticated, ask the user for credentials or use `TODO_TOKEN` if they provided one.
+- If unauthenticated or a command returns `HTTP 401: invalid or expired token`, run `todo_cli auth refresh` once, then retry the original command. If refresh fails with an expired refresh window or invalid token, ask the user to log in again or provide `TODO_TOKEN`.
+- Resource commands automatically attempt one refresh/retry when a bearer token gets a 401; refreshed config-file tokens are saved back. Still use `todo_cli auth refresh` explicitly when diagnosing auth.
 - Use `--format json` by default for machine parsing.
 - Use `--format table` only for human-facing summaries.
 - Use `--dry-run` before destructive or broad updates.
@@ -83,6 +84,7 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - For large raw API payloads, write JSON to a temporary file and pass `--data-file PATH`.
 - For user-facing detail questions such as "今天的任务详情", "当日任务", "当前页面这个任务", "日历里这个任务", or "看看详情", use `task detail ID` instead of `task get ID`.
 - For recurring tasks, `task detail ID` returns the effective visible record under `effective`; `task get ID` reads the series body only. Use `task get ID` when the user asks about the recurring template, series defaults, revision, recurrence rule, or future default behavior.
+- `task list --status pending` returns pending recurring series templates. For recurring rows, do not treat the series `start_time` as an unfinished historical occurrence. Confirm the visible pending instance with `task today --include-occurrences`, `task next-occurrences --task-id ID`, or `task detail ID --date YYYY-MM-DD` before calling a recurring task overdue or listing a past date as pending.
 - If the user asks about today's tasks without an ID, start with `task today --include-occurrences` so recurring instances are included in the candidate list.
 - If the user is looking at a specific calendar/today occurrence, prefer `task detail ID --date YYYY-MM-DD`; update the displayed instance with `task update ID --occurrence-date YYYY-MM-DD` when needed.
 - For reminders, check `todo_cli auth me` and `todo_cli notify settings` before promising delivery. Creating a scheduled task only auto-generates reminders when the user's `default_reminder_enabled` is true and a default notify setting exists.
@@ -101,12 +103,14 @@ todo_cli init --base-url https://your-todo-server.example.com
 
 ```bash
 todo_cli auth login --username USER --password PASS
+todo_cli auth refresh
 todo_cli auth status
 todo_cli auth me
 todo_cli auth logout
 ```
 
 Login stores the token in `~/.todo-cli/config.json` unless `--no-save` is passed.
+`auth refresh` exchanges the stored bearer token for a new token and saves it unless `--no-save` is passed. The server accepts expired tokens for refresh up to 30 days after expiry; after that, login is required.
 Use `todo_cli auth --help` for auth/profile examples.
 
 ### List Tasks
@@ -117,6 +121,7 @@ todo_cli task list --category-id 3
 todo_cli task get 42
 todo_cli task detail 42
 todo_cli task today --include-occurrences
+todo_cli task next-occurrences --task-id 42
 todo_cli +today
 todo_cli +inbox
 ```
@@ -126,6 +131,8 @@ Use `--summary=false` to return full task records:
 ```bash
 todo_cli task list --summary=false
 ```
+
+For "all unfinished tasks" summaries, separate non-recurring pending tasks from recurring series. Use the next visible occurrence date for recurring tasks, not the series anchor/start date, and avoid labeling old completed recurring instances as overdue.
 
 ### Create Tasks
 

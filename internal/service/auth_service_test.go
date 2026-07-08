@@ -128,6 +128,43 @@ func TestUpdatePasswordRequiresCurrentPasswordAndUpdatesHash(t *testing.T) {
 	}
 }
 
+func TestRefreshTokenFromRawAcceptsRecentlyExpiredToken(t *testing.T) {
+	authSvc, _, userID := newAuthServiceTestContext(t)
+	token, err := utils.GenerateToken(userID, "auth_service_user", "test-secret", -time.Hour)
+	if err != nil {
+		t.Fatalf("generate expired token: %v", err)
+	}
+
+	refreshed, err := authSvc.RefreshTokenFromRaw(token)
+	if err != nil {
+		t.Fatalf("refresh recently expired token: %v", err)
+	}
+
+	claims, err := utils.ParseToken(refreshed, "test-secret")
+	if err != nil {
+		t.Fatalf("parse refreshed token: %v", err)
+	}
+	if claims.UserID != userID {
+		t.Fatalf("refreshed token user_id=%d want=%d", claims.UserID, userID)
+	}
+}
+
+func TestRefreshTokenFromRawRejectsExpiredTokenOutsideGraceWindow(t *testing.T) {
+	authSvc, _, userID := newAuthServiceTestContext(t)
+	token, err := utils.GenerateToken(userID, "auth_service_user", "test-secret", -(RefreshGracePeriod + time.Hour))
+	if err != nil {
+		t.Fatalf("generate expired token: %v", err)
+	}
+
+	_, err = authSvc.RefreshTokenFromRaw(token)
+	if err == nil {
+		t.Fatal("expected refresh window expired error")
+	}
+	if !strings.Contains(err.Error(), "refresh window expired") {
+		t.Fatalf("error=%q want refresh window expired", err.Error())
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

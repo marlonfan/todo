@@ -8,7 +8,7 @@ database:
 
 jwt:
   secret: "change-this-secret-in-production"
-  expire: 4320h # 180 days
+  expire: 8760h # 365 days
 
 notify:
   check_interval: 60s  # 通知检查间隔
