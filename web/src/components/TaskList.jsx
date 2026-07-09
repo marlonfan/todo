@@ -714,6 +714,53 @@ function resolveTaskDisplayTime(task, timeMode) {
   return getTaskPrimaryTime(task);
 }
 
+function getTaskPinnedAnchorTime(task) {
+  return String(task?.__pinned_sort_anchor_time || '').trim();
+}
+
+function getTaskSortPrimaryTime(task) {
+  return getTaskPinnedAnchorTime(task) || getTaskPrimaryTime(task);
+}
+
+function buildPinnedAnchorTask(task) {
+  const anchorTime = getTaskPinnedAnchorTime(task);
+  if (!anchorTime) return null;
+  return {
+    ...task,
+    start_time: anchorTime,
+    startTime: anchorTime,
+    due_date: null,
+    dueDate: null,
+    status: 'pending',
+  };
+}
+
+function getTaskGroupingLocalTime(task, timezone) {
+  const anchorTask = buildPinnedAnchorTask(task);
+  if (anchorTask) {
+    return getTaskPrimaryLocalTime(anchorTask, timezone);
+  }
+  return getTaskPrimaryLocalTime(task, timezone);
+}
+
+function isTaskOverdueForGrouping(task, timezone) {
+  const anchorTask = buildPinnedAnchorTask(task);
+  if (anchorTask) {
+    return isTaskOverdue(anchorTask, timezone);
+  }
+  return isTaskOverdue(task, timezone);
+}
+
+function shouldKeepPinnedOccurrenceInView(task, viewKey, view, timezone, reference) {
+  if (!task?.__pinned_next_occurrence) return false;
+  if (String(task?.__pinned_view_key || '') !== String(viewKey || '')) return false;
+  const anchorTask = buildPinnedAnchorTask(task);
+  if (!anchorTask) return false;
+  if (view === 'today') return shouldIncludeTaskInTodayView(anchorTask, timezone, reference);
+  if (view === 'upcoming') return shouldIncludeTaskInUpcomingView(anchorTask, timezone, reference);
+  return false;
+}
+
 function resolveTaskOccurrenceDate(task, timezone) {
   const explicit = String(task?.occurrence_date || task?.occurrenceDate || '').trim();
   if (explicit) {
@@ -936,8 +983,8 @@ function sortTasksByOption(inputTasks, sortBy, timezone) {
       if (pa !== pb) return sortBy === 'priority_desc' ? pb - pa : pa - pb;
     }
 
-    const ta = getTaskPrimaryTime(a);
-    const tb = getTaskPrimaryTime(b);
+    const ta = getTaskSortPrimaryTime(a);
+    const tb = getTaskSortPrimaryTime(b);
     const va = ta ? dayjs(ta).tz(timezone).valueOf() : Number.POSITIVE_INFINITY;
     const vb = tb ? dayjs(tb).tz(timezone).valueOf() : Number.POSITIVE_INFINITY;
     if (va !== vb) {
@@ -1481,7 +1528,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const recurrenceRule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
       if (!recurrenceRule) return [task];
       const taskID = Number(task?.id || 0);
-      let nextPending = pinnedNextOccurrenceMap[String(taskID)]?.nextPending || recurringNextPendingMap.get(taskID);
+      const pinnedOccurrence = pinnedNextOccurrenceMap[String(taskID)] || null;
+      let nextPending = pinnedOccurrence?.nextPending || recurringNextPendingMap.get(taskID);
       if (!nextPending && hasOptimisticOccurrenceStatusForTask(occurrenceStatusOptimisticMap, taskID)) {
         nextPending = buildNextPendingFromProjectedTask({
           task,
@@ -1496,11 +1544,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         return isTaskUnsyncedLocally(task) ? [task] : [];
       }
       const eventPriority = Number.parseInt(nextPending.priority, 10);
+      const pinnedRowID = pinnedOccurrence?.preserveRow
+        ? String(pinnedOccurrence?.rowID || '').trim()
+        : '';
       return [{
         ...task,
-        id: `occ_${nextPending.instanceId}`,
+        id: pinnedRowID || `occ_${nextPending.instanceId}`,
         source_task_id: taskID,
         virtual_occurrence: true,
+        __pinned_next_occurrence: !!pinnedOccurrence,
+        __pinned_sort_anchor_time: pinnedOccurrence?.sortAnchorTime || '',
+        __pinned_view_key: pinnedOccurrence?.viewKey || '',
         title: String(nextPending.title || task?.title || ''),
         priority: Number.isFinite(eventPriority)
           ? eventPriority
@@ -1731,14 +1785,21 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     taskRowAnimationTimersRef.current.add(timerID);
   }, []);
 
-  const pinNextOccurrence = useCallback((taskID, nextPending) => {
+  const pinNextOccurrence = useCallback((taskID, nextPending, meta = {}) => {
     const rowID = String(taskID || '');
     if (!rowID || !nextPending) return;
+    const pinnedRowID = String(meta?.rowID || '').trim();
+    const sortAnchorTime = String(meta?.sortAnchorTime || '').trim();
+    const viewKey = String(meta?.viewKey || '').trim();
     const expiresAt = Date.now() + PINNED_NEXT_OCCURRENCE_TTL_MS;
     const nextMap = {
       ...(pinnedNextOccurrenceMapRef.current || {}),
       [rowID]: {
         nextPending,
+        rowID: pinnedRowID,
+        sortAnchorTime,
+        viewKey,
+        preserveRow: !!meta?.preserveRow,
         expiresAt,
       },
     };
@@ -1769,6 +1830,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     optimisticOccurrenceKeys,
     nextStatus,
     projectedNext = null,
+    projectedNextPinMeta = null,
   }) => {
     const now = Date.now();
     const nextOptimisticMap = { ...(occurrenceStatusOptimisticMapRef.current || {}) };
@@ -1780,12 +1842,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     setOccurrenceStatusOptimisticMap(nextOptimisticMap);
 
     if (projectedNext) {
-      pinNextOccurrence(taskID, projectedNext);
-      scheduleTaskRowAnimation(
-        `occ_${projectedNext.instanceId}`,
-        'insert',
-        TASK_ROW_INSERT_MS,
-      );
+      pinNextOccurrence(taskID, projectedNext, projectedNextPinMeta || {});
+      if (!projectedNextPinMeta?.preserveRow) {
+        scheduleTaskRowAnimation(
+          `occ_${projectedNext.instanceId}`,
+          'insert',
+          TASK_ROW_INSERT_MS,
+        );
+      }
     }
 
     void (async () => {
@@ -2471,6 +2535,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const baseFilteredTasks = useMemo(() => {
     const now = dayjs().tz(timezone);
     const todayStart = now.startOf('day');
+    const currentViewKey = resolveTaskListViewKey(view, activeCategoryID);
 
     if (activeCategoryID > 0) {
       return tasks.filter((task) => (task.categories || []).some((cat) => cat.id === activeCategoryID) && task.status === 'pending');
@@ -2501,11 +2566,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
 
     if (view === 'today') {
-      return pending.filter((task) => shouldIncludeTaskInTodayView(task, timezone, todayStart));
+      return pending.filter((task) => (
+        shouldIncludeTaskInTodayView(task, timezone, todayStart)
+        || shouldKeepPinnedOccurrenceInView(task, currentViewKey, view, timezone, todayStart)
+      ));
     }
 
     if (view === 'upcoming') {
-      return pending.filter((task) => shouldIncludeTaskInUpcomingView(task, timezone, todayStart));
+      return pending.filter((task) => (
+        shouldIncludeTaskInUpcomingView(task, timezone, todayStart)
+        || shouldKeepPinnedOccurrenceInView(task, currentViewKey, view, timezone, todayStart)
+      ));
     }
 
     return pending;
@@ -2586,7 +2657,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         return;
       }
 
-      if (isTaskOverdue(task, timezone)) {
+      if (isTaskOverdueForGrouping(task, timezone)) {
         pushTaskToGroup('overdue', t('task.overdueGroup'), task);
         return;
       }
@@ -2600,7 +2671,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       }
 
       if (effectiveGroupBy === 'due') {
-        const current = getTaskPrimaryLocalTime(task, timezone);
+        const current = getTaskGroupingLocalTime(task, timezone);
         if (!current) {
           pushTaskToGroup('no-date', t('task.noDate'), task);
           return;
@@ -3259,10 +3330,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             });
 
             let projectedNext = null;
+            let projectedNextPinMeta = null;
             if (shouldProjectNextOccurrence) {
-              if (String(selectedTaskSnapshotRef.current?.id || '') === String(task?.id || '')) {
-                suppressRecurringEquivalentSelectionTaskIDRef.current = taskID;
-              }
+              const isSelectedRecurringOccurrence = String(selectedTaskSnapshotRef.current?.id || '') === String(task?.id || '');
               const sourceTask = (Array.isArray(tasksRaw) ? tasksRaw : [])
                 .find((item) => Number(item?.id || 0) === taskID) || task;
               projectedNext = buildNextPendingFromProjectedTask({
@@ -3271,9 +3341,46 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 serverStatusMap: recurringServerStatusMap,
                 timezone,
               });
+              if (projectedNext) {
+                projectedNextPinMeta = {
+                  rowID: rowRenderKey,
+                  sortAnchorTime: getTaskPrimaryTime(task),
+                  viewKey: resolveTaskListViewKey(view, activeCategoryID),
+                  preserveRow: true,
+                };
+                if (isSelectedRecurringOccurrence) {
+                  suppressRecurringEquivalentSelectionTaskIDRef.current = 0;
+                }
+              } else if (isSelectedRecurringOccurrence) {
+                suppressRecurringEquivalentSelectionTaskIDRef.current = taskID;
+              }
             }
 
             if (isCompletingTask) {
+              if (projectedNext) {
+                showCompleteFeedback();
+                const commitProjectedNext = () => {
+                  commitRecurringOccurrenceStatus({
+                    taskID,
+                    payload,
+                    optimisticOccurrenceKeys,
+                    nextStatus: newStatus,
+                    projectedNext,
+                    projectedNextPinMeta,
+                  });
+                };
+                if (typeof window === 'undefined') {
+                  commitProjectedNext();
+                } else {
+                  const timerID = window.setTimeout(() => {
+                    recurringCompleteStageTimersRef.current.delete(timerID);
+                    commitProjectedNext();
+                  }, TASK_ROW_COMPLETE_FEEDBACK_MS);
+                  recurringCompleteStageTimersRef.current.add(timerID);
+                }
+                return;
+              }
+
               scheduleTaskRowAnimation(rowRenderKey, 'complete-exit', TASK_ROW_COMPLETE_EXIT_MS + 80);
               if (typeof window === 'undefined') {
                 commitRecurringOccurrenceStatus({
@@ -3282,6 +3389,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   optimisticOccurrenceKeys,
                   nextStatus: newStatus,
                   projectedNext,
+                  projectedNextPinMeta,
                 });
               } else {
                 const timerID = window.setTimeout(() => {
@@ -3292,6 +3400,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     optimisticOccurrenceKeys,
                     nextStatus: newStatus,
                     projectedNext,
+                    projectedNextPinMeta,
                   });
                 }, TASK_ROW_COMPLETE_EXIT_MS);
                 recurringCompleteStageTimersRef.current.add(timerID);
@@ -3305,6 +3414,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
               optimisticOccurrenceKeys,
               nextStatus: newStatus,
               projectedNext,
+              projectedNextPinMeta,
             });
             return;
           }
@@ -3341,6 +3451,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     scheduleTaskRowAnimation,
     tasksRaw,
     timezone,
+    activeCategoryID,
+    view,
   ]);
 
   const handleQuickCreate = async () => {
