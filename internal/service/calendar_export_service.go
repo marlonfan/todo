@@ -39,11 +39,12 @@ type CalendarSubscriptionInfo struct {
 }
 
 type CalendarObject struct {
-	Href string
-	UID  string
-	ETag string
-	Data string
-	Task *models.Task
+	Href     string
+	UID      string
+	ETag     string
+	Data     string
+	Task     *models.Task
+	ReadOnly bool
 }
 
 type calendarFeedClaims struct {
@@ -187,6 +188,21 @@ func (s *CalendarExportService) ListObjects(userID int64, start, end time.Time, 
 		}
 		objects = append(objects, *object)
 	}
+	externalTasks, err := s.listExternalExportTasks(userID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	for i := range externalTasks {
+		task := externalTasks[i]
+		if shouldHideTaskFromCalendarExport(&task) {
+			continue
+		}
+		object, err := s.taskToObject(&task)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *object)
+	}
 	sort.Slice(objects, func(i, j int) bool {
 		left := taskSortTime(objects[i].Task)
 		right := taskSortTime(objects[j].Task)
@@ -201,7 +217,14 @@ func (s *CalendarExportService) ListObjects(userID int64, start, end time.Time, 
 func (s *CalendarExportService) GetObject(userID int64, objectName string) (*CalendarObject, error) {
 	task, err := s.findTaskByObjectName(userID, objectName, "")
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		externalTask, externalErr := s.findExternalTaskByObjectName(userID, objectName)
+		if externalErr != nil {
+			return nil, externalErr
+		}
+		return s.taskToObject(externalTask)
 	}
 	return s.taskToObject(task)
 }
@@ -224,6 +247,9 @@ func (s *CalendarExportService) UpsertObject(userID int64, objectName string, da
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, false, err
+		}
+		if _, externalErr := s.findExternalTaskByObjectName(userID, objectName); externalErr == nil {
+			return nil, false, errors.New("calendar object is read-only")
 		}
 		task, err = s.createTaskFromICalendar(userID, parsed)
 		if err != nil {
@@ -257,6 +283,11 @@ func (s *CalendarExportService) UpsertObject(userID int64, objectName string, da
 func (s *CalendarExportService) DeleteObject(userID int64, objectName string) error {
 	task, err := s.findTaskByObjectName(userID, objectName, "")
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if _, externalErr := s.findExternalTaskByObjectName(userID, objectName); externalErr == nil {
+				return errors.New("calendar object is read-only")
+			}
+		}
 		return err
 	}
 	return s.taskSvc.Delete(userID, task.ID, nil)
@@ -272,7 +303,18 @@ func (s *CalendarExportService) CollectionToken(userID int64) (string, error) {
 		if shouldHideTaskFromCalendarExport(&task) {
 			continue
 		}
-		fmt.Fprintf(h, "%d:%d:%s:%s\n", task.ID, task.Revision, task.UpdatedAt.UTC().Format(time.RFC3339Nano), task.CalDAVUID)
+		fmt.Fprintf(h, "%s\n", taskFingerprint(&task))
+	}
+	start, end := s.DefaultExportRange()
+	externalTasks, err := s.listExternalExportTasks(userID, start, end)
+	if err != nil {
+		return "", err
+	}
+	for _, task := range externalTasks {
+		if shouldHideTaskFromCalendarExport(&task) {
+			continue
+		}
+		fmt.Fprintf(h, "%s\n", taskFingerprint(&task))
 	}
 	return "sync-" + hex.EncodeToString(h.Sum(nil))[:24], nil
 }
@@ -300,25 +342,27 @@ func (s *CalendarExportService) taskToObject(task *models.Task) (*CalendarObject
 	component := s.taskToComponent(task, uid)
 	data := s.wrapCalendar(task.Title, []string{component})
 	return &CalendarObject{
-		Href: href,
-		UID:  uid,
-		ETag: taskETag(task),
-		Data: data,
-		Task: task,
+		Href:     href,
+		UID:      uid,
+		ETag:     taskETag(task),
+		Data:     data,
+		Task:     task,
+		ReadOnly: task.ReadOnly,
 	}, nil
 }
 
 func (s *CalendarExportService) taskToComponent(task *models.Task, uid string) string {
 	loc := s.userLocation(task.UserID)
-	nowStamp := task.UpdatedAt.UTC().Format("20060102T150405Z")
+	stamp := taskCalendarStampTime(task)
+	nowStamp := stamp.UTC().Format("20060102T150405Z")
 	lines := []string{}
 	if isTaskCalendarEvent(task) {
 		lines = append(lines,
 			"BEGIN:VEVENT",
 			"UID:"+escapeICalText(uid),
 			"DTSTAMP:"+nowStamp,
-			"CREATED:"+task.CreatedAt.UTC().Format("20060102T150405Z"),
-			"LAST-MODIFIED:"+task.UpdatedAt.UTC().Format("20060102T150405Z"),
+			"CREATED:"+taskCalendarCreatedTime(task).UTC().Format("20060102T150405Z"),
+			"LAST-MODIFIED:"+stamp.UTC().Format("20060102T150405Z"),
 			"SEQUENCE:"+strconv.FormatInt(maxInt64(task.Revision, 0), 10),
 			"SUMMARY:"+escapeICalText(task.Title),
 		)
@@ -360,8 +404,8 @@ func (s *CalendarExportService) taskToComponent(task *models.Task, uid string) s
 		"BEGIN:VTODO",
 		"UID:"+escapeICalText(uid),
 		"DTSTAMP:"+nowStamp,
-		"CREATED:"+task.CreatedAt.UTC().Format("20060102T150405Z"),
-		"LAST-MODIFIED:"+task.UpdatedAt.UTC().Format("20060102T150405Z"),
+		"CREATED:"+taskCalendarCreatedTime(task).UTC().Format("20060102T150405Z"),
+		"LAST-MODIFIED:"+stamp.UTC().Format("20060102T150405Z"),
 		"SEQUENCE:"+strconv.FormatInt(maxInt64(task.Revision, 0), 10),
 		"SUMMARY:"+escapeICalText(task.Title),
 	)
@@ -415,6 +459,16 @@ func (s *CalendarExportService) listExportTasks(userID int64, start, end time.Ti
 	return out, nil
 }
 
+func (s *CalendarExportService) listExternalExportTasks(userID int64, start, end time.Time) ([]models.Task, error) {
+	if s.taskSvc == nil || s.taskSvc.caldavSvc == nil {
+		return []models.Task{}, nil
+	}
+	if start.IsZero() || end.IsZero() || !end.After(start) {
+		start, end = s.DefaultExportRange()
+	}
+	return s.taskSvc.caldavSvc.ListReadOnlyTasks(userID, start, end)
+}
+
 func (s *CalendarExportService) findTaskByObjectName(userID int64, objectName, uid string) (*models.Task, error) {
 	objectName = normalizeCalendarObjectName(objectName)
 	if id, ok := taskIDFromCalDAVHref(objectName); ok {
@@ -424,6 +478,21 @@ func (s *CalendarExportService) findTaskByObjectName(userID int64, objectName, u
 		return s.taskSvc.taskRepo.GetByIDAndUser(uidID, userID)
 	}
 	return s.taskSvc.taskRepo.GetByCalDAVRef(userID, strings.TrimSpace(uid), objectName)
+}
+
+func (s *CalendarExportService) findExternalTaskByObjectName(userID int64, objectName string) (*models.Task, error) {
+	objectName = normalizeCalendarObjectName(objectName)
+	start, end := s.DefaultExportRange()
+	tasks, err := s.listExternalExportTasks(userID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		if externalCalDAVHref(&tasks[i]) == objectName {
+			return &tasks[i], nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
 }
 
 func (s *CalendarExportService) createTaskFromICalendar(userID int64, parsed *parsedICalendarObject) (*models.Task, error) {
@@ -724,6 +793,9 @@ func taskCalDAVUID(task *models.Task) string {
 	if task == nil {
 		return ""
 	}
+	if task.ReadOnly && strings.TrimSpace(task.ExternalRef) != "" {
+		return "todo-external-" + externalCalDAVHash(task) + "@todo-app"
+	}
 	if strings.TrimSpace(task.CalDAVUID) != "" {
 		return strings.TrimSpace(task.CalDAVUID)
 	}
@@ -734,10 +806,29 @@ func taskCalDAVHref(task *models.Task) string {
 	if task == nil {
 		return ""
 	}
+	if task.ReadOnly && strings.TrimSpace(task.ExternalRef) != "" {
+		return externalCalDAVHref(task)
+	}
 	if strings.TrimSpace(task.CalDAVHref) != "" {
 		return normalizeCalendarObjectName(task.CalDAVHref)
 	}
 	return fmt.Sprintf("task-%d.ics", task.ID)
+}
+
+func externalCalDAVHref(task *models.Task) string {
+	return "external-" + externalCalDAVHash(task) + ".ics"
+}
+
+func externalCalDAVHash(task *models.Task) string {
+	if task == nil {
+		return ""
+	}
+	sourceKey := strings.TrimSpace(task.ExternalRef)
+	if sourceKey == "" {
+		sourceKey = fmt.Sprintf("%s:%d", strings.TrimSpace(task.Source), task.ID)
+	}
+	hash := sha256.Sum256([]byte(sourceKey))
+	return hex.EncodeToString(hash[:])[:32]
 }
 
 func normalizeCalendarObjectName(objectName string) string {
@@ -777,8 +868,41 @@ func taskETag(task *models.Task) string {
 	if task == nil {
 		return `""`
 	}
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s:%s:%s", task.ID, task.Revision, task.UpdatedAt.UTC().Format(time.RFC3339Nano), task.CalDAVUID, task.CalDAVHref)))
+	hash := sha256.Sum256([]byte(taskFingerprint(task)))
 	return `"` + hex.EncodeToString(hash[:])[:32] + `"`
+}
+
+func taskFingerprint(task *models.Task) string {
+	if task == nil {
+		return ""
+	}
+	start := ""
+	if task.StartTime != nil {
+		start = task.StartTime.UTC().Format(time.RFC3339Nano)
+	}
+	end := ""
+	if task.EndTime != nil {
+		end = task.EndTime.UTC().Format(time.RFC3339Nano)
+	}
+	due := ""
+	if task.DueDate != nil {
+		due = task.DueDate.UTC().Format(time.RFC3339Nano)
+	}
+	return strings.Join([]string{
+		strconv.FormatInt(task.ID, 10),
+		strconv.FormatInt(task.Revision, 10),
+		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		taskCalDAVUID(task),
+		taskCalDAVHref(task),
+		strings.TrimSpace(task.ExternalRef),
+		task.Title,
+		task.Description,
+		string(task.Status),
+		strconv.FormatBool(task.AllDay),
+		start,
+		end,
+		due,
+	}, "|")
 }
 
 func shouldHideTaskFromCalendarExport(task *models.Task) bool {
@@ -813,6 +937,35 @@ func taskSortTime(task *models.Task) time.Time {
 		return task.DueDate.UTC()
 	}
 	return task.CreatedAt.UTC()
+}
+
+func taskCalendarStampTime(task *models.Task) time.Time {
+	if task == nil {
+		return time.Unix(0, 0).UTC()
+	}
+	if !task.UpdatedAt.IsZero() {
+		return task.UpdatedAt.UTC()
+	}
+	if task.StartTime != nil {
+		return task.StartTime.UTC()
+	}
+	if task.DueDate != nil {
+		return task.DueDate.UTC()
+	}
+	if !task.CreatedAt.IsZero() {
+		return task.CreatedAt.UTC()
+	}
+	return time.Unix(0, 0).UTC()
+}
+
+func taskCalendarCreatedTime(task *models.Task) time.Time {
+	if task == nil {
+		return time.Unix(0, 0).UTC()
+	}
+	if !task.CreatedAt.IsZero() {
+		return task.CreatedAt.UTC()
+	}
+	return taskCalendarStampTime(task)
 }
 
 func taskRRuleLine(task *models.Task) string {

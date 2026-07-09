@@ -186,6 +186,10 @@ func (h *CalendarExportHandler) DAVPut(c *gin.Context) {
 	}
 	object, created, err := h.exportService.UpsertObject(reqCtx.User.ID, reqCtx.ObjectName, body)
 	if err != nil {
+		if isReadOnlyCalendarObjectError(err) {
+			c.Status(http.StatusForbidden)
+			return
+		}
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
@@ -210,6 +214,10 @@ func (h *CalendarExportHandler) DAVDelete(c *gin.Context) {
 		return
 	}
 	if err := h.exportService.DeleteObject(reqCtx.User.ID, reqCtx.ObjectName); err != nil {
+		if isReadOnlyCalendarObjectError(err) {
+			c.Status(http.StatusForbidden)
+			return
+		}
 		respondDAVObjectError(c, err)
 		return
 	}
@@ -603,4 +611,8 @@ func respondDAVObjectError(c *gin.Context, err error) {
 		return
 	}
 	c.String(http.StatusInternalServerError, err.Error())
+}
+
+func isReadOnlyCalendarObjectError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "read-only")
 }

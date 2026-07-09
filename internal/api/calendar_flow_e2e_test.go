@@ -25,6 +25,11 @@ import (
 )
 
 func setupE2ERouter(t *testing.T) *gin.Engine {
+	router, _ := setupE2ERouterWithDB(t)
+	return router
+}
+
+func setupE2ERouterWithDB(t *testing.T) (*gin.Engine, *gorm.DB) {
 	t.Helper()
 
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
@@ -59,7 +64,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 	aiConfigSvc := service.NewAIConfigService(aiConfigRepo)
 	promptSvc := service.NewPromptService(promptRepo)
 
-	return NewRouter(
+	router := NewRouter(
 		handler.NewAuthHandler(authSvc, notifySvc),
 		handler.NewTaskHandler(taskSvc, notifySvc, repository.NewTaskMutationReceiptRepository(db)),
 		handler.NewCategoryHandler(catSvc),
@@ -71,6 +76,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 		handler.NewPromptHandler(promptSvc),
 		&config.Config{JWT: config.JWTConfig{Secret: "e2e-secret", Expire: 24 * time.Hour}},
 	).Setup()
+	return router, db
 }
 
 func doJSON(t *testing.T, router *gin.Engine, method, path, token string, body any, headers map[string]string) *httptest.ResponseRecorder {
@@ -460,5 +466,129 @@ func TestCalendarSubscriptionFeedAndCalDAVWrite(t *testing.T) {
 	}
 	if !strings.Contains(getRec.Body.String(), "SUMMARY:Mobile created") {
 		t.Fatalf("get missing created object body=%s", getRec.Body.String())
+	}
+}
+
+func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
+	router, db := setupE2ERouterWithDB(t)
+
+	username := fmt.Sprintf("imported_%d", time.Now().UnixNano())
+	email := fmt.Sprintf("%s@example.com", username)
+	password := "secret123"
+	registerResp := doJSON(t, router, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"username": username,
+		"email":    email,
+		"password": password,
+	}, nil)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register status = %d want %d body=%s", registerResp.Code, http.StatusCreated, registerResp.Body.String())
+	}
+	user := decodeJSON[models.UserResponse](t, registerResp)
+
+	loginResp := doJSON(t, router, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"username": username,
+		"password": password,
+	}, nil)
+	if loginResp.Code != http.StatusOK {
+		t.Fatalf("login status = %d body=%s", loginResp.Code, loginResp.Body.String())
+	}
+	loginData := decodeJSON[map[string]any](t, loginResp)
+	token, _ := loginData["token"].(string)
+	if token == "" {
+		t.Fatalf("missing token in login response")
+	}
+
+	source := models.CaldavSource{
+		UserID:      user.ID,
+		Name:        "Imported",
+		BaseURL:     "https://calendar.example/dav",
+		Username:    "remote",
+		PasswordEnc: "encrypted",
+		IsActive:    true,
+	}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatalf("create caldav source: %v", err)
+	}
+	calendar := models.CaldavCalendar{
+		UserID:      user.ID,
+		SourceID:    source.ID,
+		CalendarURL: "https://calendar.example/dav/work/",
+		DisplayName: "Work",
+		IsSelected:  true,
+	}
+	if err := db.Create(&calendar).Error; err != nil {
+		t.Fatalf("create caldav calendar: %v", err)
+	}
+	start := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	end := start.Add(45 * time.Minute)
+	if err := db.Create(&models.CaldavEventCache{
+		UserID:      user.ID,
+		SourceID:    source.ID,
+		CalendarID:  calendar.ID,
+		EventUID:    "external-meeting",
+		Title:       "Imported meeting",
+		Description: "From subscribed calendar",
+		StartTime:   start,
+		EndTime:     &end,
+		RawHref:     "/dav/work/external-meeting.ics",
+		Etag:        `"remote-etag"`,
+	}).Error; err != nil {
+		t.Fatalf("create caldav event cache: %v", err)
+	}
+
+	infoResp := doJSON(t, router, http.MethodGet, "/api/calendar/subscription", token, nil, nil)
+	if infoResp.Code != http.StatusOK {
+		t.Fatalf("subscription status = %d body=%s", infoResp.Code, infoResp.Body.String())
+	}
+	info := decodeJSON[map[string]string](t, infoResp)
+	feedURL, err := url.Parse(info["ics_url"])
+	if err != nil {
+		t.Fatalf("parse feed url: %v", err)
+	}
+	feedReq := httptest.NewRequest(http.MethodGet, feedURL.RequestURI(), nil)
+	feedRec := httptest.NewRecorder()
+	router.ServeHTTP(feedRec, feedReq)
+	if feedRec.Code != http.StatusOK {
+		t.Fatalf("feed status = %d body=%s", feedRec.Code, feedRec.Body.String())
+	}
+	if body := feedRec.Body.String(); !strings.Contains(body, "SUMMARY:Imported meeting") || !strings.Contains(body, "UID:todo-external-") {
+		t.Fatalf("feed missing imported event body=%s", body)
+	}
+
+	propfindBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getetag/></D:prop></D:propfind>`
+	propfindReq := httptest.NewRequest("PROPFIND", "/dav/calendars/"+username+"/todo/", strings.NewReader(propfindBody))
+	propfindReq.SetBasicAuth(username, password)
+	propfindReq.Header.Set("Depth", "1")
+	propfindReq.Header.Set("Content-Type", "application/xml")
+	propfindRec := httptest.NewRecorder()
+	router.ServeHTTP(propfindRec, propfindReq)
+	if propfindRec.Code != 207 {
+		t.Fatalf("propfind status = %d body=%s", propfindRec.Code, propfindRec.Body.String())
+	}
+	propfindOutput := propfindRec.Body.String()
+	if !strings.Contains(propfindOutput, "/dav/calendars/"+username+"/todo/external-") {
+		t.Fatalf("propfind missing imported href body=%s", propfindOutput)
+	}
+
+	objectPath := ""
+	for _, segment := range strings.Split(propfindOutput, "<D:href>") {
+		raw, _, ok := strings.Cut(segment, "</D:href>")
+		if ok && strings.Contains(raw, "/todo/external-") {
+			objectPath = raw
+			break
+		}
+	}
+	if objectPath == "" {
+		t.Fatalf("could not find external object href in body=%s", propfindOutput)
+	}
+	getReq := httptest.NewRequest(http.MethodGet, objectPath, nil)
+	getReq.SetBasicAuth(username, password)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get imported status = %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), "SUMMARY:Imported meeting") {
+		t.Fatalf("get missing imported object body=%s", getRec.Body.String())
 	}
 }
