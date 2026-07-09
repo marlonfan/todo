@@ -7,6 +7,7 @@ import {
   Bot,
   CalendarClock,
   Cloud,
+  Copy,
   Download,
   Eye,
   EyeOff,
@@ -47,7 +48,7 @@ import {
 import NotificationSettings from './NotificationSettings';
 import PWAInstallCard from './PWAInstallCard';
 import { useConfirmDialog } from './ui/useConfirmDialog';
-import { aiConfigAPI, authAPI, caldavAPI } from '../api/client';
+import { aiConfigAPI, authAPI, calendarAPI, caldavAPI } from '../api/client';
 import {
   forceManualSync,
   getConfiguredSyncIntervalSeconds,
@@ -214,6 +215,8 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
   const [caldavCalendars, setCaldavCalendars] = useState([]);
   const [caldavEditingSourceID, setCaldavEditingSourceID] = useState(null);
   const [caldavBusy, setCaldavBusy] = useState(false);
+  const [calendarSubscription, setCalendarSubscription] = useState(null);
+  const [calendarSubscriptionBusy, setCalendarSubscriptionBusy] = useState(false);
   const { data: caldavSources = [] } = useCaldavSourcesQuery();
   const { data: categories = [] } = useCategoriesQuery();
   const [saveToast, setSaveToast] = useState(null);
@@ -410,6 +413,28 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
         // Keep the local cached draft available when offline or before migration.
       });
 
+    return () => {
+      active = false;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'caldav') return undefined;
+    let active = true;
+    setCalendarSubscriptionBusy(true);
+    calendarAPI.getSubscriptionInfo()
+      .then((res) => {
+        if (!active) return;
+        setCalendarSubscription(res.data || null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setCalendarSubscription(null);
+      })
+      .finally(() => {
+        if (!active) return;
+        setCalendarSubscriptionBusy(false);
+      });
     return () => {
       active = false;
     };
@@ -779,6 +804,17 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
     setCaldavForm({ name: '', baseURL: '', username: '', password: '' });
     setCaldavCalendars([]);
     setCaldavEditingSourceID(null);
+  };
+
+  const copyCalendarValue = async (value) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('success', t('settings.caldav.subscriptionCopied'));
+    } catch {
+      showToast('error', t('settings.caldav.subscriptionCopyFailed'));
+    }
   };
 
   const getSelectedCalendarURLsFromSource = (source) => {
@@ -1779,6 +1815,45 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                     {t('settings.caldav.editingHint', { id: caldavEditingSourceID })}
                   </p>
                 ) : null}
+              </div>
+
+              <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{t('settings.caldav.subscriptionTitle')}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('settings.caldav.subscriptionHint')}</p>
+                  </div>
+                  {calendarSubscriptionBusy ? (
+                    <span className="text-xs text-muted-foreground">{t('common.loading')}</span>
+                  ) : null}
+                </div>
+                <div className="space-y-2">
+                  {[
+                    ['ics_url', t('settings.caldav.icsUrl')],
+                    ['caldav_url', t('settings.caldav.caldavUrl')],
+                    ['username', t('auth.username')],
+                  ].map(([key, label]) => {
+                    const value = calendarSubscription?.[key] || '';
+                    return (
+                      <div key={key} className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-card p-2 sm:flex-row sm:items-center">
+                        <div className="w-28 shrink-0 text-xs font-medium text-muted-foreground">{label}</div>
+                        <div className="min-w-0 flex-1 truncate text-xs text-foreground" title={value}>
+                          {value || '-'}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!value}
+                          onClick={() => copyCalendarValue(value)}
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                          aria-label={t('settings.caldav.copyValue')}
+                          title={t('settings.caldav.copyValue')}
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

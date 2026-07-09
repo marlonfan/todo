@@ -16,6 +16,7 @@ type Router struct {
 	calendarHandler *handler.CalendarHandler
 	notifyHandler   *handler.NotifyHandler
 	caldavHandler   *handler.CaldavHandler
+	exportHandler   *handler.CalendarExportHandler
 	aiConfigHandler *handler.AIConfigHandler
 	promptHandler   *handler.PromptHandler
 	cfg             *config.Config
@@ -28,6 +29,7 @@ func NewRouter(
 	calendarHandler *handler.CalendarHandler,
 	notifyHandler *handler.NotifyHandler,
 	caldavHandler *handler.CaldavHandler,
+	exportHandler *handler.CalendarExportHandler,
 	aiConfigHandler *handler.AIConfigHandler,
 	promptHandler *handler.PromptHandler,
 	cfg *config.Config,
@@ -39,6 +41,7 @@ func NewRouter(
 		calendarHandler: calendarHandler,
 		notifyHandler:   notifyHandler,
 		caldavHandler:   caldavHandler,
+		exportHandler:   exportHandler,
 		aiConfigHandler: aiConfigHandler,
 		promptHandler:   promptHandler,
 		cfg:             cfg,
@@ -56,6 +59,25 @@ func (r *Router) Setup() *gin.Engine {
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	if r.exportHandler != nil {
+		router.GET("/feeds/calendar/:token", r.exportHandler.ServeFeed)
+		router.GET("/.well-known/caldav", r.exportHandler.RedirectWellKnown)
+		router.OPTIONS("/.well-known/caldav", r.exportHandler.DAVOptions)
+		router.Handle("PROPFIND", "/.well-known/caldav", r.exportHandler.RedirectWellKnown)
+		router.OPTIONS("/dav", r.exportHandler.DAVOptions)
+		router.GET("/dav", r.exportHandler.DAVGet)
+		router.Handle("PROPFIND", "/dav", r.exportHandler.DAVPropfind)
+		router.Handle("REPORT", "/dav", r.exportHandler.DAVReport)
+		router.OPTIONS("/dav/*path", r.exportHandler.DAVOptions)
+		router.GET("/dav/*path", r.exportHandler.DAVGet)
+		router.PUT("/dav/*path", r.exportHandler.DAVPut)
+		router.DELETE("/dav/*path", r.exportHandler.DAVDelete)
+		router.Handle("PROPFIND", "/dav/*path", r.exportHandler.DAVPropfind)
+		router.Handle("REPORT", "/dav/*path", r.exportHandler.DAVReport)
+		router.POST("/dav/*path", r.exportHandler.DAVMethodNotAllowed)
+		router.PATCH("/dav/*path", r.exportHandler.DAVMethodNotAllowed)
+	}
 
 	// API routes
 	api := router.Group("/api")
@@ -127,6 +149,7 @@ func (r *Router) Setup() *gin.Engine {
 			protected.GET("/notify/channels", r.notifyHandler.GetChannels)
 
 			// CalDAV
+			protected.GET("/calendar/subscription", r.exportHandler.GetSubscriptionInfo)
 			protected.POST("/caldav/discover", r.caldavHandler.Discover)
 			protected.GET("/caldav/sources", r.caldavHandler.ListSources)
 			protected.POST("/caldav/sources", r.caldavHandler.CreateSource)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +54,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 	taskSvc := service.NewTaskService(taskRepo, taskActivityRepo, catRepo, userRepo, notifyRepo)
 	caldavSvc := service.NewCaldavService(caldavRepo, "e2e-secret")
 	taskSvc.SetCaldavService(caldavSvc)
+	exportSvc := service.NewCalendarExportService(taskSvc, userRepo, "e2e-secret")
 	catSvc := service.NewCategoryService(catRepo)
 	aiConfigSvc := service.NewAIConfigService(aiConfigRepo)
 	promptSvc := service.NewPromptService(promptRepo)
@@ -63,6 +66,7 @@ func setupE2ERouter(t *testing.T) *gin.Engine {
 		handler.NewCalendarHandler(taskSvc, caldavSvc),
 		handler.NewNotifyHandler(notifySvc),
 		handler.NewCaldavHandler(caldavSvc),
+		handler.NewCalendarExportHandler(exportSvc, authSvc),
 		handler.NewAIConfigHandler(aiConfigSvc),
 		handler.NewPromptHandler(promptSvc),
 		&config.Config{JWT: config.JWTConfig{Secret: "e2e-secret", Expire: 24 * time.Hour}},
@@ -346,5 +350,115 @@ func TestTaskMutationReplayWithClientOpIDAvoidsFalseConflict(t *testing.T) {
 	})
 	if conflictResp.Code != http.StatusConflict {
 		t.Fatalf("stale update without op-id status = %d, want %d body=%s", conflictResp.Code, http.StatusConflict, conflictResp.Body.String())
+	}
+}
+
+func TestCalendarSubscriptionFeedAndCalDAVWrite(t *testing.T) {
+	router := setupE2ERouter(t)
+
+	username := fmt.Sprintf("caldav_%d", time.Now().UnixNano())
+	email := fmt.Sprintf("%s@example.com", username)
+	password := "secret123"
+	registerResp := doJSON(t, router, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"username": username,
+		"email":    email,
+		"password": password,
+	}, nil)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	loginResp := doJSON(t, router, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"username": username,
+		"password": password,
+	}, nil)
+	if loginResp.Code != http.StatusOK {
+		t.Fatalf("login status = %d body=%s", loginResp.Code, loginResp.Body.String())
+	}
+	loginData := decodeJSON[map[string]any](t, loginResp)
+	token, _ := loginData["token"].(string)
+	if token == "" {
+		t.Fatalf("missing token in login response")
+	}
+
+	createResp := doJSON(t, router, http.MethodPost, "/api/tasks", token, map[string]any{
+		"title":      "Feed visible task",
+		"priority":   0,
+		"start_time": "2026-03-02T10:00:00Z",
+		"end_time":   "2026-03-02T10:30:00Z",
+	}, nil)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create task status = %d body=%s", createResp.Code, createResp.Body.String())
+	}
+
+	infoResp := doJSON(t, router, http.MethodGet, "/api/calendar/subscription", token, nil, nil)
+	if infoResp.Code != http.StatusOK {
+		t.Fatalf("subscription status = %d body=%s", infoResp.Code, infoResp.Body.String())
+	}
+	info := decodeJSON[map[string]string](t, infoResp)
+	if info["ics_url"] == "" || info["caldav_url"] == "" || info["username"] != username {
+		t.Fatalf("unexpected subscription info: %#v", info)
+	}
+
+	feedURL, err := url.Parse(info["ics_url"])
+	if err != nil {
+		t.Fatalf("parse feed url: %v", err)
+	}
+	feedReq := httptest.NewRequest(http.MethodGet, feedURL.RequestURI(), nil)
+	feedRec := httptest.NewRecorder()
+	router.ServeHTTP(feedRec, feedReq)
+	if feedRec.Code != http.StatusOK {
+		t.Fatalf("feed status = %d body=%s", feedRec.Code, feedRec.Body.String())
+	}
+	if body := feedRec.Body.String(); !strings.Contains(body, "BEGIN:VCALENDAR") || !strings.Contains(body, "SUMMARY:Feed visible task") {
+		t.Fatalf("feed missing task body=%s", body)
+	}
+
+	propfindBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getetag/></D:prop></D:propfind>`
+	propfindReq := httptest.NewRequest("PROPFIND", "/dav/calendars/"+username+"/todo/", strings.NewReader(propfindBody))
+	propfindReq.SetBasicAuth(username, password)
+	propfindReq.Header.Set("Depth", "1")
+	propfindReq.Header.Set("Content-Type", "application/xml")
+	propfindRec := httptest.NewRecorder()
+	router.ServeHTTP(propfindRec, propfindReq)
+	if propfindRec.Code != 207 {
+		t.Fatalf("propfind status = %d body=%s", propfindRec.Code, propfindRec.Body.String())
+	}
+	if !strings.Contains(propfindRec.Body.String(), "/dav/calendars/"+username+"/todo/task-") {
+		t.Fatalf("propfind missing task href body=%s", propfindRec.Body.String())
+	}
+
+	objectPath := "/dav/calendars/" + username + "/todo/mobile-new.ics"
+	ical := strings.Join([]string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"BEGIN:VEVENT",
+		"UID:mobile-new@example",
+		"DTSTAMP:20260302T090000Z",
+		"SUMMARY:Mobile created",
+		"DESCRIPTION:Created from CalDAV",
+		"DTSTART:20260303T010000Z",
+		"DTEND:20260303T013000Z",
+		"END:VEVENT",
+		"END:VCALENDAR",
+		"",
+	}, "\r\n")
+	putReq := httptest.NewRequest(http.MethodPut, objectPath, strings.NewReader(ical))
+	putReq.SetBasicAuth(username, password)
+	putReq.Header.Set("Content-Type", "text/calendar")
+	putRec := httptest.NewRecorder()
+	router.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusCreated {
+		t.Fatalf("put status = %d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, objectPath, nil)
+	getReq.SetBasicAuth(username, password)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), "SUMMARY:Mobile created") {
+		t.Fatalf("get missing created object body=%s", getRec.Body.String())
 	}
 }

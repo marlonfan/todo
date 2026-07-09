@@ -40,6 +40,25 @@ func (r *TaskRepository) GetByIDAndUser(id, userID int64) (*models.Task, error) 
 	return &task, nil
 }
 
+func (r *TaskRepository) GetByCalDAVRef(userID int64, uid, href string) (*models.Task, error) {
+	var task models.Task
+	query := r.db.Preload("Categories").Where("user_id = ?", userID)
+	switch {
+	case uid != "" && href != "":
+		query = query.Where("cal_dav_uid = ? OR cal_dav_href = ?", uid, href)
+	case uid != "":
+		query = query.Where("cal_dav_uid = ?", uid)
+	case href != "":
+		query = query.Where("cal_dav_href = ?", href)
+	default:
+		return nil, gorm.ErrRecordNotFound
+	}
+	if err := query.First(&task).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 func (r *TaskRepository) List(userID int64, filters map[string]interface{}) ([]models.Task, error) {
 	var tasks []models.Task
 	query := r.db.Preload("Categories").Where("user_id = ?", userID)

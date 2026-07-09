@@ -225,6 +225,7 @@ export const categoriesAPI = {
 // Calendar API
 export const calendarAPI = {
   getEvents: (params) => apiClient.get('/calendar', { params }),
+  getSubscriptionInfo: () => apiClient.get('/calendar/subscription'),
 };
 
 export const caldavAPI = {

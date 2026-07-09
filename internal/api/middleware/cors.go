@@ -14,8 +14,8 @@ func CORS() gin.HandlerFunc {
 		} else {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, If-Match, X-Client-Op-Id, X-Client-Submitted-At, X-Client-Submit-Source")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, PATCH, DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Depth, Destination, Overwrite, If-Match, If-None-Match, X-Client-Op-Id, X-Client-Submitted-At, X-Client-Submit-Source")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, PATCH, DELETE, PROPFIND, REPORT")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)

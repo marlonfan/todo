@@ -78,6 +78,8 @@ type Task struct {
 	DeletedAt         *time.Time      `json:"deleted_at"`
 	CreatedAt         time.Time       `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt         time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
+	CalDAVUID         string          `json:"caldav_uid,omitempty" gorm:"size:255;index"`
+	CalDAVHref        string          `json:"caldav_href,omitempty" gorm:"size:255;index"`
 	ReadOnly          bool            `json:"read_only" gorm:"-"`
 	Source            string          `json:"source,omitempty" gorm:"-"`
 	ExternalRef       string          `json:"external_ref,omitempty" gorm:"-"`

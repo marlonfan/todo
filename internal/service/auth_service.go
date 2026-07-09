@@ -113,6 +113,31 @@ func (s *AuthService) Login(req *models.UserLoginRequest) (string, *models.UserR
 	return token, &resp, nil
 }
 
+func (s *AuthService) AuthenticateBasic(identifier, password string) (*models.User, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" || password == "" {
+		return nil, errors.New("invalid credentials")
+	}
+
+	user, err := s.userRepo.GetByUsername(identifier)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			user, err = s.userRepo.GetByEmail(identifier)
+		}
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, errors.New("invalid credentials")
+			}
+			return nil, err
+		}
+	}
+
+	if !utils.CheckPassword(password, user.PasswordHash) {
+		return nil, errors.New("invalid credentials")
+	}
+	return user, nil
+}
+
 func (s *AuthService) GetUserByID(userID int64) (*models.UserResponse, error) {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {

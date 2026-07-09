@@ -94,6 +94,7 @@ func main() {
 	caldavService := service.NewCaldavService(caldavRepo, cfg.JWT.Secret)
 	taskService := service.NewTaskService(taskRepo, taskActivityRepo, catRepo, userRepo, notifyRepo)
 	taskService.SetCaldavService(caldavService)
+	exportService := service.NewCalendarExportService(taskService, userRepo, cfg.JWT.Secret)
 	catService := service.NewCategoryService(catRepo)
 	notifyService := service.NewNotifyService(notifyRepo, userRepo, taskRepo, registry)
 	aiConfigService := service.NewAIConfigService(aiConfigRepo)
@@ -106,6 +107,7 @@ func main() {
 	calendarHandler := handler.NewCalendarHandler(taskService, caldavService)
 	notifyHandler := handler.NewNotifyHandler(notifyService)
 	caldavHandler := handler.NewCaldavHandler(caldavService)
+	exportHandler := handler.NewCalendarExportHandler(exportService, authService)
 	aiConfigHandler := handler.NewAIConfigHandler(aiConfigService)
 	promptHandler := handler.NewPromptHandler(promptService)
 
@@ -117,6 +119,7 @@ func main() {
 		calendarHandler,
 		notifyHandler,
 		caldavHandler,
+		exportHandler,
 		aiConfigHandler,
 		promptHandler,
 		cfg,
