@@ -569,6 +569,11 @@ func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
 	if !strings.Contains(propfindOutput, "/dav/calendars/"+username+"/todo/external-") {
 		t.Fatalf("propfind missing imported href body=%s", propfindOutput)
 	}
+	for _, want := range []string{"<C:calendar-query/>", "<C:calendar-multiget/>", "<D:sync-collection/>"} {
+		if !strings.Contains(propfindOutput, want) {
+			t.Fatalf("propfind missing supported report %s body=%s", want, propfindOutput)
+		}
+	}
 
 	objectPath := ""
 	for _, segment := range strings.Split(propfindOutput, "<D:href>") {
@@ -590,5 +595,28 @@ func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
 	}
 	if !strings.Contains(getRec.Body.String(), "SUMMARY:Imported meeting") {
 		t.Fatalf("get missing imported object body=%s", getRec.Body.String())
+	}
+
+	objectPropfindReq := httptest.NewRequest("PROPFIND", objectPath, strings.NewReader(propfindBody))
+	objectPropfindReq.SetBasicAuth(username, password)
+	objectPropfindReq.Header.Set("Depth", "0")
+	objectPropfindReq.Header.Set("Content-Type", "application/xml")
+	objectPropfindRec := httptest.NewRecorder()
+	router.ServeHTTP(objectPropfindRec, objectPropfindReq)
+	if objectPropfindRec.Code != 207 {
+		t.Fatalf("object propfind status = %d body=%s", objectPropfindRec.Code, objectPropfindRec.Body.String())
+	}
+	objectPropfindOutput := objectPropfindRec.Body.String()
+	if !strings.Contains(objectPropfindOutput, "<D:current-user-privilege-set><D:privilege><D:read/></D:privilege></D:current-user-privilege-set>") {
+		t.Fatalf("external object should be read-only body=%s", objectPropfindOutput)
+	}
+
+	putReq := httptest.NewRequest(http.MethodPut, objectPath, strings.NewReader(getRec.Body.String()))
+	putReq.SetBasicAuth(username, password)
+	putReq.Header.Set("Content-Type", "text/calendar")
+	putRec := httptest.NewRecorder()
+	router.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusForbidden {
+		t.Fatalf("put imported status = %d want %d body=%s", putRec.Code, http.StatusForbidden, putRec.Body.String())
 	}
 }

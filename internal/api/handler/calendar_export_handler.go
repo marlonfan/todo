@@ -515,7 +515,8 @@ func rootPropResponse(href, username string) string {
 <D:displayname>Todo CalDAV</D:displayname>
 <D:resourcetype><D:collection/></D:resourcetype>
 <D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>
-<D:principal-collection-set><D:href>/dav/principals/</D:href></D:principal-collection-set>`)
+<D:principal-collection-set><D:href>/dav/principals/</D:href></D:principal-collection-set>
+`+supportedReportSet("D:principal-property-search", "D:expand-property"))
 }
 
 func principalPropResponse(href string, user *models.User, username string) string {
@@ -532,14 +533,16 @@ func principalPropResponse(href string, user *models.User, username string) stri
 <D:resourcetype><D:principal/></D:resourcetype>
 <C:calendar-home-set><D:href>`+escapeXML(homeHref(username))+`</D:href></C:calendar-home-set>
 <C:calendar-user-address-set>`+address+`</C:calendar-user-address-set>
-<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>`)
+<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>
+`+supportedReportSet("D:principal-property-search", "D:expand-property"))
 }
 
 func homePropResponse(href, username string) string {
 	return propResponse(href, `
 <D:displayname>`+escapeXML(username)+` calendars</D:displayname>
 <D:resourcetype><D:collection/></D:resourcetype>
-<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>`)
+<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>
+`+supportedReportSet("D:sync-collection"))
 }
 
 func calendarCollectionPropResponse(href, displayName, syncToken string) string {
@@ -548,6 +551,7 @@ func calendarCollectionPropResponse(href, displayName, syncToken string) string 
 <D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
 <C:supported-calendar-component-set><C:comp name="VEVENT"/><C:comp name="VTODO"/></C:supported-calendar-component-set>
 <C:calendar-description>Todo tasks</C:calendar-description>
+`+supportedReportSet("C:calendar-query", "C:calendar-multiget", "D:sync-collection")+`
 <CS:getctag>`+escapeXML(syncToken)+`</CS:getctag>
 <D:sync-token>`+escapeXML(syncToken)+`</D:sync-token>
 <D:current-user-privilege-set><D:privilege><D:read/></D:privilege><D:privilege><D:write/></D:privilege></D:current-user-privilege-set>`)
@@ -573,10 +577,37 @@ func objectProps(object *service.CalendarObject, includeData bool) string {
 <D:getetag>` + escapeXML(object.ETag) + `</D:getetag>
 <D:getcontenttype>text/calendar; charset=utf-8</D:getcontenttype>
 <D:getcontentlength>` + strconv.Itoa(len(object.Data)) + `</D:getcontentlength>`
+	if object.ReadOnly {
+		props += `<D:current-user-privilege-set><D:privilege><D:read/></D:privilege></D:current-user-privilege-set>`
+	} else {
+		props += `<D:current-user-privilege-set><D:privilege><D:read/></D:privilege><D:privilege><D:write/></D:privilege></D:current-user-privilege-set>`
+	}
 	if includeData {
 		props += `<C:calendar-data>` + escapeXML(object.Data) + `</C:calendar-data>`
 	}
 	return props
+}
+
+func supportedReportSet(reports ...string) string {
+	var b strings.Builder
+	b.WriteString("<D:supported-report-set>")
+	for _, report := range reports {
+		report = strings.TrimSpace(report)
+		if report == "" {
+			continue
+		}
+		prefix, name, ok := strings.Cut(report, ":")
+		if !ok || strings.TrimSpace(prefix) == "" || strings.TrimSpace(name) == "" {
+			continue
+		}
+		b.WriteString("<D:supported-report><D:report><")
+		b.WriteString(prefix)
+		b.WriteString(":")
+		b.WriteString(name)
+		b.WriteString("/></D:report></D:supported-report>")
+	}
+	b.WriteString("</D:supported-report-set>")
+	return b.String()
 }
 
 func propResponse(href, props string) string {
