@@ -597,6 +597,24 @@ func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
 		t.Fatalf("get missing imported object body=%s", getRec.Body.String())
 	}
 
+	multigetBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop><D:getetag/><C:calendar-data/></D:prop>
+  <D:href>` + objectPath + `</D:href>
+</C:calendar-multiget>`
+	multigetReq := httptest.NewRequest("REPORT", "/dav/calendars/"+username+"/todo/", strings.NewReader(multigetBody))
+	multigetReq.SetBasicAuth(username, password)
+	multigetReq.Header.Set("Depth", "1")
+	multigetReq.Header.Set("Content-Type", "application/xml")
+	multigetRec := httptest.NewRecorder()
+	router.ServeHTTP(multigetRec, multigetReq)
+	if multigetRec.Code != 207 {
+		t.Fatalf("multiget status = %d body=%s", multigetRec.Code, multigetRec.Body.String())
+	}
+	if body := multigetRec.Body.String(); !strings.Contains(body, "<C:calendar-data>") || !strings.Contains(body, "SUMMARY:Imported meeting") {
+		t.Fatalf("multiget missing imported calendar-data body=%s", body)
+	}
+
 	objectPropfindReq := httptest.NewRequest("PROPFIND", objectPath, strings.NewReader(propfindBody))
 	objectPropfindReq.SetBasicAuth(username, password)
 	objectPropfindReq.Header.Set("Depth", "0")

@@ -100,7 +100,10 @@ func (h *CalendarExportHandler) DAVPropfind(c *gin.Context) {
 	}
 	depth := davDepth(c.GetHeader("Depth"))
 	objects, _ := h.objectsForDAV(reqCtx, depth)
-	token, _ := h.exportService.CollectionToken(reqCtx.User.ID)
+	token := ""
+	if propfindNeedsCollectionToken(reqCtx, depth) {
+		token, _ = h.exportService.CollectionToken(reqCtx.User.ID)
+	}
 	responses := h.propfindResponses(c, reqCtx, depth, objects, token)
 	h.writeDAVMultiStatus(c, responses)
 }
@@ -115,6 +118,7 @@ func (h *CalendarExportHandler) DAVReport(c *gin.Context) {
 		return
 	}
 	body, _ := io.ReadAll(c.Request.Body)
+	bodyLower := strings.ToLower(string(body))
 	start, end := h.exportService.DefaultExportRange()
 	if parsedStart, parsedEnd, ok := parseCalendarQueryTimeRange(body); ok {
 		start, end = parsedStart, parsedEnd
@@ -137,12 +141,15 @@ func (h *CalendarExportHandler) DAVReport(c *gin.Context) {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	token, _ := h.exportService.CollectionToken(reqCtx.User.ID)
+	token := ""
+	if strings.Contains(bodyLower, "sync-collection") {
+		token, _ = h.exportService.CollectionToken(reqCtx.User.ID)
+	}
 	responses := make([]string, 0, len(objects)+1)
 	for _, object := range objects {
 		responses = append(responses, calendarDataResponse(calendarObjectHref(reqCtx.User.Username, object.Href), &object))
 	}
-	if strings.Contains(strings.ToLower(string(body)), "sync-collection") {
+	if strings.Contains(bodyLower, "sync-collection") {
 		responses = append(responses, syncTokenResponse(calendarHref(reqCtx.User.Username), token))
 	}
 	h.writeDAVMultiStatus(c, responses)
@@ -294,22 +301,29 @@ func (h *CalendarExportHandler) objectsForDAV(reqCtx *davRequestContext, depth i
 }
 
 func (h *CalendarExportHandler) objectsByHrefs(userID int64, hrefs []string) ([]service.CalendarObject, error) {
-	objects := make([]service.CalendarObject, 0, len(hrefs))
+	objectNames := make([]string, 0, len(hrefs))
 	for _, href := range hrefs {
 		objectName := path.Base(strings.TrimSpace(href))
 		if objectName == "." || objectName == "/" || objectName == "" {
 			continue
 		}
-		object, err := h.exportService.GetObject(userID, objectName)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		objects = append(objects, *object)
+		objectNames = append(objectNames, objectName)
 	}
-	return objects, nil
+	return h.exportService.GetObjectsByNames(userID, objectNames)
+}
+
+func propfindNeedsCollectionToken(reqCtx *davRequestContext, depth int) bool {
+	if reqCtx == nil {
+		return false
+	}
+	switch reqCtx.Kind {
+	case davResourceCalendar:
+		return true
+	case davResourceRoot, davResourceHome:
+		return depth > 0
+	default:
+		return false
+	}
 }
 
 func (h *CalendarExportHandler) propfindResponses(c *gin.Context, reqCtx *davRequestContext, depth int, objects []service.CalendarObject, syncToken string) []string {

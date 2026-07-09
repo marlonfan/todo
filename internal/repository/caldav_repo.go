@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"database/sql"
 	"errors"
 	"time"
 	"todo-app/internal/models"
@@ -11,6 +12,11 @@ import (
 
 type CaldavRepository struct {
 	db *gorm.DB
+}
+
+type CaldavEventCollectionState struct {
+	Count        int64
+	MaxUpdatedAt time.Time
 }
 
 const caldavUpsertBatchSize = 200
@@ -239,6 +245,28 @@ func (r *CaldavRepository) ListEventsInRange(userID int64, start, end time.Time)
 		Order("start_time asc").
 		Find(&events).Error
 	return events, err
+}
+
+func (r *CaldavRepository) EventCollectionStateInRange(userID int64, start, end time.Time) (CaldavEventCollectionState, error) {
+	var row struct {
+		Count        int64
+		MaxUpdatedAt sql.NullTime
+	}
+	err := r.db.Model(&models.CaldavEventCache{}).
+		Select("COUNT(*) AS count, MAX(updated_at) AS max_updated_at").
+		Where("user_id = ?", userID).
+		Where("start_time < ?", end).
+		Where("(end_time IS NULL AND start_time >= ?) OR (end_time IS NOT NULL AND end_time > ?)", start, start).
+		Where("status IS NULL OR lower(status) <> ?", "cancelled").
+		Scan(&row).Error
+	if err != nil {
+		return CaldavEventCollectionState{}, err
+	}
+	state := CaldavEventCollectionState{Count: row.Count}
+	if row.MaxUpdatedAt.Valid {
+		state.MaxUpdatedAt = row.MaxUpdatedAt.Time.UTC()
+	}
+	return state, nil
 }
 
 func (r *CaldavRepository) ListDistinctEventHrefsInRange(userID, sourceID, calendarID int64, start, end time.Time) ([]string, error) {

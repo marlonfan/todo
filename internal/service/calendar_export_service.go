@@ -229,6 +229,93 @@ func (s *CalendarExportService) GetObject(userID int64, objectName string) (*Cal
 	return s.taskToObject(task)
 }
 
+func (s *CalendarExportService) GetObjectsByNames(userID int64, objectNames []string) ([]CalendarObject, error) {
+	orderedNames := make([]string, 0, len(objectNames))
+	uniqueNames := make([]string, 0, len(objectNames))
+	seen := map[string]struct{}{}
+	for _, objectName := range objectNames {
+		name := normalizeCalendarObjectName(objectName)
+		if name == "" {
+			continue
+		}
+		orderedNames = append(orderedNames, name)
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		uniqueNames = append(uniqueNames, name)
+	}
+	if len(uniqueNames) == 0 {
+		return []CalendarObject{}, nil
+	}
+
+	localIDs := make([]int64, 0, len(uniqueNames))
+	localRefs := make([]string, 0, len(uniqueNames))
+	externalNames := make(map[string]struct{})
+	for _, name := range uniqueNames {
+		if id, ok := taskIDFromCalDAVHref(name); ok {
+			localIDs = append(localIDs, id)
+			continue
+		}
+		if isExternalCalDAVObjectName(name) {
+			externalNames[name] = struct{}{}
+			continue
+		}
+		localRefs = append(localRefs, name)
+	}
+
+	tasksByName := map[string]*models.Task{}
+	if len(localIDs) > 0 {
+		tasks, err := s.taskSvc.taskRepo.ListByIDsAndUser(userID, localIDs)
+		if err != nil {
+			return nil, err
+		}
+		for i := range tasks {
+			task := &tasks[i]
+			tasksByName[fmt.Sprintf("task-%d.ics", task.ID)] = task
+			tasksByName[taskCalDAVHref(task)] = task
+		}
+	}
+	if len(localRefs) > 0 {
+		tasks, err := s.taskSvc.taskRepo.ListByCalDAVHrefs(userID, localRefs)
+		if err != nil {
+			return nil, err
+		}
+		for i := range tasks {
+			task := &tasks[i]
+			tasksByName[taskCalDAVHref(task)] = task
+		}
+	}
+	if len(externalNames) > 0 {
+		start, end := s.DefaultExportRange()
+		tasks, err := s.listExternalExportTasks(userID, start, end)
+		if err != nil {
+			return nil, err
+		}
+		for i := range tasks {
+			task := &tasks[i]
+			name := externalCalDAVHref(task)
+			if _, ok := externalNames[name]; ok {
+				tasksByName[name] = task
+			}
+		}
+	}
+
+	objects := make([]CalendarObject, 0, len(orderedNames))
+	for _, name := range orderedNames {
+		task := tasksByName[name]
+		if task == nil || shouldHideTaskFromCalendarExport(task) {
+			continue
+		}
+		object, err := s.taskToObject(task)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *object)
+	}
+	return objects, nil
+}
+
 func (s *CalendarExportService) UpsertObject(userID int64, objectName string, data []byte) (*CalendarObject, bool, error) {
 	loc := s.userLocation(userID)
 	parsed, err := parseICalendarObject(data, loc)
@@ -294,27 +381,19 @@ func (s *CalendarExportService) DeleteObject(userID int64, objectName string) er
 }
 
 func (s *CalendarExportService) CollectionToken(userID int64) (string, error) {
-	tasks, err := s.taskSvc.List(userID, map[string]interface{}{})
+	taskState, err := s.taskSvc.taskRepo.CalendarCollectionState(userID)
 	if err != nil {
 		return "", err
 	}
 	h := sha256.New()
-	for _, task := range tasks {
-		if shouldHideTaskFromCalendarExport(&task) {
-			continue
-		}
-		fmt.Fprintf(h, "%s\n", taskFingerprint(&task))
-	}
+	fmt.Fprintf(h, "tasks:%d:%d:%s\n", taskState.Count, taskState.MaxRevision, taskState.MaxUpdatedAt.UTC().Format(time.RFC3339Nano))
 	start, end := s.DefaultExportRange()
-	externalTasks, err := s.listExternalExportTasks(userID, start, end)
-	if err != nil {
-		return "", err
-	}
-	for _, task := range externalTasks {
-		if shouldHideTaskFromCalendarExport(&task) {
-			continue
+	if s.taskSvc != nil && s.taskSvc.caldavSvc != nil && s.taskSvc.caldavSvc.repo != nil {
+		externalState, err := s.taskSvc.caldavSvc.repo.EventCollectionStateInRange(userID, start, end)
+		if err != nil {
+			return "", err
 		}
-		fmt.Fprintf(h, "%s\n", taskFingerprint(&task))
+		fmt.Fprintf(h, "caldav:%d:%s\n", externalState.Count, externalState.MaxUpdatedAt.UTC().Format(time.RFC3339Nano))
 	}
 	return "sync-" + hex.EncodeToString(h.Sum(nil))[:24], nil
 }
@@ -817,6 +896,11 @@ func taskCalDAVHref(task *models.Task) string {
 
 func externalCalDAVHref(task *models.Task) string {
 	return "external-" + externalCalDAVHash(task) + ".ics"
+}
+
+func isExternalCalDAVObjectName(objectName string) bool {
+	objectName = strings.ToLower(normalizeCalendarObjectName(objectName))
+	return strings.HasPrefix(objectName, "external-") && strings.HasSuffix(objectName, ".ics")
 }
 
 func externalCalDAVHash(task *models.Task) string {

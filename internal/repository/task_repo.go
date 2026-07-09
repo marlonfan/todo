@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -12,6 +13,12 @@ import (
 
 type TaskRepository struct {
 	db *gorm.DB
+}
+
+type TaskCalendarCollectionState struct {
+	Count        int64
+	MaxUpdatedAt time.Time
+	MaxRevision  int64
 }
 
 func NewTaskRepository(db *gorm.DB) *TaskRepository {
@@ -57,6 +64,53 @@ func (r *TaskRepository) GetByCalDAVRef(userID int64, uid, href string) (*models
 		return nil, err
 	}
 	return &task, nil
+}
+
+func (r *TaskRepository) ListByIDsAndUser(userID int64, ids []int64) ([]models.Task, error) {
+	if len(ids) == 0 {
+		return []models.Task{}, nil
+	}
+	var tasks []models.Task
+	err := r.db.Preload("Categories").
+		Where("user_id = ? AND id IN ?", userID, ids).
+		Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *TaskRepository) ListByCalDAVHrefs(userID int64, hrefs []string) ([]models.Task, error) {
+	if len(hrefs) == 0 {
+		return []models.Task{}, nil
+	}
+	var tasks []models.Task
+	err := r.db.Preload("Categories").
+		Where("user_id = ? AND cal_dav_href IN ?", userID, hrefs).
+		Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *TaskRepository) CalendarCollectionState(userID int64) (TaskCalendarCollectionState, error) {
+	var row struct {
+		Count        int64
+		MaxUpdatedAt sql.NullTime
+		MaxRevision  sql.NullInt64
+	}
+	err := r.db.Model(&models.Task{}).
+		Select("COUNT(*) AS count, MAX(updated_at) AS max_updated_at, MAX(revision) AS max_revision").
+		Where("user_id = ?", userID).
+		Where("deleted_at IS NULL").
+		Where("status NOT IN ?", []models.TaskStatus{models.TaskStatusCancelled, models.TaskStatusSkipped}).
+		Scan(&row).Error
+	if err != nil {
+		return TaskCalendarCollectionState{}, err
+	}
+	state := TaskCalendarCollectionState{Count: row.Count}
+	if row.MaxUpdatedAt.Valid {
+		state.MaxUpdatedAt = row.MaxUpdatedAt.Time.UTC()
+	}
+	if row.MaxRevision.Valid {
+		state.MaxRevision = row.MaxRevision.Int64
+	}
+	return state, nil
 }
 
 func (r *TaskRepository) List(userID int64, filters map[string]interface{}) ([]models.Task, error) {
