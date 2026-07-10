@@ -47,6 +47,13 @@ type CalendarObject struct {
 	ReadOnly bool
 }
 
+type CalendarCollectionPropertyUpdate struct {
+	DisplayName *string
+	Description *string
+	Color       *string
+	Order       *int
+}
+
 type calendarFeedClaims struct {
 	Purpose  string `json:"purpose"`
 	UserID   int64  `json:"user_id"`
@@ -108,6 +115,23 @@ func (s *CalendarExportService) SubscriptionInfoForUserID(userID int64, baseURL 
 		return nil, err
 	}
 	return s.SubscriptionInfo(user, baseURL)
+}
+
+func (s *CalendarExportService) UpdateCollectionProperties(userID int64, update CalendarCollectionPropertyUpdate) error {
+	updates := map[string]interface{}{}
+	if update.DisplayName != nil {
+		updates["cal_dav_calendar_name"] = *update.DisplayName
+	}
+	if update.Description != nil {
+		updates["cal_dav_calendar_desc"] = *update.Description
+	}
+	if update.Color != nil {
+		updates["cal_dav_calendar_color"] = *update.Color
+	}
+	if update.Order != nil {
+		updates["cal_dav_calendar_order"] = *update.Order
+	}
+	return s.userRepo.UpdateCalDAVCalendarProperties(userID, updates)
 }
 
 func (s *CalendarExportService) GenerateFeedToken(user *models.User) (string, error) {

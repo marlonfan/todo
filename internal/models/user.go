@@ -25,6 +25,10 @@ type User struct {
 	MobileDefaultTab       string    `json:"mobile_default_tab" gorm:"size:20;default:'tasks'"`
 	MobileDefaultTaskView  string    `json:"mobile_default_task_view" gorm:"size:40;default:'all'"`
 	MobileTabPreset        string    `json:"mobile_tab_preset" gorm:"size:60;default:'tasks_calendar_settings'"`
+	CalDAVCalendarName     string    `json:"-" gorm:"size:255;default:'Todo'"`
+	CalDAVCalendarDesc     string    `json:"-" gorm:"size:500;default:'Todo tasks'"`
+	CalDAVCalendarColor    string    `json:"-" gorm:"size:9;default:'#3A87ADFF'"`
+	CalDAVCalendarOrder    int       `json:"-" gorm:"default:1"`
 	CreatedAt              time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt              time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 

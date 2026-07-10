@@ -201,6 +201,10 @@ func setupStaticFiles(r *gin.Engine) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
 			return
 		}
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.Status(http.StatusNotFound)
+			return
+		}
 
 		// Serve real static files first (manifest, service worker, icons, etc.)
 		requestPath := strings.TrimPrefix(path.Clean(c.Request.URL.Path), "/")

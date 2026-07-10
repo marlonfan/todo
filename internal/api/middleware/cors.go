@@ -18,7 +18,7 @@ func CORS() gin.HandlerFunc {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Depth, Destination, Overwrite, If-Match, If-None-Match, X-Client-Op-Id, X-Client-Submitted-At, X-Client-Submit-Source")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, PATCH, DELETE, PROPFIND, REPORT")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, PATCH, DELETE, PROPFIND, PROPPATCH, REPORT")
 
 		isBrowserPreflight := c.Request.Method == http.MethodOptions &&
 			origin != "" && c.GetHeader("Access-Control-Request-Method") != ""

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,7 @@ func TestCORSAllowsDAVOptionsHandler(t *testing.T) {
 	router.Use(CORS())
 	router.OPTIONS("/dav/*path", func(c *gin.Context) {
 		c.Header("DAV", "1, calendar-access")
-		c.Header("Allow", "OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE")
+		c.Header("Allow", "OPTIONS, PROPFIND, PROPPATCH, REPORT, GET, PUT, DELETE")
 		c.Header("MS-Author-Via", "DAV")
 		c.Status(http.StatusNoContent)
 	})
@@ -46,6 +47,8 @@ func TestCORSAllowsDAVOptionsHandler(t *testing.T) {
 			}
 			if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
 				t.Fatal("missing CORS allow methods")
+			} else if !strings.Contains(got, "PROPPATCH") {
+				t.Fatalf("CORS allow methods=%q missing PROPPATCH", got)
 			}
 		})
 	}

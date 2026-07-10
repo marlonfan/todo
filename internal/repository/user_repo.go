@@ -46,7 +46,16 @@ func (r *UserRepository) GetByEmail(email string) (*models.User, error) {
 }
 
 func (r *UserRepository) Update(user *models.User) error {
-	return r.db.Save(user).Error
+	return r.db.
+		Omit("CalDAVCalendarName", "CalDAVCalendarDesc", "CalDAVCalendarColor", "CalDAVCalendarOrder").
+		Save(user).Error
+}
+
+func (r *UserRepository) UpdateCalDAVCalendarProperties(userID int64, updates map[string]interface{}) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	return r.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error
 }
 
 func (r *UserRepository) Delete(id int64) error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -27,6 +28,10 @@ const (
 	appleICalNS = "http://apple.com/ns/ical/"
 	todoCalID   = "todo"
 	davXMLLimit = 1 << 20
+
+	defaultDAVCalendarName  = "Todo"
+	defaultDAVCalendarColor = "#3A87ADFF"
+	defaultDAVCalendarOrder = 1
 )
 
 type CalendarExportHandler struct {
@@ -76,6 +81,11 @@ func (request davPropfindRequest) includes(name xml.Name) bool {
 type davProperty struct {
 	Name xml.Name
 	XML  string
+}
+
+type davPropertyUpdateResult struct {
+	Name   xml.Name
+	Status int
 }
 
 func NewCalendarExportHandler(exportService *service.CalendarExportService, authService *service.AuthService) *CalendarExportHandler {
@@ -210,6 +220,44 @@ func (h *CalendarExportHandler) DAVReport(c *gin.Context) {
 		responses = append(responses, calendarDataResponse(calendarObjectHref(reqCtx.User.Username, object.Href), &object))
 	}
 	h.writeDAVMultiStatus(c, responses)
+}
+
+func (h *CalendarExportHandler) DAVProppatch(c *gin.Context) {
+	reqCtx, ok := h.authenticateDAV(c)
+	if !ok {
+		return
+	}
+	if reqCtx.Kind != davResourceCalendar {
+		c.Status(http.StatusForbidden)
+		return
+	}
+	body, ok := readDAVXMLBody(c)
+	if !ok {
+		return
+	}
+	update, results, err := parseDAVPropertyUpdate(body)
+	if err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	hasFailure := false
+	for _, result := range results {
+		if result.Status != http.StatusOK {
+			hasFailure = true
+			break
+		}
+	}
+	if hasFailure {
+		for i := range results {
+			if results[i].Status == http.StatusOK {
+				results[i].Status = http.StatusFailedDependency
+			}
+		}
+	} else if err := h.exportService.UpdateCollectionProperties(reqCtx.User.ID, update); err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	h.writeDAVMultiStatus(c, []string{propertyUpdateResponse(calendarHref(reqCtx.User.Username), results)})
 }
 
 func (h *CalendarExportHandler) DAVGet(c *gin.Context) {
@@ -398,17 +446,17 @@ func (h *CalendarExportHandler) propfindResponses(reqCtx *davRequestContext, dep
 		if depth > 0 {
 			responses = append(responses, propfindResponse(principalHref(username), principalProperties(reqCtx.User), request))
 			responses = append(responses, propfindResponse(homeHref(username), homeProperties(reqCtx.User), request))
-			responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(username, "Todo", syncToken), request))
+			responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(reqCtx.User, syncToken), request))
 		}
 	case davResourcePrincipal:
 		responses = append(responses, propfindResponse(principalHref(username), principalProperties(reqCtx.User), request))
 	case davResourceHome:
 		responses = append(responses, propfindResponse(homeHref(username), homeProperties(reqCtx.User), request))
 		if depth > 0 {
-			responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(username, "Todo", syncToken), request))
+			responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(reqCtx.User, syncToken), request))
 		}
 	case davResourceCalendar:
-		responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(username, "Todo", syncToken), request))
+		responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(reqCtx.User, syncToken), request))
 		if depth > 0 {
 			for _, object := range objects {
 				item := object
@@ -456,7 +504,7 @@ func requestBaseURL(c *gin.Context) string {
 func setDAVHeaders(c *gin.Context) {
 	c.Header("DAV", "1, calendar-access")
 	c.Header("MS-Author-Via", "DAV")
-	c.Header("Allow", "OPTIONS, PROPFIND, REPORT, GET, PUT, DELETE")
+	c.Header("Allow", "OPTIONS, PROPFIND, PROPPATCH, REPORT, GET, PUT, DELETE")
 }
 
 func davDepth(raw string) int {
@@ -618,6 +666,32 @@ type davRequestedProperty struct {
 	InnerXML string `xml:",innerxml"`
 }
 
+type davPropertyUpdateValue struct {
+	XMLName xml.Name
+	Text    string `xml:",chardata"`
+	Nested  []struct {
+		XMLName xml.Name
+	} `xml:",any"`
+}
+
+type davPropertyUpdateContainer struct {
+	XMLName    xml.Name
+	Text       string                   `xml:",chardata"`
+	Properties []davPropertyUpdateValue `xml:",any"`
+}
+
+type davPropertyUpdateOperation struct {
+	XMLName  xml.Name
+	Text     string                       `xml:",chardata"`
+	Children []davPropertyUpdateContainer `xml:",any"`
+}
+
+type davPropertyUpdateEnvelope struct {
+	XMLName    xml.Name                     `xml:"DAV: propertyupdate"`
+	Text       string                       `xml:",chardata"`
+	Operations []davPropertyUpdateOperation `xml:",any"`
+}
+
 type davPropertyContainer struct {
 	Properties []davRequestedProperty `xml:",any"`
 }
@@ -687,6 +761,102 @@ func parseDAVPropfindRequest(body []byte) (davPropfindRequest, error) {
 	return davPropfindRequest{Mode: davPropfindAllProp, Properties: properties}, nil
 }
 
+func parseDAVPropertyUpdate(body []byte) (service.CalendarCollectionPropertyUpdate, []davPropertyUpdateResult, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return service.CalendarCollectionPropertyUpdate{}, nil, errors.New("empty PROPPATCH body")
+	}
+	var envelope davPropertyUpdateEnvelope
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return service.CalendarCollectionPropertyUpdate{}, nil, err
+	}
+	if envelope.XMLName != (xml.Name{Space: davNS, Local: "propertyupdate"}) || strings.TrimSpace(envelope.Text) != "" || len(envelope.Operations) == 0 {
+		return service.CalendarCollectionPropertyUpdate{}, nil, errors.New("invalid PROPPATCH body")
+	}
+
+	update := service.CalendarCollectionPropertyUpdate{}
+	results := []davPropertyUpdateResult{}
+
+	for _, operation := range envelope.Operations {
+		if operation.XMLName.Space != davNS ||
+			(operation.XMLName.Local != "set" && operation.XMLName.Local != "remove") ||
+			strings.TrimSpace(operation.Text) != "" ||
+			len(operation.Children) != 1 {
+			return service.CalendarCollectionPropertyUpdate{}, nil, errors.New("invalid PROPPATCH operation")
+		}
+		properties := operation.Children[0]
+		if properties.XMLName != (xml.Name{Space: davNS, Local: "prop"}) || strings.TrimSpace(properties.Text) != "" || len(properties.Properties) == 0 {
+			return service.CalendarCollectionPropertyUpdate{}, nil, errors.New("invalid PROPPATCH property container")
+		}
+		remove := operation.XMLName.Local == "remove"
+		for _, requested := range properties.Properties {
+			status := http.StatusOK
+			if len(requested.Nested) > 0 || (remove && strings.TrimSpace(requested.Text) != "") {
+				status = http.StatusConflict
+			} else {
+				status = applyDAVPropertyUpdate(&update, requested.XMLName, requested.Text, remove)
+			}
+			results = append(results, davPropertyUpdateResult{Name: requested.XMLName, Status: status})
+		}
+	}
+	if len(results) == 0 {
+		return service.CalendarCollectionPropertyUpdate{}, nil, errors.New("empty PROPPATCH property list")
+	}
+	return update, results, nil
+}
+
+func applyDAVPropertyUpdate(update *service.CalendarCollectionPropertyUpdate, name xml.Name, rawValue string, remove bool) int {
+	if update == nil {
+		return http.StatusConflict
+	}
+	if remove {
+		return http.StatusForbidden
+	}
+	value := strings.TrimSpace(rawValue)
+	switch name {
+	case xml.Name{Space: davNS, Local: "displayname"}:
+		if value == "" || len(value) > 255 {
+			return http.StatusConflict
+		}
+		update.DisplayName = &value
+	case xml.Name{Space: caldavNS, Local: "calendar-description"}:
+		if len(value) > 500 {
+			return http.StatusConflict
+		}
+		update.Description = &value
+	case xml.Name{Space: appleICalNS, Local: "calendar-color"}:
+		color, ok := normalizeDAVCalendarColor(value)
+		if !ok {
+			return http.StatusConflict
+		}
+		update.Color = &color
+	case xml.Name{Space: appleICalNS, Local: "calendar-order"}:
+		order, err := strconv.Atoi(value)
+		if err != nil || order < 0 || order > 1_000_000 {
+			return http.StatusConflict
+		}
+		update.Order = &order
+	default:
+		return http.StatusForbidden
+	}
+	return http.StatusOK
+}
+
+func normalizeDAVCalendarColor(value string) (string, bool) {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if len(value) == 7 {
+		value += "FF"
+	}
+	if len(value) != 9 || value[0] != '#' {
+		return "", false
+	}
+	for _, char := range value[1:] {
+		if !strings.ContainsRune("0123456789ABCDEF", char) {
+			return "", false
+		}
+	}
+	return value, true
+}
+
 func rootProperties(user *models.User) []davProperty {
 	username := user.Username
 	return []davProperty{
@@ -725,7 +895,21 @@ func homeProperties(user *models.User) []davProperty {
 	}
 }
 
-func calendarCollectionProperties(username, displayName, syncToken string) []davProperty {
+func calendarCollectionProperties(user *models.User, syncToken string) []davProperty {
+	username := user.Username
+	displayName := strings.TrimSpace(user.CalDAVCalendarName)
+	if displayName == "" {
+		displayName = defaultDAVCalendarName
+	}
+	description := user.CalDAVCalendarDesc
+	color, ok := normalizeDAVCalendarColor(user.CalDAVCalendarColor)
+	if !ok {
+		color = defaultDAVCalendarColor
+	}
+	order := user.CalDAVCalendarOrder
+	if order < 0 {
+		order = defaultDAVCalendarOrder
+	}
 	return []davProperty{
 		property(davNS, "displayname", escapeXML(displayName)),
 		property(davNS, "resourcetype", `<D:collection/><C:calendar/>`),
@@ -734,12 +918,12 @@ func calendarCollectionProperties(username, displayName, syncToken string) []dav
 		property(caldavNS, "calendar-home-set", hrefValue(homeHref(username))),
 		property(caldavNS, "supported-calendar-component-set", `<C:comp name="VEVENT"/><C:comp name="VTODO"/>`),
 		property(caldavNS, "supported-calendar-data", `<C:calendar-data content-type="text/calendar" version="2.0"/>`),
-		property(caldavNS, "calendar-description", escapeXML("Todo tasks")),
+		property(caldavNS, "calendar-description", escapeXML(description)),
 		property(davNS, "supported-report-set", supportedReportSetValue("C:calendar-query", "C:calendar-multiget")),
 		property(csNS, "getctag", escapeXML(syncToken)),
 		property(davNS, "current-user-privilege-set", readWritePrivilegeValue()),
-		property(appleICalNS, "calendar-color", "#3A87ADFF"),
-		property(appleICalNS, "calendar-order", "1"),
+		property(appleICalNS, "calendar-color", color),
+		property(appleICalNS, "calendar-order", strconv.Itoa(order)),
 	}
 }
 
@@ -844,6 +1028,28 @@ func propfindResponse(href string, available []davProperty, request davPropfindR
 	}
 	if len(missingProps) > 0 {
 		b.WriteString(propstatXML(strings.Join(missingProps, ""), "HTTP/1.1 404 Not Found"))
+	}
+	b.WriteString(`</D:response>`)
+	return b.String()
+}
+
+func propertyUpdateResponse(href string, results []davPropertyUpdateResult) string {
+	propertiesByStatus := map[int][]string{}
+	statusOrder := []int{}
+	for _, result := range results {
+		if _, exists := propertiesByStatus[result.Status]; !exists {
+			statusOrder = append(statusOrder, result.Status)
+		}
+		propertiesByStatus[result.Status] = append(propertiesByStatus[result.Status], emptyPropertyXML(result.Name))
+	}
+
+	var b strings.Builder
+	b.WriteString(`<D:response><D:href>`)
+	b.WriteString(escapeXML(href))
+	b.WriteString(`</D:href>`)
+	for _, status := range statusOrder {
+		statusLine := fmt.Sprintf("HTTP/1.1 %d %s", status, http.StatusText(status))
+		b.WriteString(propstatXML(strings.Join(propertiesByStatus[status], ""), statusLine))
 	}
 	b.WriteString(`</D:response>`)
 	return b.String()

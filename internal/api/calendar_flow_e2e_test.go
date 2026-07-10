@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,30 @@ func requireDAVProperty(t *testing.T, doc testDAVMultiStatus, href string, name 
 		t.Fatalf("href=%s property=%v occurrences=%d want=1 document=%#v", href, name, matches, doc)
 	}
 	return got
+}
+
+func requireDAVPropertyStatuses(t *testing.T, doc testDAVMultiStatus, href string, name xml.Name, statuses ...int) {
+	t.Helper()
+	want := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		want = append(want, fmt.Sprintf("HTTP/1.1 %d %s", status, http.StatusText(status)))
+	}
+	got := []string{}
+	for _, response := range doc.Responses {
+		if strings.TrimSpace(response.Href) != href {
+			continue
+		}
+		for _, propstat := range response.Propstats {
+			for _, property := range propstat.Prop.Properties {
+				if property.XMLName == name {
+					got = append(got, strings.TrimSpace(propstat.Status))
+				}
+			}
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("href=%s property=%v statuses=%q want=%q", href, name, got, want)
+	}
 }
 
 func requireDAVHrefProperty(t *testing.T, doc testDAVMultiStatus, resourceHref string, name xml.Name, status int, valueHref string) {
@@ -650,6 +675,17 @@ func TestAppleCalDAVDiscovery(t *testing.T) {
 		router.ServeHTTP(rec, req)
 		return rec
 	}
+	proppatch := func(body string, authenticate bool) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("PROPPATCH", calendarPath, strings.NewReader(body))
+		if authenticate {
+			req.SetBasicAuth(username, password)
+		}
+		req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
 
 	optionsReq := httptest.NewRequest(http.MethodOptions, calendarPath, nil)
 	optionsRec := httptest.NewRecorder()
@@ -657,7 +693,7 @@ func TestAppleCalDAVDiscovery(t *testing.T) {
 	if optionsRec.Code != http.StatusNoContent || optionsRec.Header().Get("DAV") != "1, calendar-access" || optionsRec.Header().Get("MS-Author-Via") != "DAV" {
 		t.Fatalf("DAV options status=%d headers=%v", optionsRec.Code, optionsRec.Header())
 	}
-	for _, method := range []string{"OPTIONS", "PROPFIND", "REPORT", "GET", "PUT", "DELETE"} {
+	for _, method := range []string{"OPTIONS", "PROPFIND", "PROPPATCH", "REPORT", "GET", "PUT", "DELETE"} {
 		if !strings.Contains(optionsRec.Header().Get("Allow"), method) {
 			t.Fatalf("Allow=%q missing %s", optionsRec.Header().Get("Allow"), method)
 		}
@@ -757,13 +793,41 @@ func TestAppleCalDAVDiscovery(t *testing.T) {
 	}
 	requireNonEmptyDAVText(t, home, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"})
 
+	propertyUpdateBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">
+  <D:set>
+    <D:prop>
+      <D:displayname>Apple Todo</D:displayname>
+      <C:calendar-description>Synced from macOS</C:calendar-description>
+      <A:calendar-color>#1a2b3c</A:calendar-color>
+      <A:calendar-order>7</A:calendar-order>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`
+	unauthorizedPatch := proppatch(propertyUpdateBody, false)
+	if unauthorizedPatch.Code != http.StatusUnauthorized || unauthorizedPatch.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("PROPPATCH challenge status=%d headers=%v", unauthorizedPatch.Code, unauthorizedPatch.Header())
+	}
+	patched := decodeDAVMultiStatus(t, proppatch(propertyUpdateBody, true))
+	for _, name := range []xml.Name{
+		{Space: testDAVNS, Local: "displayname"},
+		{Space: testCalDAVNS, Local: "calendar-description"},
+		{Space: testAppleNS, Local: "calendar-color"},
+		{Space: testAppleNS, Local: "calendar-order"},
+	} {
+		requireDAVProperty(t, patched, calendarPath, name, http.StatusOK)
+	}
+
 	calendarBody := `<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/" xmlns:A="http://apple.com/ns/ical/">
   <D:prop>
+	<D:displayname/>
     <D:owner/>
     <D:supported-report-set/>
+	<C:calendar-description/>
     <C:supported-calendar-data/>
     <CS:getctag/>
+	<A:calendar-color/>
     <A:calendar-order/>
 	<D:sync-token/>
   </D:prop>
@@ -771,13 +835,102 @@ func TestAppleCalDAVDiscovery(t *testing.T) {
 	calendarRec := propfind(calendarPath, "0", calendarBody, true)
 	calendar := decodeDAVMultiStatus(t, calendarRec)
 	requireDAVHrefProperty(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "owner"}, http.StatusOK, principalPath)
+	if got := requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "displayname"}); got != "Apple Todo" {
+		t.Fatalf("displayname=%q", got)
+	}
 	requireDAVProperty(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "supported-report-set"}, http.StatusOK)
+	if got := requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testCalDAVNS, Local: "calendar-description"}); got != "Synced from macOS" {
+		t.Fatalf("calendar-description=%q", got)
+	}
 	requireDAVProperty(t, calendar, calendarPath, xml.Name{Space: testCalDAVNS, Local: "supported-calendar-data"}, http.StatusOK)
 	requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testCSNS, Local: "getctag"})
-	requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"})
+	if got := requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"}); got != "#1A2B3CFF" {
+		t.Fatalf("calendar-color=%q", got)
+	}
+	if got := requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"}); got != "7" {
+		t.Fatalf("calendar-order=%q", got)
+	}
 	requireDAVProperty(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "sync-token"}, http.StatusNotFound)
 	if body := calendarRec.Body.String(); !strings.Contains(body, "<C:calendar-query/>") || !strings.Contains(body, "<C:calendar-multiget/>") || strings.Contains(body, "<D:sync-collection/>") {
 		t.Fatalf("unexpected supported reports body=%s", body)
+	}
+
+	atomicFailureBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/" xmlns:X="urn:example:unsupported">
+  <D:set><D:prop><A:calendar-color>#FFEEDDCC</A:calendar-color><X:unknown>value</X:unknown></D:prop></D:set>
+</D:propertyupdate>`
+	failedPatch := decodeDAVMultiStatus(t, proppatch(atomicFailureBody, true))
+	requireDAVProperty(t, failedPatch, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"}, http.StatusFailedDependency)
+	requireDAVProperty(t, failedPatch, calendarPath, xml.Name{Space: "urn:example:unsupported", Local: "unknown"}, http.StatusForbidden)
+	colorBody := `<D:propfind xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/"><D:prop><A:calendar-color/></D:prop></D:propfind>`
+	afterFailedPatch := decodeDAVMultiStatus(t, propfind(calendarPath, "0", colorBody, true))
+	if got := requireNonEmptyDAVText(t, afterFailedPatch, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"}); got != "#1A2B3CFF" {
+		t.Fatalf("calendar-color changed after atomic failure: %q", got)
+	}
+
+	duplicatePropertyBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/">
+  <D:set><D:prop><A:calendar-order>invalid</A:calendar-order></D:prop></D:set>
+  <D:set><D:prop><A:calendar-order>8</A:calendar-order></D:prop></D:set>
+</D:propertyupdate>`
+	duplicatePatch := decodeDAVMultiStatus(t, proppatch(duplicatePropertyBody, true))
+	requireDAVPropertyStatuses(t, duplicatePatch, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"}, http.StatusConflict, http.StatusFailedDependency)
+	orderBody := `<D:propfind xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/"><D:prop><A:calendar-order/></D:prop></D:propfind>`
+	afterDuplicatePatch := decodeDAVMultiStatus(t, propfind(calendarPath, "0", orderBody, true))
+	if got := requireNonEmptyDAVText(t, afterDuplicatePatch, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"}); got != "7" {
+		t.Fatalf("calendar-order changed after duplicate-property failure: %q", got)
+	}
+
+	emptyDescriptionBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:set><D:prop><C:calendar-description/></D:prop></D:set>
+</D:propertyupdate>`
+	emptyDescriptionPatch := decodeDAVMultiStatus(t, proppatch(emptyDescriptionBody, true))
+	requireDAVProperty(t, emptyDescriptionPatch, calendarPath, xml.Name{Space: testCalDAVNS, Local: "calendar-description"}, http.StatusOK)
+	descriptionBody := `<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-description/></D:prop></D:propfind>`
+	emptyDescription := decodeDAVMultiStatus(t, propfind(calendarPath, "0", descriptionBody, true))
+	if got := requireDAVProperty(t, emptyDescription, calendarPath, xml.Name{Space: testCalDAVNS, Local: "calendar-description"}, http.StatusOK); strings.TrimSpace(got.Text) != "" {
+		t.Fatalf("calendar-description=%q want empty", got.Text)
+	}
+
+	protectedRemoveBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">
+  <D:set><D:prop><A:calendar-color>#FFEEDDCC</A:calendar-color></D:prop></D:set>
+  <D:remove><D:prop><C:calendar-description/></D:prop></D:remove>
+</D:propertyupdate>`
+	protectedRemove := decodeDAVMultiStatus(t, proppatch(protectedRemoveBody, true))
+	requireDAVProperty(t, protectedRemove, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"}, http.StatusFailedDependency)
+	requireDAVProperty(t, protectedRemove, calendarPath, xml.Name{Space: testCalDAVNS, Local: "calendar-description"}, http.StatusForbidden)
+	afterProtectedRemove := decodeDAVMultiStatus(t, propfind(calendarPath, "0", colorBody, true))
+	if got := requireNonEmptyDAVText(t, afterProtectedRemove, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"}); got != "#1A2B3CFF" {
+		t.Fatalf("calendar-color changed after protected remove failure: %q", got)
+	}
+
+	nestedValueBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/" xmlns:X="urn:example:nested">
+  <D:set><D:prop><A:calendar-color><X:value>#FFEEDDCC</X:value></A:calendar-color><A:calendar-order>8</A:calendar-order></D:prop></D:set>
+</D:propertyupdate>`
+	nestedValuePatch := decodeDAVMultiStatus(t, proppatch(nestedValueBody, true))
+	requireDAVProperty(t, nestedValuePatch, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"}, http.StatusConflict)
+	requireDAVProperty(t, nestedValuePatch, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"}, http.StatusFailedDependency)
+	afterNestedValue := decodeDAVMultiStatus(t, propfind(calendarPath, "0", orderBody, true))
+	if got := requireNonEmptyDAVText(t, afterNestedValue, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"}); got != "7" {
+		t.Fatalf("calendar-order changed after nested-value failure: %q", got)
+	}
+
+	for name, body := range map[string]string{
+		"extra operation child": `<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/" xmlns:X="urn:example:extra"><D:set><D:prop><A:calendar-order>8</A:calendar-order></D:prop><X:extra/></D:set></D:propertyupdate>`,
+		"duplicate prop child":  `<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/"><D:set><D:prop><A:calendar-order>8</A:calendar-order></D:prop><D:prop><A:calendar-order>9</A:calendar-order></D:prop></D:set></D:propertyupdate>`,
+	} {
+		t.Run("reject PROPPATCH "+name, func(t *testing.T) {
+			if malformed := proppatch(body, true); malformed.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d want=%d body=%s", malformed.Code, http.StatusBadRequest, malformed.Body.String())
+			}
+		})
+	}
+	oversizedPatchBody := `<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:displayname>` + strings.Repeat(" ", (1<<20)+1) + `</D:displayname></D:prop></D:set></D:propertyupdate>`
+	if oversized := proppatch(oversizedPatchBody, true); oversized.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized PROPPATCH status=%d want=%d", oversized.Code, http.StatusRequestEntityTooLarge)
 	}
 
 	syncReportBody := `<?xml version="1.0" encoding="utf-8"?><D:sync-collection xmlns:D="DAV:"><D:sync-token/><D:sync-level>1</D:sync-level><D:prop><D:getetag/></D:prop></D:sync-collection>`
