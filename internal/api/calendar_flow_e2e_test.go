@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +113,121 @@ func decodeJSON[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 		t.Fatalf("decode response: %v body=%s", err, rec.Body.String())
 	}
 	return out
+}
+
+const (
+	testDAVNS    = "DAV:"
+	testCalDAVNS = "urn:ietf:params:xml:ns:caldav"
+	testCSNS     = "http://calendarserver.org/ns/"
+	testAppleNS  = "http://apple.com/ns/ical/"
+)
+
+type testDAVMultiStatus struct {
+	XMLName   xml.Name
+	Responses []testDAVResponse `xml:"DAV: response"`
+}
+
+type testDAVResponse struct {
+	Href      string            `xml:"DAV: href"`
+	Propstats []testDAVPropstat `xml:"DAV: propstat"`
+}
+
+type testDAVPropstat struct {
+	Status string               `xml:"DAV: status"`
+	Prop   testDAVPropContainer `xml:"DAV: prop"`
+}
+
+type testDAVPropContainer struct {
+	Properties []testDAVProperty `xml:",any"`
+}
+
+type testDAVProperty struct {
+	XMLName  xml.Name
+	Text     string         `xml:",chardata"`
+	Hrefs    []string       `xml:"DAV: href"`
+	Children []testDAVChild `xml:",any"`
+}
+
+type testDAVChild struct {
+	XMLName xml.Name
+	Text    string `xml:",chardata"`
+}
+
+func decodeDAVMultiStatus(t *testing.T, rec *httptest.ResponseRecorder) testDAVMultiStatus {
+	t.Helper()
+	if rec.Code != 207 {
+		t.Fatalf("status=%d want=207 body=%s", rec.Code, rec.Body.String())
+	}
+	var out testDAVMultiStatus
+	if err := xml.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("invalid multistatus XML: %v body=%s", err, rec.Body.String())
+	}
+	if out.XMLName != (xml.Name{Space: testDAVNS, Local: "multistatus"}) {
+		t.Fatalf("root QName=%v want DAV: multistatus", out.XMLName)
+	}
+	return out
+}
+
+func requireDAVProperty(t *testing.T, doc testDAVMultiStatus, href string, name xml.Name, status int) testDAVProperty {
+	t.Helper()
+	wantStatus := fmt.Sprintf("HTTP/1.1 %d %s", status, http.StatusText(status))
+	matches := 0
+	var got testDAVProperty
+	for _, response := range doc.Responses {
+		if strings.TrimSpace(response.Href) != href {
+			continue
+		}
+		for _, propstat := range response.Propstats {
+			for _, property := range propstat.Prop.Properties {
+				if property.XMLName != name {
+					continue
+				}
+				matches++
+				got = property
+				if strings.TrimSpace(propstat.Status) != wantStatus {
+					t.Fatalf("href=%s property=%v status=%q want=%q", href, name, propstat.Status, wantStatus)
+				}
+			}
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("href=%s property=%v occurrences=%d want=1 document=%#v", href, name, matches, doc)
+	}
+	return got
+}
+
+func requireDAVHrefProperty(t *testing.T, doc testDAVMultiStatus, resourceHref string, name xml.Name, status int, valueHref string) {
+	t.Helper()
+	property := requireDAVProperty(t, doc, resourceHref, name, status)
+	if len(property.Hrefs) != 1 || strings.TrimSpace(property.Hrefs[0]) != valueHref {
+		t.Fatalf("href=%s property=%v nested hrefs=%q want=[%q]", resourceHref, name, property.Hrefs, valueHref)
+	}
+}
+
+func requireNonEmptyDAVText(t *testing.T, doc testDAVMultiStatus, href string, name xml.Name) string {
+	t.Helper()
+	property := requireDAVProperty(t, doc, href, name, http.StatusOK)
+	value := strings.TrimSpace(property.Text)
+	if value == "" {
+		t.Fatalf("href=%s property=%v has empty value", href, name)
+	}
+	return value
+}
+
+func requireDAVChildren(t *testing.T, property testDAVProperty, names ...xml.Name) {
+	t.Helper()
+	for _, name := range names {
+		found := false
+		for _, child := range property.Children {
+			if child.XMLName == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("property=%v missing child=%v children=%v", property.XMLName, name, property.Children)
+		}
+	}
 }
 
 func TestCalendarCreateDeleteFlowAcrossWeekAndMonthRanges(t *testing.T) {
@@ -469,6 +585,233 @@ func TestCalendarSubscriptionFeedAndCalDAVWrite(t *testing.T) {
 	}
 }
 
+func TestAppleCalDAVDiscovery(t *testing.T) {
+	router := setupE2ERouter(t)
+
+	username := fmt.Sprintf("apple_%d", time.Now().UnixNano())
+	email := username + "@example.com"
+	password := "secret123"
+	registerResp := doJSON(t, router, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"username": username,
+		"email":    email,
+		"password": password,
+	}, nil)
+	if registerResp.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	loginResp := doJSON(t, router, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"username": username,
+		"password": password,
+	}, nil)
+	if loginResp.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", loginResp.Code, loginResp.Body.String())
+	}
+	loginData := decodeJSON[map[string]any](t, loginResp)
+	token, _ := loginData["token"].(string)
+	if token == "" {
+		t.Fatal("missing login token")
+	}
+	createResp := doJSON(t, router, http.MethodPost, "/api/tasks", token, map[string]any{
+		"title":      "Apple discovery task",
+		"priority":   0,
+		"start_time": "2026-07-11T02:00:00Z",
+		"end_time":   "2026-07-11T02:30:00Z",
+	}, nil)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create task status=%d body=%s", createResp.Code, createResp.Body.String())
+	}
+	infoResp := doJSON(t, router, http.MethodGet, "/api/calendar/subscription", token, nil, nil)
+	if infoResp.Code != http.StatusOK {
+		t.Fatalf("subscription info status=%d body=%s", infoResp.Code, infoResp.Body.String())
+	}
+	info := decodeJSON[map[string]string](t, infoResp)
+	requestURI := func(key string) string {
+		t.Helper()
+		parsed, err := url.Parse(info[key])
+		if err != nil || parsed.RequestURI() == "" {
+			t.Fatalf("parse %s=%q: %v", key, info[key], err)
+		}
+		return parsed.RequestURI()
+	}
+	rootPath := requestURI("caldav_root_url")
+	principalPath := requestURI("caldav_principal_url")
+	homePath := requestURI("caldav_home_url")
+	calendarPath := requestURI("caldav_url")
+
+	propfind := func(path, depth, body string, authenticate bool) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("PROPFIND", path, strings.NewReader(body))
+		if authenticate {
+			req.SetBasicAuth(username, password)
+		}
+		req.Header.Set("Depth", depth)
+		req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	optionsReq := httptest.NewRequest(http.MethodOptions, calendarPath, nil)
+	optionsRec := httptest.NewRecorder()
+	router.ServeHTTP(optionsRec, optionsReq)
+	if optionsRec.Code != http.StatusNoContent || optionsRec.Header().Get("DAV") != "1, calendar-access" || optionsRec.Header().Get("MS-Author-Via") != "DAV" {
+		t.Fatalf("DAV options status=%d headers=%v", optionsRec.Code, optionsRec.Header())
+	}
+	for _, method := range []string{"OPTIONS", "PROPFIND", "REPORT", "GET", "PUT", "DELETE"} {
+		if !strings.Contains(optionsRec.Header().Get("Allow"), method) {
+			t.Fatalf("Allow=%q missing %s", optionsRec.Header().Get("Allow"), method)
+		}
+	}
+
+	wellKnownReq := httptest.NewRequest("PROPFIND", "/.well-known/caldav", nil)
+	wellKnownRec := httptest.NewRecorder()
+	router.ServeHTTP(wellKnownRec, wellKnownReq)
+	if wellKnownRec.Code != http.StatusTemporaryRedirect || wellKnownRec.Header().Get("Location") != "/dav/" {
+		t.Fatalf("well-known status=%d location=%q", wellKnownRec.Code, wellKnownRec.Header().Get("Location"))
+	}
+
+	directBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <D:resourcetype/>
+    <D:current-user-principal/>
+    <C:calendar-home-set/>
+    <D:owner/>
+  </D:prop>
+</D:propfind>`
+	unauthorized := propfind(calendarPath, "0", directBody, false)
+	if unauthorized.Code != http.StatusUnauthorized || unauthorized.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("initial challenge status=%d headers=%v", unauthorized.Code, unauthorized.Header())
+	}
+	direct := decodeDAVMultiStatus(t, propfind(calendarPath, "0", directBody, true))
+	directResourceType := requireDAVProperty(t, direct, calendarPath, xml.Name{Space: testDAVNS, Local: "resourcetype"}, http.StatusOK)
+	requireDAVChildren(t, directResourceType,
+		xml.Name{Space: testDAVNS, Local: "collection"},
+		xml.Name{Space: testCalDAVNS, Local: "calendar"},
+	)
+	requireDAVHrefProperty(t, direct, calendarPath, xml.Name{Space: testDAVNS, Local: "current-user-principal"}, http.StatusOK, principalPath)
+	requireDAVHrefProperty(t, direct, calendarPath, xml.Name{Space: testCalDAVNS, Local: "calendar-home-set"}, http.StatusOK, homePath)
+	requireDAVHrefProperty(t, direct, calendarPath, xml.Name{Space: testDAVNS, Local: "owner"}, http.StatusOK, principalPath)
+
+	rootBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:X="urn:example:unsupported">
+  <D:prop>
+	<D:resourcetype/>
+    <D:current-user-principal/>
+    <C:calendar-home-set/>
+    <C:calendar-user-address-set/>
+    <X:missing/>
+  </D:prop>
+</D:propfind>`
+	root := decodeDAVMultiStatus(t, propfind(rootPath, "0", rootBody, true))
+	requireDAVProperty(t, root, rootPath, xml.Name{Space: testDAVNS, Local: "resourcetype"}, http.StatusOK)
+	requireDAVHrefProperty(t, root, rootPath, xml.Name{Space: testDAVNS, Local: "current-user-principal"}, http.StatusOK, principalPath)
+	requireDAVHrefProperty(t, root, rootPath, xml.Name{Space: testCalDAVNS, Local: "calendar-home-set"}, http.StatusOK, homePath)
+	requireDAVHrefProperty(t, root, rootPath, xml.Name{Space: testCalDAVNS, Local: "calendar-user-address-set"}, http.StatusOK, "mailto:"+email)
+	requireDAVProperty(t, root, rootPath, xml.Name{Space: "urn:example:unsupported", Local: "missing"}, http.StatusNotFound)
+
+	principalBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <D:resourcetype/>
+    <D:principal-URL/>
+    <C:calendar-home-set/>
+    <C:calendar-user-address-set/>
+  </D:prop>
+</D:propfind>`
+	principal := decodeDAVMultiStatus(t, propfind(principalPath, "0", principalBody, true))
+	principalResourceType := requireDAVProperty(t, principal, principalPath, xml.Name{Space: testDAVNS, Local: "resourcetype"}, http.StatusOK)
+	requireDAVChildren(t, principalResourceType,
+		xml.Name{Space: testDAVNS, Local: "collection"},
+		xml.Name{Space: testDAVNS, Local: "principal"},
+	)
+	requireDAVHrefProperty(t, principal, principalPath, xml.Name{Space: testDAVNS, Local: "principal-URL"}, http.StatusOK, principalPath)
+	requireDAVHrefProperty(t, principal, principalPath, xml.Name{Space: testCalDAVNS, Local: "calendar-home-set"}, http.StatusOK, homePath)
+	requireDAVHrefProperty(t, principal, principalPath, xml.Name{Space: testCalDAVNS, Local: "calendar-user-address-set"}, http.StatusOK, "mailto:"+email)
+
+	homeBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/" xmlns:A="http://apple.com/ns/ical/">
+  <D:prop>
+    <D:displayname/>
+    <D:resourcetype/>
+    <C:supported-calendar-component-set/>
+    <CS:getctag/>
+    <A:calendar-color/>
+  </D:prop>
+</D:propfind>`
+	home := decodeDAVMultiStatus(t, propfind(homePath, "1", homeBody, true))
+	requireDAVProperty(t, home, homePath, xml.Name{Space: testDAVNS, Local: "displayname"}, http.StatusOK)
+	requireDAVProperty(t, home, homePath, xml.Name{Space: testDAVNS, Local: "resourcetype"}, http.StatusOK)
+	requireDAVProperty(t, home, homePath, xml.Name{Space: testCalDAVNS, Local: "supported-calendar-component-set"}, http.StatusNotFound)
+	requireDAVProperty(t, home, homePath, xml.Name{Space: testCSNS, Local: "getctag"}, http.StatusNotFound)
+	requireDAVProperty(t, home, homePath, xml.Name{Space: testAppleNS, Local: "calendar-color"}, http.StatusNotFound)
+	calendarResourceType := requireDAVProperty(t, home, calendarPath, xml.Name{Space: testDAVNS, Local: "resourcetype"}, http.StatusOK)
+	requireDAVChildren(t, calendarResourceType,
+		xml.Name{Space: testDAVNS, Local: "collection"},
+		xml.Name{Space: testCalDAVNS, Local: "calendar"},
+	)
+	requireDAVProperty(t, home, calendarPath, xml.Name{Space: testCalDAVNS, Local: "supported-calendar-component-set"}, http.StatusOK)
+	ctag := requireNonEmptyDAVText(t, home, calendarPath, xml.Name{Space: testCSNS, Local: "getctag"})
+	if !strings.HasPrefix(ctag, "sync-") {
+		t.Fatalf("getctag=%q want sync-*", ctag)
+	}
+	requireNonEmptyDAVText(t, home, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-color"})
+
+	calendarBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/" xmlns:A="http://apple.com/ns/ical/">
+  <D:prop>
+    <D:owner/>
+    <D:supported-report-set/>
+    <C:supported-calendar-data/>
+    <CS:getctag/>
+    <A:calendar-order/>
+	<D:sync-token/>
+  </D:prop>
+</D:propfind>`
+	calendarRec := propfind(calendarPath, "0", calendarBody, true)
+	calendar := decodeDAVMultiStatus(t, calendarRec)
+	requireDAVHrefProperty(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "owner"}, http.StatusOK, principalPath)
+	requireDAVProperty(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "supported-report-set"}, http.StatusOK)
+	requireDAVProperty(t, calendar, calendarPath, xml.Name{Space: testCalDAVNS, Local: "supported-calendar-data"}, http.StatusOK)
+	requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testCSNS, Local: "getctag"})
+	requireNonEmptyDAVText(t, calendar, calendarPath, xml.Name{Space: testAppleNS, Local: "calendar-order"})
+	requireDAVProperty(t, calendar, calendarPath, xml.Name{Space: testDAVNS, Local: "sync-token"}, http.StatusNotFound)
+	if body := calendarRec.Body.String(); !strings.Contains(body, "<C:calendar-query/>") || !strings.Contains(body, "<C:calendar-multiget/>") || strings.Contains(body, "<D:sync-collection/>") {
+		t.Fatalf("unexpected supported reports body=%s", body)
+	}
+
+	syncReportBody := `<?xml version="1.0" encoding="utf-8"?><D:sync-collection xmlns:D="DAV:"><D:sync-token/><D:sync-level>1</D:sync-level><D:prop><D:getetag/></D:prop></D:sync-collection>`
+	syncReq := httptest.NewRequest("REPORT", calendarPath, strings.NewReader(syncReportBody))
+	syncReq.SetBasicAuth(username, password)
+	syncRec := httptest.NewRecorder()
+	router.ServeHTTP(syncRec, syncReq)
+	if syncRec.Code != http.StatusForbidden {
+		t.Fatalf("sync REPORT status=%d want=%d body=%s", syncRec.Code, http.StatusForbidden, syncRec.Body.String())
+	}
+
+	invalidBody := `<D:propfind xmlns:D="DAV:"><D:allprop/><D:propname/></D:propfind>`
+	if invalid := propfind(rootPath, "0", invalidBody, true); invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid PROPFIND status=%d want=%d", invalid.Code, http.StatusBadRequest)
+	}
+	oversizedBody := `<D:propfind xmlns:D="DAV:"><D:prop>` + strings.Repeat(" ", (1<<20)+1) + `</D:prop></D:propfind>`
+	if oversized := propfind(rootPath, "0", oversizedBody, true); oversized.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized PROPFIND status=%d want=%d", oversized.Code, http.StatusRequestEntityTooLarge)
+	}
+
+	missingObjectPath := calendarPath + "missing.ics"
+	if missing := propfind(missingObjectPath, "0", directBody, true); missing.Code != http.StatusNotFound {
+		t.Fatalf("missing object PROPFIND status=%d want=%d", missing.Code, http.StatusNotFound)
+	}
+	missingReportBody := `<?xml version="1.0" encoding="utf-8"?><C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></C:calendar-query>`
+	missingReportReq := httptest.NewRequest("REPORT", missingObjectPath, strings.NewReader(missingReportBody))
+	missingReportReq.SetBasicAuth(username, password)
+	missingReportRec := httptest.NewRecorder()
+	router.ServeHTTP(missingReportRec, missingReportReq)
+	if missingReportRec.Code != http.StatusNotFound {
+		t.Fatalf("missing object REPORT status=%d want=%d", missingReportRec.Code, http.StatusNotFound)
+	}
+}
+
 func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
 	router, db := setupE2ERouterWithDB(t)
 
@@ -555,7 +898,7 @@ func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
 		t.Fatalf("feed missing imported event body=%s", body)
 	}
 
-	propfindBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getetag/></D:prop></D:propfind>`
+	propfindBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getetag/><D:supported-report-set/><D:current-user-privilege-set/></D:prop></D:propfind>`
 	propfindReq := httptest.NewRequest("PROPFIND", "/dav/calendars/"+username+"/todo/", strings.NewReader(propfindBody))
 	propfindReq.SetBasicAuth(username, password)
 	propfindReq.Header.Set("Depth", "1")
@@ -569,10 +912,13 @@ func TestCalendarSubscriptionIncludesImportedCaldavEvents(t *testing.T) {
 	if !strings.Contains(propfindOutput, "/dav/calendars/"+username+"/todo/external-") {
 		t.Fatalf("propfind missing imported href body=%s", propfindOutput)
 	}
-	for _, want := range []string{"<C:calendar-query/>", "<C:calendar-multiget/>", "<D:sync-collection/>"} {
+	for _, want := range []string{"<C:calendar-query/>", "<C:calendar-multiget/>"} {
 		if !strings.Contains(propfindOutput, want) {
 			t.Fatalf("propfind missing supported report %s body=%s", want, propfindOutput)
 		}
+	}
+	if strings.Contains(propfindOutput, "<D:sync-collection/>") {
+		t.Fatalf("propfind should not advertise unsupported sync-collection body=%s", propfindOutput)
 	}
 
 	objectPath := ""

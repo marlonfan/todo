@@ -21,10 +21,12 @@ import (
 )
 
 const (
-	davNS     = "DAV:"
-	caldavNS  = "urn:ietf:params:xml:ns:caldav"
-	csNS      = "http://calendarserver.org/ns/"
-	todoCalID = "todo"
+	davNS       = "DAV:"
+	caldavNS    = "urn:ietf:params:xml:ns:caldav"
+	csNS        = "http://calendarserver.org/ns/"
+	appleICalNS = "http://apple.com/ns/ical/"
+	todoCalID   = "todo"
+	davXMLLimit = 1 << 20
 )
 
 type CalendarExportHandler struct {
@@ -47,6 +49,33 @@ type davRequestContext struct {
 	User       *models.User
 	Kind       davResourceKind
 	ObjectName string
+}
+
+type davPropfindMode int
+
+const (
+	davPropfindAllProp davPropfindMode = iota
+	davPropfindNamedProps
+	davPropfindPropName
+)
+
+type davPropfindRequest struct {
+	Mode       davPropfindMode
+	Properties []xml.Name
+}
+
+func (request davPropfindRequest) includes(name xml.Name) bool {
+	for _, property := range request.Properties {
+		if property == name {
+			return true
+		}
+	}
+	return false
+}
+
+type davProperty struct {
+	Name xml.Name
+	XML  string
 }
 
 func NewCalendarExportHandler(exportService *service.CalendarExportService, authService *service.AuthService) *CalendarExportHandler {
@@ -98,13 +127,34 @@ func (h *CalendarExportHandler) DAVPropfind(c *gin.Context) {
 	if !ok {
 		return
 	}
-	depth := davDepth(c.GetHeader("Depth"))
-	objects, _ := h.objectsForDAV(reqCtx, depth)
-	token := ""
-	if propfindNeedsCollectionToken(reqCtx, depth) {
-		token, _ = h.exportService.CollectionToken(reqCtx.User.ID)
+	body, ok := readDAVXMLBody(c)
+	if !ok {
+		return
 	}
-	responses := h.propfindResponses(c, reqCtx, depth, objects, token)
+	propfind, err := parseDAVPropfindRequest(body)
+	if err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	depth := davDepth(c.GetHeader("Depth"))
+	objects, err := h.objectsForDAV(reqCtx, depth)
+	if err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	token := ""
+	if propfindNeedsCollectionToken(reqCtx, depth, propfind) {
+		token, err = h.exportService.CollectionToken(reqCtx.User.ID)
+		if err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+	}
+	responses, err := h.propfindResponses(reqCtx, depth, objects, token, propfind)
+	if err != nil {
+		respondDAVObjectError(c, err)
+		return
+	}
 	h.writeDAVMultiStatus(c, responses)
 }
 
@@ -117,15 +167,25 @@ func (h *CalendarExportHandler) DAVReport(c *gin.Context) {
 		c.Status(http.StatusForbidden)
 		return
 	}
-	body, _ := io.ReadAll(c.Request.Body)
-	bodyLower := strings.ToLower(string(body))
+	body, ok := readDAVXMLBody(c)
+	if !ok {
+		return
+	}
+	report, err := parseDAVReportRequest(body)
+	if err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	if report.Space != caldavNS || (report.Local != "calendar-query" && report.Local != "calendar-multiget") {
+		c.Status(http.StatusForbidden)
+		return
+	}
 	start, end := h.exportService.DefaultExportRange()
 	if parsedStart, parsedEnd, ok := parseCalendarQueryTimeRange(body); ok {
 		start, end = parsedStart, parsedEnd
 	}
 
 	var objects []service.CalendarObject
-	var err error
 	if hrefs := parseDAVHrefs(body); len(hrefs) > 0 {
 		objects, err = h.objectsByHrefs(reqCtx.User.ID, hrefs)
 	} else if reqCtx.Kind == davResourceObject {
@@ -137,20 +197,17 @@ func (h *CalendarExportHandler) DAVReport(c *gin.Context) {
 	} else {
 		objects, err = h.exportService.ListObjects(reqCtx.User.ID, start, end, false)
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		c.String(http.StatusInternalServerError, err.Error())
+	if err != nil {
+		if reqCtx.Kind == davResourceObject {
+			respondDAVObjectError(c, err)
+		} else {
+			c.String(http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
-	token := ""
-	if strings.Contains(bodyLower, "sync-collection") {
-		token, _ = h.exportService.CollectionToken(reqCtx.User.ID)
-	}
-	responses := make([]string, 0, len(objects)+1)
+	responses := make([]string, 0, len(objects))
 	for _, object := range objects {
 		responses = append(responses, calendarDataResponse(calendarObjectHref(reqCtx.User.Username, object.Href), &object))
-	}
-	if strings.Contains(bodyLower, "sync-collection") {
-		responses = append(responses, syncTokenResponse(calendarHref(reqCtx.User.Username), token))
 	}
 	h.writeDAVMultiStatus(c, responses)
 }
@@ -312,8 +369,14 @@ func (h *CalendarExportHandler) objectsByHrefs(userID int64, hrefs []string) ([]
 	return h.exportService.GetObjectsByNames(userID, objectNames)
 }
 
-func propfindNeedsCollectionToken(reqCtx *davRequestContext, depth int) bool {
+func propfindNeedsCollectionToken(reqCtx *davRequestContext, depth int, request davPropfindRequest) bool {
 	if reqCtx == nil {
+		return false
+	}
+	if request.Mode == davPropfindPropName {
+		return false
+	}
+	if request.Mode == davPropfindNamedProps && !request.includes(xml.Name{Space: csNS, Local: "getctag"}) {
 		return false
 	}
 	switch reqCtx.Kind {
@@ -326,48 +389,47 @@ func propfindNeedsCollectionToken(reqCtx *davRequestContext, depth int) bool {
 	}
 }
 
-func (h *CalendarExportHandler) propfindResponses(c *gin.Context, reqCtx *davRequestContext, depth int, objects []service.CalendarObject, syncToken string) []string {
+func (h *CalendarExportHandler) propfindResponses(reqCtx *davRequestContext, depth int, objects []service.CalendarObject, syncToken string, request davPropfindRequest) ([]string, error) {
 	username := reqCtx.User.Username
 	responses := []string{}
 	switch reqCtx.Kind {
 	case davResourceRoot:
-		responses = append(responses, rootPropResponse("/dav/", username))
+		responses = append(responses, propfindResponse("/dav/", rootProperties(reqCtx.User), request))
 		if depth > 0 {
-			responses = append(responses, principalPropResponse(principalHref(username), reqCtx.User, username))
-			responses = append(responses, homePropResponse(homeHref(username), username))
-			responses = append(responses, calendarCollectionPropResponse(calendarHref(username), "Todo", syncToken))
+			responses = append(responses, propfindResponse(principalHref(username), principalProperties(reqCtx.User), request))
+			responses = append(responses, propfindResponse(homeHref(username), homeProperties(reqCtx.User), request))
+			responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(username, "Todo", syncToken), request))
 		}
 	case davResourcePrincipal:
-		responses = append(responses, principalPropResponse(principalHref(username), reqCtx.User, username))
+		responses = append(responses, propfindResponse(principalHref(username), principalProperties(reqCtx.User), request))
 	case davResourceHome:
-		responses = append(responses, homePropResponse(homeHref(username), username))
+		responses = append(responses, propfindResponse(homeHref(username), homeProperties(reqCtx.User), request))
 		if depth > 0 {
-			responses = append(responses, calendarCollectionPropResponse(calendarHref(username), "Todo", syncToken))
+			responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(username, "Todo", syncToken), request))
 		}
 	case davResourceCalendar:
-		responses = append(responses, calendarCollectionPropResponse(calendarHref(username), "Todo", syncToken))
+		responses = append(responses, propfindResponse(calendarHref(username), calendarCollectionProperties(username, "Todo", syncToken), request))
 		if depth > 0 {
 			for _, object := range objects {
 				item := object
-				responses = append(responses, objectPropResponse(calendarObjectHref(username, item.Href), &item))
+				responses = append(responses, propfindResponse(calendarObjectHref(username, item.Href), objectProperties(&item), request))
 			}
 		}
 	case davResourceObject:
 		object, err := h.exportService.GetObject(reqCtx.User.ID, reqCtx.ObjectName)
-		if err == nil {
-			responses = append(responses, objectPropResponse(calendarObjectHref(username, object.Href), object))
+		if err != nil {
+			return nil, err
 		}
-	default:
-		_ = c
+		responses = append(responses, propfindResponse(calendarObjectHref(username, object.Href), objectProperties(object), request))
 	}
-	return responses
+	return responses, nil
 }
 
 func (h *CalendarExportHandler) writeDAVMultiStatus(c *gin.Context, responses []string) {
 	setDAVHeaders(c)
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>`)
-	b.WriteString(`<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/">`)
+	b.WriteString(`<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/" xmlns:A="http://apple.com/ns/ical/">`)
 	for _, response := range responses {
 		b.WriteString(response)
 	}
@@ -524,63 +586,314 @@ func parseDAVHrefs(body []byte) []string {
 	return hrefs
 }
 
-func rootPropResponse(href, username string) string {
-	return propResponse(href, `
-<D:displayname>Todo CalDAV</D:displayname>
-<D:resourcetype><D:collection/></D:resourcetype>
-<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>
-<D:principal-collection-set><D:href>/dav/principals/</D:href></D:principal-collection-set>
-`+supportedReportSet("D:principal-property-search", "D:expand-property"))
-}
-
-func principalPropResponse(href string, user *models.User, username string) string {
-	email := ""
-	if user != nil {
-		email = strings.TrimSpace(user.Email)
+func readDAVXMLBody(c *gin.Context) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, davXMLLimit))
+	if err == nil {
+		return body, true
 	}
-	address := ""
-	if email != "" {
-		address = `<D:href>mailto:` + escapeXML(email) + `</D:href>`
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		c.Status(http.StatusRequestEntityTooLarge)
+	} else {
+		c.Status(http.StatusBadRequest)
 	}
-	return propResponse(href, `
-<D:displayname>`+escapeXML(username)+`</D:displayname>
-<D:resourcetype><D:principal/></D:resourcetype>
-<C:calendar-home-set><D:href>`+escapeXML(homeHref(username))+`</D:href></C:calendar-home-set>
-<C:calendar-user-address-set>`+address+`</C:calendar-user-address-set>
-<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>
-`+supportedReportSet("D:principal-property-search", "D:expand-property"))
+	return nil, false
 }
 
-func homePropResponse(href, username string) string {
-	return propResponse(href, `
-<D:displayname>`+escapeXML(username)+` calendars</D:displayname>
-<D:resourcetype><D:collection/></D:resourcetype>
-<D:current-user-principal><D:href>`+escapeXML(principalHref(username))+`</D:href></D:current-user-principal>
-`+supportedReportSet("D:sync-collection"))
+func parseDAVReportRequest(body []byte) (xml.Name, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return xml.Name{}, errors.New("empty REPORT body")
+	}
+	var envelope struct {
+		XMLName xml.Name
+	}
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return xml.Name{}, err
+	}
+	return envelope.XMLName, nil
 }
 
-func calendarCollectionPropResponse(href, displayName, syncToken string) string {
-	return propResponse(href, `
-<D:displayname>`+escapeXML(displayName)+`</D:displayname>
-<D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
-<C:supported-calendar-component-set><C:comp name="VEVENT"/><C:comp name="VTODO"/></C:supported-calendar-component-set>
-<C:calendar-description>Todo tasks</C:calendar-description>
-`+supportedReportSet("C:calendar-query", "C:calendar-multiget", "D:sync-collection")+`
-<CS:getctag>`+escapeXML(syncToken)+`</CS:getctag>
-<D:sync-token>`+escapeXML(syncToken)+`</D:sync-token>
-<D:current-user-privilege-set><D:privilege><D:read/></D:privilege><D:privilege><D:write/></D:privilege></D:current-user-privilege-set>`)
+type davRequestedProperty struct {
+	XMLName  xml.Name
+	InnerXML string `xml:",innerxml"`
 }
 
-func objectPropResponse(href string, object *service.CalendarObject) string {
-	return propResponse(href, objectProps(object, false))
+type davPropertyContainer struct {
+	Properties []davRequestedProperty `xml:",any"`
+}
+
+type davPropfindEnvelope struct {
+	XMLName  xml.Name              `xml:"DAV: propfind"`
+	AllProp  *struct{}             `xml:"DAV: allprop"`
+	PropName *struct{}             `xml:"DAV: propname"`
+	Prop     *davPropertyContainer `xml:"DAV: prop"`
+	Include  *davPropertyContainer `xml:"DAV: include"`
+}
+
+func parseDAVPropfindRequest(body []byte) (davPropfindRequest, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return davPropfindRequest{Mode: davPropfindAllProp}, nil
+	}
+	var envelope davPropfindEnvelope
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return davPropfindRequest{}, err
+	}
+	if envelope.XMLName != (xml.Name{Space: davNS, Local: "propfind"}) {
+		return davPropfindRequest{}, errors.New("invalid PROPFIND body")
+	}
+	toNames := func(container *davPropertyContainer) ([]xml.Name, error) {
+		if container == nil {
+			return nil, nil
+		}
+		if len(container.Properties) == 0 {
+			return nil, errors.New("empty PROPFIND property list")
+		}
+		names := make([]xml.Name, 0, len(container.Properties))
+		for _, property := range container.Properties {
+			if property.InnerXML != "" {
+				return nil, errors.New("PROPFIND property values are not allowed")
+			}
+			names = append(names, property.XMLName)
+		}
+		return names, nil
+	}
+	selectors := 0
+	if envelope.Prop != nil {
+		selectors++
+	}
+	if envelope.PropName != nil {
+		selectors++
+	}
+	if envelope.AllProp != nil {
+		selectors++
+	}
+	if selectors != 1 || (envelope.Include != nil && envelope.AllProp == nil) {
+		return davPropfindRequest{}, errors.New("invalid PROPFIND selector")
+	}
+	if envelope.Prop != nil {
+		properties, err := toNames(envelope.Prop)
+		if err != nil {
+			return davPropfindRequest{}, err
+		}
+		return davPropfindRequest{Mode: davPropfindNamedProps, Properties: properties}, nil
+	}
+	if envelope.PropName != nil {
+		return davPropfindRequest{Mode: davPropfindPropName}, nil
+	}
+	properties, err := toNames(envelope.Include)
+	if err != nil && envelope.Include != nil {
+		return davPropfindRequest{}, err
+	}
+	return davPropfindRequest{Mode: davPropfindAllProp, Properties: properties}, nil
+}
+
+func rootProperties(user *models.User) []davProperty {
+	username := user.Username
+	return []davProperty{
+		property(davNS, "displayname", escapeXML("Todo CalDAV")),
+		property(davNS, "resourcetype", `<D:collection/>`),
+		property(davNS, "current-user-principal", hrefValue(principalHref(username))),
+		property(caldavNS, "calendar-home-set", hrefValue(homeHref(username))),
+		property(caldavNS, "calendar-user-address-set", calendarUserAddressValue(user)),
+		property(davNS, "current-user-privilege-set", readPrivilegeValue()),
+	}
+}
+
+func principalProperties(user *models.User) []davProperty {
+	username := user.Username
+	return []davProperty{
+		property(davNS, "displayname", escapeXML(username)),
+		property(davNS, "resourcetype", `<D:collection/><D:principal/>`),
+		property(davNS, "principal-URL", hrefValue(principalHref(username))),
+		property(davNS, "current-user-principal", hrefValue(principalHref(username))),
+		property(caldavNS, "calendar-home-set", hrefValue(homeHref(username))),
+		property(caldavNS, "calendar-user-address-set", calendarUserAddressValue(user)),
+		property(davNS, "current-user-privilege-set", readPrivilegeValue()),
+	}
+}
+
+func homeProperties(user *models.User) []davProperty {
+	username := user.Username
+	return []davProperty{
+		property(davNS, "displayname", escapeXML(username+" calendars")),
+		property(davNS, "resourcetype", `<D:collection/>`),
+		property(davNS, "owner", hrefValue(principalHref(username))),
+		property(davNS, "current-user-principal", hrefValue(principalHref(username))),
+		property(caldavNS, "calendar-home-set", hrefValue(homeHref(username))),
+		property(caldavNS, "calendar-user-address-set", calendarUserAddressValue(user)),
+		property(davNS, "current-user-privilege-set", readPrivilegeValue()),
+	}
+}
+
+func calendarCollectionProperties(username, displayName, syncToken string) []davProperty {
+	return []davProperty{
+		property(davNS, "displayname", escapeXML(displayName)),
+		property(davNS, "resourcetype", `<D:collection/><C:calendar/>`),
+		property(davNS, "owner", hrefValue(principalHref(username))),
+		property(davNS, "current-user-principal", hrefValue(principalHref(username))),
+		property(caldavNS, "calendar-home-set", hrefValue(homeHref(username))),
+		property(caldavNS, "supported-calendar-component-set", `<C:comp name="VEVENT"/><C:comp name="VTODO"/>`),
+		property(caldavNS, "supported-calendar-data", `<C:calendar-data content-type="text/calendar" version="2.0"/>`),
+		property(caldavNS, "calendar-description", escapeXML("Todo tasks")),
+		property(davNS, "supported-report-set", supportedReportSetValue("C:calendar-query", "C:calendar-multiget")),
+		property(csNS, "getctag", escapeXML(syncToken)),
+		property(davNS, "current-user-privilege-set", readWritePrivilegeValue()),
+		property(appleICalNS, "calendar-color", "#3A87ADFF"),
+		property(appleICalNS, "calendar-order", "1"),
+	}
+}
+
+func objectProperties(object *service.CalendarObject) []davProperty {
+	if object == nil {
+		return nil
+	}
+	privileges := readWritePrivilegeValue()
+	if object.ReadOnly {
+		privileges = readPrivilegeValue()
+	}
+	return []davProperty{
+		property(davNS, "resourcetype", ""),
+		property(davNS, "getetag", escapeXML(object.ETag)),
+		property(davNS, "getcontenttype", "text/calendar; charset=utf-8"),
+		property(davNS, "getcontentlength", strconv.Itoa(len(object.Data))),
+		property(davNS, "current-user-privilege-set", privileges),
+	}
+}
+
+func property(namespace, local, value string) davProperty {
+	name := xml.Name{Space: namespace, Local: local}
+	return davProperty{Name: name, XML: propertyXML(name, value)}
+}
+
+func propertyXML(name xml.Name, value string) string {
+	prefix := namespacePrefix(name.Space)
+	if prefix == "" {
+		return `<` + name.Local + `>` + value + `</` + name.Local + `>`
+	}
+	return `<` + prefix + `:` + name.Local + `>` + value + `</` + prefix + `:` + name.Local + `>`
+}
+
+func emptyPropertyXML(name xml.Name) string {
+	prefix := namespacePrefix(name.Space)
+	if prefix != "" {
+		return `<` + prefix + `:` + name.Local + `/>`
+	}
+	if name.Space == "" {
+		return `<` + name.Local + `/>`
+	}
+	return `<X:` + name.Local + ` xmlns:X="` + escapeXML(name.Space) + `"/>`
+}
+
+func namespacePrefix(namespace string) string {
+	switch namespace {
+	case davNS:
+		return "D"
+	case caldavNS:
+		return "C"
+	case csNS:
+		return "CS"
+	case appleICalNS:
+		return "A"
+	default:
+		return ""
+	}
+}
+
+func propertyKey(name xml.Name) string {
+	return name.Space + "\x00" + name.Local
+}
+
+func propfindResponse(href string, available []davProperty, request davPropfindRequest) string {
+	availableByName := make(map[string]davProperty, len(available))
+	for _, property := range available {
+		availableByName[propertyKey(property.Name)] = property
+	}
+
+	okProps := make([]string, 0, len(available))
+	missingProps := []string{}
+	switch request.Mode {
+	case davPropfindNamedProps:
+		for _, requested := range request.Properties {
+			if property, ok := availableByName[propertyKey(requested)]; ok {
+				okProps = append(okProps, property.XML)
+			} else {
+				missingProps = append(missingProps, emptyPropertyXML(requested))
+			}
+		}
+	case davPropfindPropName:
+		for _, property := range available {
+			okProps = append(okProps, emptyPropertyXML(property.Name))
+		}
+	default:
+		for _, property := range available {
+			okProps = append(okProps, property.XML)
+		}
+		for _, included := range request.Properties {
+			if _, ok := availableByName[propertyKey(included)]; !ok {
+				missingProps = append(missingProps, emptyPropertyXML(included))
+			}
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(`<D:response><D:href>`)
+	b.WriteString(escapeXML(href))
+	b.WriteString(`</D:href>`)
+	if len(okProps) > 0 || len(missingProps) == 0 {
+		b.WriteString(propstatXML(strings.Join(okProps, ""), "HTTP/1.1 200 OK"))
+	}
+	if len(missingProps) > 0 {
+		b.WriteString(propstatXML(strings.Join(missingProps, ""), "HTTP/1.1 404 Not Found"))
+	}
+	b.WriteString(`</D:response>`)
+	return b.String()
+}
+
+func propstatXML(properties, status string) string {
+	return `<D:propstat><D:prop>` + properties + `</D:prop><D:status>` + status + `</D:status></D:propstat>`
+}
+
+func hrefValue(href string) string {
+	return `<D:href>` + escapeXML(href) + `</D:href>`
+}
+
+func calendarUserAddressValue(user *models.User) string {
+	if user == nil || strings.TrimSpace(user.Email) == "" {
+		return ""
+	}
+	return hrefValue("mailto:" + strings.TrimSpace(user.Email))
+}
+
+func readPrivilegeValue() string {
+	return `<D:privilege><D:read/></D:privilege>`
+}
+
+func readWritePrivilegeValue() string {
+	return readPrivilegeValue() + `<D:privilege><D:write/></D:privilege>`
+}
+
+func supportedReportSetValue(reports ...string) string {
+	var b strings.Builder
+	for _, report := range reports {
+		report = strings.TrimSpace(report)
+		if report == "" {
+			continue
+		}
+		prefix, name, ok := strings.Cut(report, ":")
+		if !ok || strings.TrimSpace(prefix) == "" || strings.TrimSpace(name) == "" {
+			continue
+		}
+		b.WriteString("<D:supported-report><D:report><")
+		b.WriteString(prefix)
+		b.WriteString(":")
+		b.WriteString(name)
+		b.WriteString("/></D:report></D:supported-report>")
+	}
+	return b.String()
 }
 
 func calendarDataResponse(href string, object *service.CalendarObject) string {
 	return propResponse(href, objectProps(object, true))
-}
-
-func syncTokenResponse(href, token string) string {
-	return propResponse(href, `<D:sync-token>`+escapeXML(token)+`</D:sync-token>`)
 }
 
 func objectProps(object *service.CalendarObject, includeData bool) string {
@@ -600,28 +913,6 @@ func objectProps(object *service.CalendarObject, includeData bool) string {
 		props += `<C:calendar-data>` + escapeXML(object.Data) + `</C:calendar-data>`
 	}
 	return props
-}
-
-func supportedReportSet(reports ...string) string {
-	var b strings.Builder
-	b.WriteString("<D:supported-report-set>")
-	for _, report := range reports {
-		report = strings.TrimSpace(report)
-		if report == "" {
-			continue
-		}
-		prefix, name, ok := strings.Cut(report, ":")
-		if !ok || strings.TrimSpace(prefix) == "" || strings.TrimSpace(name) == "" {
-			continue
-		}
-		b.WriteString("<D:supported-report><D:report><")
-		b.WriteString(prefix)
-		b.WriteString(":")
-		b.WriteString(name)
-		b.WriteString("/></D:report></D:supported-report>")
-	}
-	b.WriteString("</D:supported-report-set>")
-	return b.String()
 }
 
 func propResponse(href, props string) string {

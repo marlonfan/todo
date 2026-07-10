@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,11 +20,17 @@ func CORS() gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Depth, Destination, Overwrite, If-Match, If-None-Match, X-Client-Op-Id, X-Client-Submitted-At, X-Client-Submit-Source")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, PATCH, DELETE, PROPFIND, REPORT")
 
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
+		isBrowserPreflight := c.Request.Method == http.MethodOptions &&
+			origin != "" && c.GetHeader("Access-Control-Request-Method") != ""
+		if isBrowserPreflight && !isDAVPath(c.Request.URL.Path) {
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 
 		c.Next()
 	}
+}
+
+func isDAVPath(path string) bool {
+	return path == "/dav" || strings.HasPrefix(path, "/dav/") || path == "/.well-known/caldav"
 }

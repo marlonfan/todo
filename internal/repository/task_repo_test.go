@@ -53,3 +53,31 @@ func TestListChangedSinceIncludesFullTimestampBoundary(t *testing.T) {
 		t.Fatalf("unexpected boundary rows: %q, %q", got[1].Title, got[2].Title)
 	}
 }
+
+func TestCalendarCollectionStateScansSQLiteAggregateTime(t *testing.T) {
+	db := openTaskRepoTestDB(t)
+	repo := NewTaskRepository(db)
+	base := time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)
+
+	user := &models.User{Username: "collection-state", Email: "collection-state@example.com", PasswordHash: "hash"}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	tasks := []models.Task{
+		{UserID: user.ID, Title: "included-old", Status: models.TaskStatusPending, Revision: 2, CreatedAt: base, UpdatedAt: base.Add(time.Minute)},
+		{UserID: user.ID, Title: "included-latest", Status: models.TaskStatusCompleted, Revision: 7, CreatedAt: base, UpdatedAt: base.Add(2 * time.Minute)},
+		{UserID: user.ID, Title: "cancelled", Status: models.TaskStatusCancelled, Revision: 9, CreatedAt: base, UpdatedAt: base.Add(3 * time.Minute)},
+		{UserID: user.ID, Title: "skipped", Status: models.TaskStatusSkipped, Revision: 10, CreatedAt: base, UpdatedAt: base.Add(4 * time.Minute)},
+	}
+	if err := db.Create(&tasks).Error; err != nil {
+		t.Fatalf("create tasks: %v", err)
+	}
+
+	state, err := repo.CalendarCollectionState(user.ID)
+	if err != nil {
+		t.Fatalf("collection state: %v", err)
+	}
+	if state.Count != 2 || state.MaxRevision != 7 || !state.MaxUpdatedAt.Equal(base.Add(2*time.Minute)) {
+		t.Fatalf("state=%+v", state)
+	}
+}

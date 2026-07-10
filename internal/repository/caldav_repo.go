@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"database/sql"
 	"errors"
 	"time"
 	"todo-app/internal/models"
@@ -250,7 +249,7 @@ func (r *CaldavRepository) ListEventsInRange(userID int64, start, end time.Time)
 func (r *CaldavRepository) EventCollectionStateInRange(userID int64, start, end time.Time) (CaldavEventCollectionState, error) {
 	var row struct {
 		Count        int64
-		MaxUpdatedAt sql.NullTime
+		MaxUpdatedAt nullableDBTime
 	}
 	err := r.db.Model(&models.CaldavEventCache{}).
 		Select("COUNT(*) AS count, MAX(updated_at) AS max_updated_at").

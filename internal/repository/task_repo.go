@@ -91,7 +91,7 @@ func (r *TaskRepository) ListByCalDAVHrefs(userID int64, hrefs []string) ([]mode
 func (r *TaskRepository) CalendarCollectionState(userID int64) (TaskCalendarCollectionState, error) {
 	var row struct {
 		Count        int64
-		MaxUpdatedAt sql.NullTime
+		MaxUpdatedAt nullableDBTime
 		MaxRevision  sql.NullInt64
 	}
 	err := r.db.Model(&models.Task{}).
