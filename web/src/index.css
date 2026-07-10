@@ -4337,9 +4337,19 @@ body {
   animation: task-row-complete-exit 0.14s ease-in both;
 }
 
-.task-row-animate-insert {
-  overflow: hidden;
-  animation: task-row-insert 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+.task-row-animate-complete-exit::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 6px hsl(var(--primary) / 0.35);
+  pointer-events: none;
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: task-row-complete-progress 0.14s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 @keyframes task-pull-refresh-spin {
@@ -4380,22 +4390,18 @@ body {
   }
 }
 
-@keyframes task-row-insert {
+@keyframes task-row-complete-progress {
   0% {
-    max-height: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-    opacity: 0;
-    transform: translateY(-6px);
+    opacity: 0.75;
+    transform: scaleX(0);
   }
-  72% {
-    max-height: 4.75rem;
+  70% {
     opacity: 1;
+    transform: scaleX(1);
   }
   100% {
-    max-height: 4.75rem;
-    opacity: 1;
-    transform: translateY(0);
+    opacity: 0;
+    transform: scaleX(1);
   }
 }
 
@@ -4410,9 +4416,13 @@ body {
   }
 
   .task-row-animate-complete-exit,
-  .task-row-animate-complete-feedback,
-  .task-row-animate-insert {
+  .task-row-animate-complete-feedback {
     animation: none;
+  }
+
+  .task-row-animate-complete-exit::after {
+    animation: none;
+    opacity: 0;
   }
 }
 

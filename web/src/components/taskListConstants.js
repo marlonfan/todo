@@ -11,7 +11,6 @@ export const OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS = 5 * 60 * 1000;
 export const PINNED_NEXT_OCCURRENCE_TTL_MS = 4000;
 export const TASK_ROW_COMPLETE_FEEDBACK_MS = 100;
 export const TASK_ROW_COMPLETE_EXIT_MS = 140;
-export const TASK_ROW_INSERT_MS = 220;
 export const RECURRING_SEARCH_STATUSES = 'pending,completed,cancelled,skipped';
 export const DELETE_DIALOG_KIND_RECURRING_CHOICE = 'recurring-choice';
 export const DELETE_DIALOG_KIND_RECURRING_SERIES = 'recurring-series';
