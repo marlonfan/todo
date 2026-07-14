@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"todo-app/internal/netpolicy"
 	"todo-app/internal/notify"
 )
 
@@ -18,9 +19,7 @@ type WebhookNotifier struct {
 
 func New() *WebhookNotifier {
 	return &WebhookNotifier{
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient: netpolicy.NewHTTPClient(30 * time.Second),
 	}
 }
 
@@ -32,8 +31,8 @@ func (w *WebhookNotifier) ValidateConfig(config map[string]string) error {
 	if config["url"] == "" {
 		return errors.New("url is required")
 	}
-	if !strings.HasPrefix(config["url"], "http://") && !strings.HasPrefix(config["url"], "https://") {
-		return errors.New("url must start with http:// or https://")
+	if err := netpolicy.ValidateURL(config["url"]); err != nil {
+		return err
 	}
 	return nil
 }
@@ -44,6 +43,9 @@ func (w *WebhookNotifier) DefaultTemplate() string {
 
 func (w *WebhookNotifier) Send(ctx context.Context, userID int64, config map[string]string, msg *notify.Message) error {
 	url := config["url"]
+	if err := netpolicy.ValidateURL(url); err != nil {
+		return err
+	}
 	method := config["method"]
 	if method == "" {
 		method = "POST"

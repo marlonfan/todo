@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { authAPI, getToken, getTokenStore } from './api/client';
 import { tokenReady } from './platform/init';
 import { setUserTimezone } from './utils/time';
-import { scheduleSync } from './data/syncEngine';
+import { clearAuthenticatedLocalState, initializeSyncEngine, stopSyncEngine } from './data/syncEngine';
+import { queryClient } from './query/client';
 import ErrorBoundary from './components/ErrorBoundary';
 
 const Login = lazy(() => import('./components/Login'));
@@ -64,17 +65,40 @@ function App() {
             if (res.data.timezone) {
               setUserTimezone(res.data.timezone, false);
             }
-            scheduleSync();
           })
-          .catch(() => {
+          .catch(async () => {
             getTokenStore().remove();
             localStorage.removeItem('user');
+            await clearAuthenticatedLocalState(queryClient);
           })
           .finally(() => setLoading(false));
       } else {
         setLoading(false);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      stopSyncEngine();
+      return undefined;
+    }
+    initializeSyncEngine(queryClient);
+    return () => stopSyncEngine();
+  }, [user]);
+
+  useEffect(() => {
+    const handleAuthInvalidated = async () => {
+      await clearAuthenticatedLocalState(queryClient);
+      setUser(null);
+      if (isDesktopRuntime) {
+        window.location.hash = '#/login';
+      } else {
+        window.location.assign('/login');
+      }
+    };
+    window.addEventListener('todo:auth-invalidated', handleAuthInvalidated);
+    return () => window.removeEventListener('todo:auth-invalidated', handleAuthInvalidated);
   }, []);
 
   if (loading) {

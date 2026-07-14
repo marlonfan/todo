@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"time"
 	"todo-app/internal/config"
 
@@ -19,7 +20,7 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 
 	switch cfg.Driver {
 	case "sqlite":
-		db, err := gorm.Open(sqlite.Open(cfg.DSN), gormCfg)
+		db, err := gorm.Open(sqlite.Open(sqliteDSN(cfg.DSN)), gormCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -30,22 +31,18 @@ func NewDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 		sqlDB.SetMaxOpenConns(8)
 		sqlDB.SetMaxIdleConns(4)
 		sqlDB.SetConnMaxLifetime(0)
-		if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
-			return nil, err
-		}
-		if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
-			return nil, err
-		}
-		if err := db.Exec("PRAGMA busy_timeout=10000;").Error; err != nil {
-			return nil, err
-		}
-		if err := db.Exec("PRAGMA foreign_keys=ON;").Error; err != nil {
-			return nil, err
-		}
 		return db, nil
 	case "postgres":
 		return gorm.Open(postgres.Open(cfg.DSN), gormCfg)
 	default:
 		return nil, fmt.Errorf("unsupported database driver: %s", cfg.Driver)
 	}
+}
+
+func sqliteDSN(dsn string) string {
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "_foreign_keys=on&_busy_timeout=10000&_journal_mode=WAL&_synchronous=NORMAL"
 }

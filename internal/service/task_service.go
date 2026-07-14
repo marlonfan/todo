@@ -116,6 +116,30 @@ func NewTaskService(
 	}
 }
 
+func (s *TaskService) withTaskTransaction(fn func(*TaskService) error) error {
+	return s.taskRepo.WithTransaction(func(tx *gorm.DB) error {
+		scoped := *s
+		scoped.taskRepo = repository.NewTaskRepository(tx)
+		scoped.catRepo = repository.NewCategoryRepository(tx)
+		scoped.userRepo = repository.NewUserRepository(tx)
+		scoped.notifyRepo = repository.NewNotificationRepository(tx)
+		if s.taskActivityRepo != nil {
+			scoped.taskActivityRepo = repository.NewTaskActivityRepository(tx)
+		}
+		return fn(&scoped)
+	})
+}
+
+func (s *TaskService) afterTaskWrite(userID int64, task *models.Task, operation string) {
+	if task == nil {
+		return
+	}
+	if err := s.syncTaskReminder(userID, task); err != nil {
+		log.Printf("Warning: failed to sync reminder after task %s for user %d task %d: %v", operation, userID, task.ID, err)
+	}
+	s.notifyTaskChanged(userID)
+}
+
 func (s *TaskService) SetCaldavService(caldavSvc *CaldavService) {
 	s.caldavSvc = caldavSvc
 }
@@ -138,6 +162,20 @@ func (s *TaskService) touchTaskForSync(task *models.Task) error {
 }
 
 func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*models.Task, error) {
+	var task *models.Task
+	err := s.withTaskTransaction(func(scoped *TaskService) error {
+		var err error
+		task, err = scoped.createInTransaction(userID, req)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.afterTaskWrite(userID, task, "create")
+	return task, nil
+}
+
+func (s *TaskService) createInTransaction(userID int64, req *models.CreateTaskRequest) (*models.Task, error) {
 	if err := normalizeTaskTimes(req.ClientTimezone, req.StartTimeLocal, req.EndTimeLocal, &req.StartTime, &req.EndTime); err != nil {
 		return nil, err
 	}
@@ -190,11 +228,6 @@ func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*mode
 		return nil, err
 	}
 
-	if err := s.syncTaskReminder(userID, savedTask); err != nil {
-		log.Printf("Warning: failed to sync reminder after task create for user %d task %d: %v", userID, savedTask.ID, err)
-	}
-
-	s.notifyTaskChanged(userID)
 	return savedTask, nil
 }
 
@@ -450,6 +483,26 @@ func (s *TaskService) Update(
 	expectedRevision *int64,
 	activityMeta *TaskActivityMeta,
 ) (*models.Task, error) {
+	var task *models.Task
+	err := s.withTaskTransaction(func(scoped *TaskService) error {
+		var err error
+		task, err = scoped.updateInTransaction(userID, taskID, req, fieldMask, expectedRevision, activityMeta)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.afterTaskWrite(userID, task, "update")
+	return task, nil
+}
+
+func (s *TaskService) updateInTransaction(
+	userID, taskID int64,
+	req *models.UpdateTaskRequest,
+	fieldMask map[string]bool,
+	expectedRevision *int64,
+	activityMeta *TaskActivityMeta,
+) (*models.Task, error) {
 	if err := normalizeTaskTimes(req.ClientTimezone, req.StartTimeLocal, req.EndTimeLocal, &req.StartTime, &req.EndTime); err != nil {
 		return nil, err
 	}
@@ -630,11 +683,6 @@ func (s *TaskService) Update(
 		}); err != nil {
 			return nil, err
 		}
-		if occurrenceStatusValue != nil && !baseChanged {
-			if err := s.syncTaskReminder(userID, task); err != nil {
-				log.Printf("Warning: failed to sync reminder after recurring occurrence update for user %d task %d: %v", userID, task.ID, err)
-			}
-		}
 		if !baseChanged {
 			if err := s.touchTaskForSync(task); err != nil {
 				return nil, err
@@ -672,19 +720,31 @@ func (s *TaskService) Update(
 		if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
 			log.Printf("Warning: failed to record task activity after task update for user %d task %d: %v", userID, updatedTask.ID, err)
 		}
-
-		if err := s.syncTaskReminder(userID, updatedTask); err != nil {
-			log.Printf("Warning: failed to sync reminder after task update for user %d task %d: %v", userID, updatedTask.ID, err)
-		}
-	}
-
-	if baseChanged || categoriesChanged || hasCompletedAnchor || occurrencePatchNeeded {
-		s.notifyTaskChanged(userID)
 	}
 	return updatedTask, nil
 }
 
 func (s *TaskService) UpdateStatus(
+	userID, taskID int64,
+	status models.TaskStatus,
+	instanceID, occurrenceDate string,
+	expectedRevision *int64,
+	activityMeta *TaskActivityMeta,
+) (*models.Task, error) {
+	var task *models.Task
+	err := s.withTaskTransaction(func(scoped *TaskService) error {
+		var err error
+		task, err = scoped.updateStatusInTransaction(userID, taskID, status, instanceID, occurrenceDate, expectedRevision, activityMeta)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.afterTaskWrite(userID, task, "status update")
+	return task, nil
+}
+
+func (s *TaskService) updateStatusInTransaction(
 	userID, taskID int64,
 	status models.TaskStatus,
 	instanceID, occurrenceDate string,
@@ -719,13 +779,9 @@ func (s *TaskService) UpdateStatus(
 			}); err != nil {
 				return nil, err
 			}
-			if err := s.syncTaskReminder(userID, task); err != nil {
-				log.Printf("Warning: failed to sync reminder after recurring occurrence status update for user %d task %d: %v", userID, task.ID, err)
-			}
 			if err := s.touchTaskForSync(task); err != nil {
 				return nil, err
 			}
-			s.notifyTaskChanged(userID)
 			return task, nil
 		}
 	}
@@ -749,9 +805,6 @@ func (s *TaskService) UpdateStatus(
 			return nil, err
 		}
 	}
-	if err := s.syncTaskReminder(userID, task); err != nil {
-		log.Printf("Warning: failed to sync reminder after task status update for user %d task %d: %v", userID, task.ID, err)
-	}
 	updatedTask, err := s.taskRepo.GetByID(task.ID)
 	if err != nil {
 		return nil, err
@@ -759,9 +812,6 @@ func (s *TaskService) UpdateStatus(
 	afterSnapshot := snapshotTaskForActivity(updatedTask)
 	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
 		log.Printf("Warning: failed to record task activity after task status update for user %d task %d: %v", userID, updatedTask.ID, err)
-	}
-	if changed {
-		s.notifyTaskChanged(userID)
 	}
 	return updatedTask, nil
 }
@@ -822,6 +872,25 @@ func (s *TaskService) UpdateSchedule(
 	expectedRevision *int64,
 	activityMeta *TaskActivityMeta,
 ) (*models.Task, error) {
+	var task *models.Task
+	err := s.withTaskTransaction(func(scoped *TaskService) error {
+		var err error
+		task, err = scoped.updateScheduleInTransaction(userID, taskID, req, expectedRevision, activityMeta)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.afterTaskWrite(userID, task, "schedule update")
+	return task, nil
+}
+
+func (s *TaskService) updateScheduleInTransaction(
+	userID, taskID int64,
+	req *models.UpdateTaskScheduleRequest,
+	expectedRevision *int64,
+	activityMeta *TaskActivityMeta,
+) (*models.Task, error) {
 	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -848,9 +917,6 @@ func (s *TaskService) UpdateSchedule(
 	if err := s.taskRepo.Update(task); err != nil {
 		return nil, err
 	}
-	if err := s.syncTaskReminder(userID, task); err != nil {
-		log.Printf("Warning: failed to sync reminder after task schedule update for user %d task %d: %v", userID, task.ID, err)
-	}
 	updatedTask, err := s.taskRepo.GetByID(task.ID)
 	if err != nil {
 		return nil, err
@@ -859,11 +925,21 @@ func (s *TaskService) UpdateSchedule(
 	if err := s.recordTaskActivity(userID, updatedTask.ID, beforeSnapshot, afterSnapshot, activityMeta); err != nil {
 		log.Printf("Warning: failed to record task activity after task schedule update for user %d task %d: %v", userID, updatedTask.ID, err)
 	}
-	s.notifyTaskChanged(userID)
 	return updatedTask, nil
 }
 
 func (s *TaskService) Delete(userID, taskID int64, expectedRevision *int64) error {
+	err := s.withTaskTransaction(func(scoped *TaskService) error {
+		return scoped.deleteInTransaction(userID, taskID, expectedRevision)
+	})
+	if err != nil {
+		return err
+	}
+	s.notifyTaskChanged(userID)
+	return nil
+}
+
+func (s *TaskService) deleteInTransaction(userID, taskID int64, expectedRevision *int64) error {
 	// Verify ownership
 	task, err := s.taskRepo.GetByIDAndUser(taskID, userID)
 	if err != nil {
@@ -883,7 +959,6 @@ func (s *TaskService) Delete(userID, taskID int64, expectedRevision *int64) erro
 	if err := s.taskRepo.DeleteWithDeleteLog(userID, taskID, time.Now().UTC()); err != nil {
 		return err
 	}
-	s.notifyTaskChanged(userID)
 	return nil
 }
 

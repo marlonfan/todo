@@ -40,9 +40,25 @@ const apiClient = axios.create({
   },
 });
 
+let sessionRequestController = new AbortController();
+
+function combineRequestSignals(signal) {
+  if (!signal) return sessionRequestController.signal;
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') {
+    return AbortSignal.any([signal, sessionRequestController.signal]);
+  }
+  return signal;
+}
+
+export function cancelPendingAPIRequests() {
+  sessionRequestController.abort();
+  sessionRequestController = new AbortController();
+}
+
 // Request interceptor to add auth token
 apiClient.interceptors.request.use(
   (config) => {
+    config.signal = combineRequestSignals(config.signal);
     const token = getTokenStore().get();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -67,15 +83,12 @@ function rejectRefreshQueue(err) {
 }
 
 function clearAuthAndRedirect() {
+  cancelPendingAPIRequests();
   const store = getTokenStore();
   store.remove();
   localStorage.removeItem('user');
   if (typeof window !== 'undefined') {
-    if (isDesktopRuntime()) {
-      window.location.hash = '#/login';
-      return;
-    }
-    window.location.href = '/login';
+    window.dispatchEvent(new Event('todo:auth-invalidated'));
   }
 }
 
@@ -86,6 +99,7 @@ async function attemptTokenRefresh() {
   // Use raw axios to avoid triggering our own interceptors
   const base = getDefaultAPIBaseURL();
   const res = await axios.post(`${base}/auth/refresh`, null, {
+    signal: sessionRequestController.signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${currentToken}`,

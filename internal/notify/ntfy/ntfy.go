@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"todo-app/internal/netpolicy"
 	"todo-app/internal/notify"
 )
 
@@ -18,9 +19,7 @@ type NtfyNotifier struct {
 
 func New() *NtfyNotifier {
 	return &NtfyNotifier{
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient: netpolicy.NewHTTPClient(30 * time.Second),
 	}
 }
 
@@ -34,6 +33,9 @@ func (n *NtfyNotifier) ValidateConfig(config map[string]string) error {
 	}
 	if config["topic"] == "" {
 		return errors.New("topic is required")
+	}
+	if err := netpolicy.ValidateURL(config["server_url"]); err != nil {
+		return err
 	}
 	// Validate priority if provided
 	if priority := config["priority"]; priority != "" {
@@ -62,6 +64,9 @@ func (n *NtfyNotifier) Send(ctx context.Context, userID int64, config map[string
 
 	// Build URL
 	url := fmt.Sprintf("%s/%s", serverURL, topic)
+	if err := netpolicy.ValidateURL(url); err != nil {
+		return err
+	}
 
 	// Build message
 	message := msg.Description

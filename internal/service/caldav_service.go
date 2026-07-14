@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 	"todo-app/internal/models"
+	"todo-app/internal/netpolicy"
 	"todo-app/internal/repository"
 
 	rrule "github.com/teambition/rrule-go"
@@ -45,10 +46,8 @@ type CaldavService struct {
 
 func NewCaldavService(repo *repository.CaldavRepository, secret string) *CaldavService {
 	return &CaldavService{
-		repo: repo,
-		httpClient: &http.Client{
-			Timeout: caldavHTTPTimeout,
-		},
+		repo:       repo,
+		httpClient: netpolicy.NewHTTPClient(caldavHTTPTimeout),
 		secret:     secret,
 		sourceLock: make(map[string]*sync.Mutex),
 	}
@@ -86,6 +85,9 @@ func (s *CaldavService) DiscoverCalendars(ctx context.Context, userID int64, req
 	}
 	if password == "" {
 		return nil, errors.New("password is required")
+	}
+	if err := validateCaldavURLs(baseURL, nil); err != nil {
+		return nil, err
 	}
 	data, err := s.doPropfindCalendars(ctx, baseURL, username, password)
 	if err != nil {
@@ -127,6 +129,9 @@ func (s *CaldavService) CreateSource(ctx context.Context, userID int64, req *mod
 	password := strings.TrimSpace(req.Password)
 	if baseURL == "" || username == "" || password == "" {
 		return nil, errors.New("base_url, username, password are required")
+	}
+	if err := validateCaldavURLs(baseURL, req.Calendars); err != nil {
+		return nil, err
 	}
 	cipherText, err := encryptSecret(password, s.secret)
 	if err != nil {
@@ -173,6 +178,9 @@ func (s *CaldavService) UpdateSource(ctx context.Context, userID, sourceID int64
 	password := strings.TrimSpace(req.Password)
 	if baseURL == "" || username == "" {
 		return nil, errors.New("base_url and username are required")
+	}
+	if err := validateCaldavURLs(baseURL, req.Calendars); err != nil {
+		return nil, err
 	}
 	source.Name = strings.TrimSpace(req.Name)
 	source.BaseURL = baseURL
@@ -2239,6 +2247,18 @@ func choicesToCalendars(choices []models.CaldavCalendarChoice) []models.CaldavCa
 		})
 	}
 	return out
+}
+
+func validateCaldavURLs(baseURL string, calendars []models.CaldavCalendarChoice) error {
+	if err := netpolicy.ValidateURL(baseURL); err != nil {
+		return fmt.Errorf("invalid CalDAV base URL: %w", err)
+	}
+	for _, calendar := range calendars {
+		if err := netpolicy.ValidateURL(calendar.CalendarURL); err != nil {
+			return fmt.Errorf("invalid CalDAV calendar URL: %w", err)
+		}
+	}
+	return nil
 }
 
 func externalVirtualID(sourceID, calendarID int64, uid, recurrenceID string) int64 {

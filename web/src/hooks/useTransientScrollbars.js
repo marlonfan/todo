@@ -12,6 +12,23 @@ function getDocumentHost(node) {
   return node?.ownerDocument || document;
 }
 
+export function getTransientScrollbarZIndex(node) {
+  const windowHost = getWindowHost(node);
+  let layerZIndex = 0;
+
+  for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
+    const style = windowHost.getComputedStyle?.(ancestor);
+    if (!style || style.position === 'static') continue;
+
+    const zIndex = Number.parseInt(style.zIndex, 10);
+    if (Number.isFinite(zIndex)) {
+      layerZIndex = Math.max(layerZIndex, zIndex);
+    }
+  }
+
+  return layerZIndex + 1;
+}
+
 function isScrollable(node) {
   return node.scrollHeight - node.clientHeight > 1;
 }
@@ -101,6 +118,7 @@ export function attachTransientScrollbar(node, {
     const thumbTop = Math.round((node.scrollTop / maxScrollTop) * maxThumbTop);
     const left = Math.max(0, rect.right - TRACK_WIDTH - TRACK_EDGE_OFFSET);
     const top = Math.max(0, rect.top);
+    track.style.zIndex = String(getTransientScrollbarZIndex(node));
     track.style.height = `${Math.max(0, rect.height)}px`;
     track.style.transform = `translate3d(${left}px, ${top}px, 0)`;
     thumb.style.height = `${Math.min(trackHeight, thumbHeight)}px`;

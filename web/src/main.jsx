@@ -7,7 +7,6 @@ import App from './App.jsx'
 import '@fontsource-variable/inter';
 import './index.css'
 import { queryClient } from './query/client'
-import { initializeSyncEngine } from './data/syncEngine'
 import { installTaskMutationUnloadGuard } from './data/pendingTaskMutationPersistence'
 import { initPlatform } from './platform/init'
 import { initInputModality } from './utils/inputModality'
@@ -93,7 +92,6 @@ function ensureMobileViewport() {
   initPlatform();
   installTaskMutationUnloadGuard();
 
-  initializeSyncEngine(queryClient);
   const Router = isDesktopRuntime ? HashRouter : BrowserRouter;
 
   ReactDOM.createRoot(document.getElementById('root')).render(

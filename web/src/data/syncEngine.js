@@ -1,4 +1,4 @@
-import { categoriesAPI, tasksAPI, getToken } from '../api/client';
+import { cancelPendingAPIRequests, categoriesAPI, tasksAPI, getToken } from '../api/client';
 import { queryKeys } from '../query/keys';
 import {
   clearTasksAndSet,
@@ -1086,10 +1086,19 @@ export function stopSyncEngine() {
   platformUnlisteners.forEach((fn) => fn());
   platformUnlisteners = [];
   initialized = false;
-  running = false;
   rerunRequested = false;
   queryClientRef = null;
   stopLocalNotificationScheduler();
+}
+
+export async function clearAuthenticatedLocalState(queryClient = queryClientRef) {
+  cancelPendingAPIRequests();
+  stopSyncEngine();
+  await waitForIdle().catch(() => {});
+  await safeLocalCall(() => clearAllLocalData(), null, 'clearAllLocalData:logout');
+  inFlightOutboxOpIDs.clear();
+  useCalendarCacheStore.getState().clear();
+  queryClient?.clear();
 }
 
 export function getConfiguredSyncIntervalSeconds() {

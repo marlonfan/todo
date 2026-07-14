@@ -60,8 +60,8 @@ func (r *RecurrenceRule) Scan(value interface{}) error {
 }
 
 type Task struct {
-	ID                int64           `json:"id" gorm:"primaryKey;autoIncrement"`
-	UserID            int64           `json:"user_id" gorm:"index;not null"`
+	ID                int64           `json:"id" gorm:"primaryKey;autoIncrement;index:idx_tasks_user_updated_id,priority:3"`
+	UserID            int64           `json:"user_id" gorm:"index;not null;index:idx_tasks_user_updated_id,priority:1"`
 	ParentTaskID      *int64          `json:"parent_task_id,omitempty" gorm:"index"`
 	Title             string          `json:"title" gorm:"size:200;not null"`
 	Description       string          `json:"description" gorm:"type:text"`
@@ -77,7 +77,7 @@ type Task struct {
 	CompletedAt       *time.Time      `json:"completed_at"`
 	DeletedAt         *time.Time      `json:"deleted_at"`
 	CreatedAt         time.Time       `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt         time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
+	UpdatedAt         time.Time       `json:"updated_at" gorm:"autoUpdateTime;index:idx_tasks_user_updated_id,priority:2"`
 	CalDAVUID         string          `json:"caldav_uid,omitempty" gorm:"size:255;index"`
 	CalDAVHref        string          `json:"caldav_href,omitempty" gorm:"size:255;index"`
 	ReadOnly          bool            `json:"read_only" gorm:"-"`
@@ -113,12 +113,12 @@ type TaskOccurrenceOverride struct {
 // TaskOccurrence stores persisted recurring-instance overrides/history.
 // One row represents one expanded occurrence date for a recurring series.
 type TaskOccurrence struct {
-	ID             int64      `json:"id" gorm:"primaryKey;autoIncrement"`
-	UserID         int64      `json:"user_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index:idx_task_occurrence_status_date,priority:1"`
+	ID             int64      `json:"id" gorm:"primaryKey;autoIncrement;index:idx_task_occurrences_user_status_date_id,priority:4"`
+	UserID         int64      `json:"user_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index:idx_task_occurrence_status_date,priority:1;index:idx_task_occurrences_user_status_date_id,priority:1"`
 	TaskID         int64      `json:"task_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:2"`
-	OccurrenceDate time.Time  `json:"occurrence_date" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:4"`
+	OccurrenceDate time.Time  `json:"occurrence_date" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:4;index:idx_task_occurrences_user_status_date_id,priority:3"`
 	InstanceID     string     `json:"instance_id" gorm:"size:64;not null;default:'';index"`
-	Status         TaskStatus `json:"status" gorm:"size:20;not null;default:'pending';index:idx_task_occurrence_status_date,priority:3"`
+	Status         TaskStatus `json:"status" gorm:"size:20;not null;default:'pending';index:idx_task_occurrence_status_date,priority:3;index:idx_task_occurrences_user_status_date_id,priority:2"`
 	CompletedAt    *time.Time `json:"completed_at"`
 	DeletedAt      *time.Time `json:"deleted_at"`
 	Description    string     `json:"description" gorm:"type:text;not null;default:''"`
@@ -130,10 +130,10 @@ type TaskOccurrence struct {
 }
 
 type TaskDeleteLog struct {
-	ID        int64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	UserID    int64     `json:"user_id" gorm:"not null;index;index:idx_task_delete_user_time"`
+	ID        int64     `json:"id" gorm:"primaryKey;autoIncrement;index:idx_task_deletes_user_time_id,priority:3"`
+	UserID    int64     `json:"user_id" gorm:"not null;index;index:idx_task_delete_user_time;index:idx_task_deletes_user_time_id,priority:1"`
 	TaskID    int64     `json:"task_id" gorm:"not null;index"`
-	DeletedAt time.Time `json:"deleted_at" gorm:"not null;index;index:idx_task_delete_user_time"`
+	DeletedAt time.Time `json:"deleted_at" gorm:"not null;index;index:idx_task_delete_user_time;index:idx_task_deletes_user_time_id,priority:2"`
 	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
 }
 

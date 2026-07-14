@@ -40,6 +40,8 @@ import {
 import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { formatDateTime } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
+import { clearAuthenticatedLocalState } from '../data/syncEngine';
+import { clearSyncConflicts } from '../state/syncConflictCenter';
 
 const CalendarView = lazy(() => import('./CalendarView'));
 const TaskList = lazy(() => import('./TaskList'));
@@ -423,10 +425,11 @@ function MainLayout({ user, setUser }) {
   });
   const initialRedirectConsumedRef = useRef(false);
 
-  const handleLogout = () => {
-    useCalendarCacheStore.getState().clear();
+  const handleLogout = async () => {
     getTokenStore().remove();
     localStorage.removeItem('user');
+    await clearAuthenticatedLocalState(queryClient);
+    clearSyncConflicts();
     setUser(null);
   };
 

@@ -33,10 +33,10 @@ type CaldavCalendar struct {
 }
 
 type CaldavEventCache struct {
-	ID           int64      `json:"id" gorm:"primaryKey;autoIncrement"`
-	UserID       int64      `json:"user_id" gorm:"index;not null;index:idx_caldav_event_unique,unique"`
-	SourceID     int64      `json:"source_id" gorm:"index;not null;index:idx_caldav_event_unique,unique"`
-	CalendarID   int64      `json:"calendar_id" gorm:"index;not null;index:idx_caldav_event_unique,unique"`
+	ID           int64      `json:"id" gorm:"primaryKey;autoIncrement;index:idx_caldav_events_user_start_id,priority:3"`
+	UserID       int64      `json:"user_id" gorm:"index;not null;index:idx_caldav_event_unique,unique;index:idx_caldav_events_user_start_id,priority:1;index:idx_caldav_events_scope_start,priority:1"`
+	SourceID     int64      `json:"source_id" gorm:"index;not null;index:idx_caldav_event_unique,unique;index:idx_caldav_events_scope_start,priority:2"`
+	CalendarID   int64      `json:"calendar_id" gorm:"index;not null;index:idx_caldav_event_unique,unique;index:idx_caldav_events_scope_start,priority:3"`
 	EventUID     string     `json:"event_uid" gorm:"size:255;not null;index:idx_caldav_event_unique,unique"`
 	RecurrenceID string     `json:"recurrence_id" gorm:"size:255;default:'';index:idx_caldav_event_unique,unique"`
 	Title        string     `json:"title" gorm:"size:500"`
@@ -45,7 +45,7 @@ type CaldavEventCache struct {
 	Organizer    string     `json:"organizer" gorm:"size:500"`
 	Attendees    string     `json:"attendees" gorm:"type:text"`
 	MeetingLink  string     `json:"meeting_link" gorm:"size:1000"`
-	StartTime    time.Time  `json:"start_time" gorm:"index;not null"`
+	StartTime    time.Time  `json:"start_time" gorm:"index;not null;index:idx_caldav_events_user_start_id,priority:2;index:idx_caldav_events_scope_start,priority:4"`
 	EndTime      *time.Time `json:"end_time" gorm:"index"`
 	AllDay       bool       `json:"all_day" gorm:"default:false"`
 	Status       string     `json:"status" gorm:"size:64"`
