@@ -559,9 +559,56 @@ func TestCalendarSubscriptionFeedAndCalDAVWrite(t *testing.T) {
 	if body := feedRec.Body.String(); !strings.Contains(body, "BEGIN:VCALENDAR") || !strings.Contains(body, "SUMMARY:Feed visible task") {
 		t.Fatalf("feed missing task body=%s", body)
 	}
+	if strings.Contains(feedRec.Body.String(), "BEGIN:VALARM") {
+		t.Fatalf("feed unexpectedly contains an alarm while default reminders are disabled: %s", feedRec.Body.String())
+	}
+
+	calendarPath := "/dav/calendars/" + username + "/todo/"
+	ctagBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/"><D:prop><CS:getctag/></D:prop></D:propfind>`
+	readCTag := func() string {
+		t.Helper()
+		req := httptest.NewRequest("PROPFIND", calendarPath, strings.NewReader(ctagBody))
+		req.SetBasicAuth(username, password)
+		req.Header.Set("Depth", "0")
+		req.Header.Set("Content-Type", "application/xml")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		doc := decodeDAVMultiStatus(t, rec)
+		return requireNonEmptyDAVText(t, doc, calendarPath, xml.Name{Space: testCSNS, Local: "getctag"})
+	}
+	ctagWithoutAlarm := readCTag()
+
+	profileResp := doJSON(t, router, http.MethodPatch, "/api/auth/profile", token, map[string]any{
+		"default_reminder_enabled": true,
+		"default_reminder_minutes": 15,
+	}, nil)
+	if profileResp.Code != http.StatusOK {
+		t.Fatalf("update reminder profile status = %d body=%s", profileResp.Code, profileResp.Body.String())
+	}
+	if ctagWithAlarm := readCTag(); ctagWithAlarm == ctagWithoutAlarm {
+		t.Fatalf("calendar ctag did not change after enabling default reminders: %q", ctagWithAlarm)
+	}
+
+	feedWithAlarmReq := httptest.NewRequest(http.MethodGet, feedURL.RequestURI(), nil)
+	feedWithAlarmRec := httptest.NewRecorder()
+	router.ServeHTTP(feedWithAlarmRec, feedWithAlarmReq)
+	if feedWithAlarmRec.Code != http.StatusOK {
+		t.Fatalf("feed with alarm status = %d body=%s", feedWithAlarmRec.Code, feedWithAlarmRec.Body.String())
+	}
+	for _, expected := range []string{
+		"BEGIN:VALARM",
+		"ACTION:DISPLAY",
+		"DESCRIPTION:Feed visible task",
+		"TRIGGER:-PT15M",
+		"END:VALARM",
+	} {
+		if !strings.Contains(feedWithAlarmRec.Body.String(), expected) {
+			t.Fatalf("feed missing %q after enabling default reminders: %s", expected, feedWithAlarmRec.Body.String())
+		}
+	}
 
 	propfindBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getetag/></D:prop></D:propfind>`
-	propfindReq := httptest.NewRequest("PROPFIND", "/dav/calendars/"+username+"/todo/", strings.NewReader(propfindBody))
+	propfindReq := httptest.NewRequest("PROPFIND", calendarPath, strings.NewReader(propfindBody))
 	propfindReq.SetBasicAuth(username, password)
 	propfindReq.Header.Set("Depth", "1")
 	propfindReq.Header.Set("Content-Type", "application/xml")
@@ -585,6 +632,11 @@ func TestCalendarSubscriptionFeedAndCalDAVWrite(t *testing.T) {
 		"DESCRIPTION:Created from CalDAV",
 		"DTSTART:20260303T010000Z",
 		"DTEND:20260303T013000Z",
+		"BEGIN:VALARM",
+		"ACTION:DISPLAY",
+		"DESCRIPTION:Client-selected reminder",
+		"TRIGGER:-PT30M",
+		"END:VALARM",
 		"END:VEVENT",
 		"END:VCALENDAR",
 		"",
@@ -607,6 +659,10 @@ func TestCalendarSubscriptionFeedAndCalDAVWrite(t *testing.T) {
 	}
 	if !strings.Contains(getRec.Body.String(), "SUMMARY:Mobile created") {
 		t.Fatalf("get missing created object body=%s", getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), "DESCRIPTION:Created from CalDAV") ||
+		!strings.Contains(getRec.Body.String(), "TRIGGER:-PT15M") {
+		t.Fatalf("get did not apply the server default reminder cleanly body=%s", getRec.Body.String())
 	}
 }
 

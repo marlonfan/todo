@@ -409,8 +409,20 @@ func (s *CalendarExportService) CollectionToken(userID int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return "", err
+	}
 	h := sha256.New()
 	fmt.Fprintf(h, "tasks:%d:%d:%s\n", taskState.Count, taskState.MaxRevision, taskState.MaxUpdatedAt.UTC().Format(time.RFC3339Nano))
+	fmt.Fprintf(
+		h,
+		"calendar-settings:%s:%t:%d:%s\n",
+		user.Timezone,
+		user.DefaultReminderEnabled,
+		normalizeCalendarReminderMinutes(user.DefaultReminderMinutes),
+		user.DefaultMorningTime,
+	)
 	start, end := s.DefaultExportRange()
 	if s.taskSvc != nil && s.taskSvc.caldavSvc != nil && s.taskSvc.caldavSvc.repo != nil {
 		externalState, err := s.taskSvc.caldavSvc.repo.EventCollectionStateInRange(userID, start, end)
@@ -440,22 +452,26 @@ func (s *CalendarExportService) taskToObject(task *models.Task) (*CalendarObject
 	if task == nil {
 		return nil, errors.New("task is required")
 	}
+	user, err := s.userRepo.GetByID(task.UserID)
+	if err != nil {
+		return nil, err
+	}
 	uid := taskCalDAVUID(task)
 	href := taskCalDAVHref(task)
-	component := s.taskToComponent(task, uid)
+	component := s.taskToComponent(task, uid, user)
 	data := s.wrapCalendar(task.Title, []string{component})
 	return &CalendarObject{
 		Href:     href,
 		UID:      uid,
-		ETag:     taskETag(task),
+		ETag:     calendarDataETag(data),
 		Data:     data,
 		Task:     task,
 		ReadOnly: task.ReadOnly,
 	}, nil
 }
 
-func (s *CalendarExportService) taskToComponent(task *models.Task, uid string) string {
-	loc := s.userLocation(task.UserID)
+func (s *CalendarExportService) taskToComponent(task *models.Task, uid string, user *models.User) string {
+	loc := loadLocationOrUTC(user.Timezone)
 	stamp := taskCalendarStampTime(task)
 	nowStamp := stamp.UTC().Format("20060102T150405Z")
 	lines := []string{}
@@ -498,6 +514,15 @@ func (s *CalendarExportService) taskToComponent(task *models.Task, uid string) s
 			lines = append(lines, "STATUS:CANCELLED")
 		} else {
 			lines = append(lines, "STATUS:CONFIRMED")
+		}
+		if trigger, ok := defaultCalendarAlarmTrigger(task, user); ok {
+			lines = append(lines,
+				"BEGIN:VALARM",
+				"ACTION:DISPLAY",
+				"DESCRIPTION:"+escapeICalText(task.Title),
+				"TRIGGER:"+trigger,
+				"END:VALARM",
+			)
 		}
 		lines = append(lines, "END:VEVENT")
 		return strings.Join(lines, "\r\n")
@@ -662,20 +687,34 @@ func (s *CalendarExportService) userLocation(userID int64) *time.Location {
 func parseICalendarObject(data []byte, loc *time.Location) (*parsedICalendarObject, error) {
 	lines := unfoldICalLines(string(data))
 	var component string
+	nestedDepth := 0
 	props := make(map[string][]icalProp)
+
+componentLines:
 	for _, line := range lines {
 		upper := strings.ToUpper(strings.TrimSpace(line))
-		switch upper {
-		case "BEGIN:VEVENT":
-			component = "VEVENT"
-			continue
-		case "BEGIN:VTODO":
-			component = "VTODO"
-			continue
-		case "END:VEVENT", "END:VTODO":
-			break
-		}
 		if component == "" {
+			switch upper {
+			case "BEGIN:VEVENT":
+				component = "VEVENT"
+			case "BEGIN:VTODO":
+				component = "VTODO"
+			}
+			continue
+		}
+		if nestedDepth > 0 {
+			if strings.HasPrefix(upper, "BEGIN:") {
+				nestedDepth++
+			} else if strings.HasPrefix(upper, "END:") {
+				nestedDepth--
+			}
+			continue
+		}
+		if upper == "END:"+component {
+			break componentLines
+		}
+		if strings.HasPrefix(upper, "BEGIN:") {
+			nestedDepth = 1
 			continue
 		}
 		prop, ok := parseICalProp(line)
@@ -972,45 +1011,65 @@ func taskIDFromCalDAVUID(uid string) (int64, bool) {
 	return id, err == nil && id > 0
 }
 
-func taskETag(task *models.Task) string {
-	if task == nil {
+func calendarDataETag(data string) string {
+	if data == "" {
 		return `""`
 	}
-	hash := sha256.Sum256([]byte(taskFingerprint(task)))
+	hash := sha256.Sum256([]byte(data))
 	return `"` + hex.EncodeToString(hash[:])[:32] + `"`
 }
 
-func taskFingerprint(task *models.Task) string {
-	if task == nil {
-		return ""
+func defaultCalendarAlarmTrigger(task *models.Task, user *models.User) (string, bool) {
+	if task == nil || user == nil || !user.DefaultReminderEnabled || task.Status != models.TaskStatusPending {
+		return "", false
 	}
-	start := ""
-	if task.StartTime != nil {
-		start = task.StartTime.UTC().Format(time.RFC3339Nano)
+	if task.StartTime == nil && task.DueDate == nil {
+		return "", false
 	}
-	end := ""
-	if task.EndTime != nil {
-		end = task.EndTime.UTC().Format(time.RFC3339Nano)
+
+	offsetMinutes := -normalizeCalendarReminderMinutes(user.DefaultReminderMinutes)
+	if task.AllDay {
+		hour, minute := parseReminderClock(user.DefaultMorningTime)
+		offsetMinutes += hour*60 + minute
 	}
-	due := ""
-	if task.DueDate != nil {
-		due = task.DueDate.UTC().Format(time.RFC3339Nano)
+	return formatICalDurationMinutes(offsetMinutes), true
+}
+
+func normalizeCalendarReminderMinutes(minutes int) int {
+	if minutes <= 0 {
+		return 5
 	}
-	return strings.Join([]string{
-		strconv.FormatInt(task.ID, 10),
-		strconv.FormatInt(task.Revision, 10),
-		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		taskCalDAVUID(task),
-		taskCalDAVHref(task),
-		strings.TrimSpace(task.ExternalRef),
-		task.Title,
-		task.Description,
-		string(task.Status),
-		strconv.FormatBool(task.AllDay),
-		start,
-		end,
-		due,
-	}, "|")
+	return minutes
+}
+
+func formatICalDurationMinutes(totalMinutes int) string {
+	sign := ""
+	if totalMinutes < 0 {
+		sign = "-"
+		totalMinutes = -totalMinutes
+	}
+
+	days := totalMinutes / (24 * 60)
+	remaining := totalMinutes % (24 * 60)
+	hours := remaining / 60
+	minutes := remaining % 60
+
+	var value strings.Builder
+	value.WriteString(sign)
+	value.WriteString("P")
+	if days > 0 {
+		fmt.Fprintf(&value, "%dD", days)
+	}
+	if hours > 0 || minutes > 0 || days == 0 {
+		value.WriteString("T")
+		if hours > 0 {
+			fmt.Fprintf(&value, "%dH", hours)
+		}
+		if minutes > 0 || hours == 0 {
+			fmt.Fprintf(&value, "%dM", minutes)
+		}
+	}
+	return value.String()
 }
 
 func shouldHideTaskFromCalendarExport(task *models.Task) bool {
