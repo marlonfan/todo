@@ -64,13 +64,48 @@ body {
 }
 
 * {
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: hsl(var(--muted-foreground) / 0.34) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: auto;
+  }
 }
 
 *::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
+  width: 7px;
+  height: 7px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  background-clip: padding-box;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 :where(a[href], button, [role="button"], summary, [tabindex]:not([tabindex="-1"])) {
@@ -3536,7 +3571,12 @@ body {
 
 .live-md-toast .vditor-reset p,
 .live-md-toast .vditor-ir .vditor-reset p {
-  margin: 0.34rem 0;
+  margin: 0;
+}
+
+.live-md-toast .vditor-reset p + p,
+.live-md-toast .vditor-ir .vditor-reset p + p {
+  margin-top: 0.5rem;
 }
 
 .live-md-toast .vditor-reset ul,
@@ -3563,7 +3603,7 @@ body {
 }
 
 .live-md-toast .vditor-reset li p {
-  margin: 0.16rem 0;
+  margin: 0;
 }
 
 .live-md-toast .vditor-reset li.vditor-task {
@@ -3741,69 +3781,6 @@ body {
 .live-md-toast .vditor-ir pre.vditor-reset:empty::before {
   content: attr(placeholder);
   color: hsl(var(--muted-foreground));
-}
-
-.editor-scrollbar-overlay {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.editor-scrollbar-overlay::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
-}
-
-.editor-scrollbar-track {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 1;
-  width: 9px;
-  height: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.16s ease;
-  will-change: transform;
-}
-
-.editor-scrollbar-thumb {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 9px;
-  min-height: 32px;
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background-color: rgba(148, 174, 198, 0);
-  background-clip: content-box;
-  transition: background-color 0.16s ease;
-}
-
-.editor-scrollbar-track.has-custom-scrollbar.is-visible,
-.editor-scrollbar-track.has-custom-scrollbar.is-dragging {
-  pointer-events: auto;
-  opacity: 1;
-}
-
-.editor-scrollbar-track.has-custom-scrollbar.is-visible > .editor-scrollbar-thumb,
-.editor-scrollbar-track.has-custom-scrollbar.is-dragging > .editor-scrollbar-thumb {
-  background-color: rgba(148, 174, 198, 0.54);
-}
-
-.editor-scrollbar-track.has-custom-scrollbar > .editor-scrollbar-thumb:hover,
-.editor-scrollbar-track.has-custom-scrollbar.is-dragging > .editor-scrollbar-thumb {
-  background-color: rgba(100, 116, 139, 0.62);
-}
-
-.editor-scrollbar-track.is-dragging,
-.editor-scrollbar-track.is-dragging * {
-  cursor: default !important;
-  user-select: none !important;
-}
-
-.editor-scrollbar-track:not(.has-custom-scrollbar) {
-  display: none;
 }
 
 .live-md-toast .vditor-reset ol {
@@ -5923,15 +5900,4 @@ body {
 /* Date cell holiday highlight */
 .canvas-day-cell.holiday {
   @apply bg-rose-50/30;
-}
-
-* {
-  scrollbar-width: none !important;
-  -ms-overflow-style: none !important;
-}
-
-*::-webkit-scrollbar {
-  width: 0 !important;
-  height: 0 !important;
-  display: none !important;
 }

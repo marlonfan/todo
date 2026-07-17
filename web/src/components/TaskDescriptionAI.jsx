@@ -7,7 +7,6 @@ import {
   cleanGeneratedTaskDescription,
   generateTaskDescriptionDraft,
 } from '../utils/aiTaskDescription';
-import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 
 let vditorLuteScriptPromise = null;
 let vditorMarkdownRuntimePromise = null;
@@ -152,19 +151,11 @@ function TaskDescriptionAI({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const requestRef = useRef(null);
-  const resultScrollCleanupRef = useRef(null);
   const copiedTimerRef = useRef(null);
-
-  const bindResultScroll = useCallback((node) => {
-    resultScrollCleanupRef.current?.();
-    resultScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
-  }, []);
 
   useEffect(() => () => {
     requestRef.current?.abort?.();
     requestRef.current = null;
-    resultScrollCleanupRef.current?.();
-    resultScrollCleanupRef.current = null;
     if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
   }, []);
 
@@ -299,8 +290,7 @@ function TaskDescriptionAI({
             <div className="task-ai-error">{error}</div>
           ) : (
             <div
-              ref={bindResultScroll}
-              className={`task-ai-result editor-scrollbar-overlay${generating ? ' task-ai-result--streaming' : ''}`}
+              className={`task-ai-result${generating ? ' task-ai-result--streaming' : ''}`}
             >
               <TaskAIMarkdownPreview
                 value={generated}

@@ -37,7 +37,6 @@ import {
   removeSyncConflict,
   subscribeSyncConflicts,
 } from '../state/syncConflictCenter';
-import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { formatDateTime } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 import { clearAuthenticatedLocalState } from '../data/syncEngine';
@@ -345,15 +344,9 @@ function MainLayout({ user, setUser }) {
     pathname: location.pathname,
     search: location.search,
   });
-  const sidebarScrollCleanupRef = useRef(null);
   const resolveConflictDialogRef = useRef(null);
   const settingsDialogRef = useRef(null);
   const { data: categories = [] } = useCategoriesQuery();
-
-  const bindSidebarScroll = useCallback((node) => {
-    sidebarScrollCleanupRef.current?.();
-    sidebarScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
-  }, []);
 
   const openSettings = useCallback(() => {
     setSettingsOpen(true);
@@ -868,8 +861,7 @@ function MainLayout({ user, setUser }) {
 
       {/* Sidebar */}
       <div
-        ref={bindSidebarScroll}
-        className={`sidebar editor-scrollbar-overlay fixed inset-y-0 left-0 z-40 flex flex-col transform transition-transform duration-200 md:static md:shrink-0
+        className={`sidebar fixed inset-y-0 left-0 z-40 flex flex-col transform transition-transform duration-200 md:static md:shrink-0
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
         <div className="mx-5 mb-5 mt-6 flex h-12 items-center gap-3">

@@ -75,7 +75,6 @@ import TaskDatePicker from './TaskDatePicker';
 import TaskActivityTimeline from './TaskActivityTimeline';
 import EditorLoadingSkeleton from './EditorLoadingSkeleton';
 import InlineErrorState from './ui/InlineErrorState';
-import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import {
   getTaskPrimaryLocalTime,
   getTaskPrimaryTime,
@@ -1619,7 +1618,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const detailPanelTriggerRefs = useRef({});
   const taskWorkspaceRef = useRef(null);
   const taskListScrollRef = useRef(null);
-  const taskListScrollCleanupRef = useRef(null);
   const taskSplitDragRef = useRef({ startX: 0, startRatio: TASK_SPLIT_DEFAULT_RATIO, workspaceWidth: 0 });
   const taskSplitRatioRef = useRef(taskSplitRatio);
   const taskPullRefreshRef = useRef({
@@ -1658,7 +1656,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const detailPanelSnapshotRef = useRef(null);
   const switchTaskRequestRef = useRef(0);
   const activeRenderTaskIDRef = useRef(0);
-  const detailBodyScrollCleanupRef = useRef(null);
   const draftDescriptionEditorRef = useRef(null);
   const draftTitleInputRef = useRef(null);
   const activeDescriptionSessionRef = useRef(0);
@@ -1691,22 +1688,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       taskDraftOverlaysRef.current = next;
       return next;
     });
-  }, []);
-
-  const bindDetailBodyScroll = useCallback((node) => {
-    detailBodyScrollCleanupRef.current?.();
-    detailBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
-  }, []);
-
-  const bindTaskListScroll = useCallback((node) => {
-    taskListScrollRef.current = node;
-    taskListScrollCleanupRef.current?.();
-    taskListScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
-  }, []);
-
-  useEffect(() => () => {
-    taskListScrollCleanupRef.current?.();
-    taskListScrollCleanupRef.current = null;
   }, []);
 
   const scheduleTaskRowAnimation = useCallback((taskID, animation, duration) => {
@@ -1997,8 +1978,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, []);
 
   useEffect(() => () => {
-    detailBodyScrollCleanupRef.current?.();
-    detailBodyScrollCleanupRef.current = null;
     if (taskPullRefreshResetTimerRef.current) {
       window.clearTimeout(taskPullRefreshResetTimerRef.current);
       taskPullRefreshResetTimerRef.current = 0;
@@ -5162,8 +5141,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           )}
 
           <div
-            ref={bindTaskListScroll}
-            className="task-list-scroll editor-scrollbar-overlay mobile-scrollbar-hidden relative flex-1 overflow-auto bg-card md:bg-card"
+            ref={taskListScrollRef}
+            className="task-list-scroll mobile-scrollbar-hidden relative flex-1 overflow-auto bg-card md:bg-card"
           >
             {(isCompactMobile || isMobileViewport) && (
               <div
@@ -5834,7 +5813,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                 </div>
               </div>
 
-              <div ref={bindDetailBodyScroll} className="task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-auto px-5 py-6 lg:px-8">
+              <div className="task-detail-body-scroll flex min-h-0 min-w-0 flex-1 flex-col overflow-auto px-3 py-5 lg:px-4">
                 <div
                   className="task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-card"
                   onClick={(event) => {

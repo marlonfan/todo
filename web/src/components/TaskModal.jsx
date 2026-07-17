@@ -53,7 +53,6 @@ import EditorLoadingSkeleton from './EditorLoadingSkeleton';
 import { PriorityPanel, CategoryPanel } from './task/TaskQuickEditor';
 import { RecurrencePanel } from './task/RecurrencePanel';
 import { getTaskInstanceID, getTaskModalSessionKey, getTaskMutationID } from './taskModalSession';
-import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
 import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
@@ -662,18 +661,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
   const modalOpenedAtRef = useRef(Date.now());
   const descriptionEditorRef = useRef(null);
   const descriptionDraftRef = useRef(String(buildInitialTaskModalValues(task, initialRange).description || ''));
-  const modalBodyScrollCleanupRef = useRef(null);
   const timeGranularity = getUserTimeGranularity();
-
-  const bindModalBodyScroll = useCallback((node) => {
-    modalBodyScrollCleanupRef.current?.();
-    modalBodyScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
-  }, []);
-
-  useEffect(() => () => {
-    modalBodyScrollCleanupRef.current?.();
-    modalBodyScrollCleanupRef.current = null;
-  }, []);
 
   useEffect(() => {
     setValueRef.current = setValue;
@@ -2487,7 +2475,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                 </div>
               </div>
 
-              <div ref={bindModalBodyScroll} className="task-modal-body task-detail-body-scroll editor-scrollbar-overlay flex min-h-0 flex-1 flex-col overflow-auto px-5 py-4 md:px-7 md:py-5">
+              <div className="task-modal-body task-detail-body-scroll flex min-h-0 flex-1 flex-col overflow-auto px-3 py-4 md:px-4 md:py-5">
                 <div
                   className="task-modal-description-editor task-description-editor-shell flex min-h-0 min-w-0 flex-1 cursor-text flex-col overflow-hidden bg-card"
                   onClick={(event) => {

@@ -7,7 +7,6 @@ import { promptsAPI } from '../api/client';
 import { usePromptHistoryQuery, usePromptsQuery } from '../query/hooks';
 import { queryKeys } from '../query/keys';
 import { AI_CONFIG_REQUIRED_CODE, cleanGeneratedTaskDescription, generateAIResponse } from '../utils/aiTaskDescription';
-import { attachTransientScrollbar } from '../hooks/useTransientScrollbars';
 import { TaskAIMarkdownPreview } from './TaskDescriptionAI';
 import { useConfirmDialog } from './ui/useConfirmDialog';
 
@@ -71,8 +70,6 @@ function PromptManager() {
     confirmLabel: t('common.delete'),
   });
   const askControllerRef = useRef(null);
-  const outputScrollCleanupRef = useRef(null);
-  const historyScrollCleanupRefs = useRef(new Map());
   const askCopiedTimerRef = useRef(null);
   const activeAskRef = useRef({
     prompt: null,
@@ -105,27 +102,8 @@ function PromptManager() {
 
   useEffect(() => () => {
     askControllerRef.current?.abort?.();
-    outputScrollCleanupRef.current?.();
-    historyScrollCleanupRefs.current.forEach((cleanup) => cleanup?.());
-    historyScrollCleanupRefs.current.clear();
     if (askCopiedTimerRef.current) window.clearTimeout(askCopiedTimerRef.current);
   }, []);
-
-  const bindOutputScroll = (node) => {
-    outputScrollCleanupRef.current?.();
-    outputScrollCleanupRef.current = node ? attachTransientScrollbar(node) : null;
-  };
-
-  const bindHistoryScroll = useCallback((key) => (node) => {
-    const cleanupMap = historyScrollCleanupRefs.current;
-    cleanupMap.get(key)?.();
-    cleanupMap.delete(key);
-    if (node) {
-      cleanupMap.set(key, attachTransientScrollbar(node));
-    }
-  }, []);
-  const bindDesktopHistoryScroll = useMemo(() => bindHistoryScroll('desktop'), [bindHistoryScroll]);
-  const bindMobileHistoryScroll = useMemo(() => bindHistoryScroll('mobile'), [bindHistoryScroll]);
 
   useEffect(() => {
     if (!formDialogOpen && !askDialogOpen && !deleteHistoryDialog.open) return undefined;
@@ -578,7 +556,7 @@ function PromptManager() {
     </article>
   );
 
-  const renderAskPanel = (bindScroll, { compact = false } = {}) => (
+  const renderAskPanel = ({ compact = false } = {}) => (
     <form onSubmit={handleAsk} className={`prompt-ask-layout ${compact ? 'prompt-ask-layout--compact' : ''}`}>
       <div className="prompt-ask-input-panel">
         <label className="prompt-field-label" htmlFor={compact ? 'prompt-ask-input-mobile' : 'prompt-ask-input'}>
@@ -652,8 +630,7 @@ function PromptManager() {
           </div>
         </div>
         <div
-          ref={bindScroll}
-          className={`prompt-output-body editor-scrollbar-overlay${asking ? ' task-ai-result--streaming' : ''}`}
+          className={`prompt-output-body${asking ? ' task-ai-result--streaming' : ''}`}
         >
           {showAskProgress ? (
             <div className="prompt-thinking-state" role="status" aria-live="polite">
@@ -683,10 +660,9 @@ function PromptManager() {
     </form>
   );
 
-  const renderHistoryList = (className = '', bindScroll = bindDesktopHistoryScroll) => (
+  const renderHistoryList = (className = '') => (
     <div
-      ref={bindScroll}
-      className={`prompt-history-list editor-scrollbar-overlay ${className}`}
+      className={`prompt-history-list ${className}`}
       onScroll={handleHistoryScroll}
     >
       {historyError && (
@@ -841,7 +817,7 @@ function PromptManager() {
             </div>
             <span className="text-xs text-muted-foreground">{askHistoryCountLabel}</span>
           </div>
-          {renderHistoryList('prompt-history-list--mobile', bindMobileHistoryScroll)}
+          {renderHistoryList('prompt-history-list--mobile')}
         </section>
       </div>
 
@@ -1018,7 +994,7 @@ function PromptManager() {
               </button>
             </div>
 
-            {renderAskPanel(bindOutputScroll, { compact: true })}
+            {renderAskPanel({ compact: true })}
           </div>
         </div>
       )}
