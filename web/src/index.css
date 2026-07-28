@@ -4266,10 +4266,6 @@ body {
 .calendar-canvas-root .calendar-event-task {
   background: hsl(var(--primary) / 0.14);
   color: hsl(var(--primary-strong));
-  box-shadow:
-    inset 3px 0 0 hsl(var(--primary)),
-    inset 0 0 0 1px hsl(var(--primary) / 0.18),
-    0 1px 2px hsl(30 20% 20% / 0.04);
 }
 
 .calendar-canvas-root .calendar-event-task:hover {
@@ -4830,6 +4826,10 @@ body {
   color: hsl(var(--foreground-strong));
 }
 
+.readonly-event-person-row > span:not(.readonly-event-muted-chip) {
+  color: hsl(var(--foreground-strong));
+}
+
 .readonly-event-person-list {
   align-items: flex-start;
   margin-top: 0.6rem;
@@ -4880,13 +4880,13 @@ body {
   margin: 0 0 0.28rem;
   min-width: 0;
   overflow-wrap: anywhere;
-  color: hsl(var(--muted));
+  color: hsl(var(--foreground-strong));
 }
 
 .readonly-event-muted-chip {
   border-radius: 999px;
   background: hsl(var(--muted));
-  color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
   font-size: 0.78rem;
   line-height: 1;
   padding: 0.22rem 0.48rem;
@@ -5095,17 +5095,19 @@ body {
 }
 
 .task-datepicker-inline .react-datepicker__day:hover {
+  border-radius: 999px !important;
   background: hsl(var(--accent)) !important;
   color: hsl(var(--primary)) !important;
 }
 
 .task-datepicker-inline .react-datepicker__day--outside-month {
-  color: hsl(var(--muted)) !important;
+  color: hsl(var(--muted-foreground) / 0.62) !important;
 }
 
 .task-datepicker-inline .react-datepicker__day--outside-month:hover {
+  border-radius: 999px !important;
   background: hsl(var(--muted)) !important;
-  color: hsl(var(--muted)) !important;
+  color: hsl(var(--foreground-strong)) !important;
 }
 
 .task-datepicker-inline .react-datepicker__day--today {
@@ -5116,6 +5118,7 @@ body {
 
 .task-datepicker-inline .react-datepicker__day--selected,
 .task-datepicker-inline .react-datepicker__day--keyboard-selected {
+  border-radius: 999px !important;
   background: hsl(var(--primary)) !important;
   color: hsl(var(--card)) !important;
 }
@@ -5182,13 +5185,13 @@ body {
 
 .time-panel-card {
   border-radius: 15px !important;
-  border-color: hsl(var(--muted)) !important;
-  background: hsl(var(--muted)) !important;
-  box-shadow: 0 10px 22px -20px hsl(var(--foreground) / 0.42) !important;
+  border-color: hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .time-panel-card .time-panel-toolbar {
-  border-bottom-color: hsl(var(--muted)) !important;
+  border-bottom-color: hsl(var(--border)) !important;
 }
 
 .time-panel-card .time-panel-toolbar .inline-flex {
@@ -5220,19 +5223,15 @@ body {
 }
 
 .task-detail-time-panel {
-  border-color: hsl(var(--accent)) !important;
-  background: linear-gradient(180deg, hsl(var(--accent)) 0%, hsl(var(--card)) 42%) !important;
-  box-shadow:
-    0 16px 40px -32px hsl(var(--primary) / 0.36),
-    0 8px 20px -20px hsl(var(--foreground) / 0.38) !important;
+  border-color: hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .task-modal-time-panel {
-  border-color: hsl(var(--accent)) !important;
-  background: linear-gradient(180deg, hsl(var(--accent)) 0%, hsl(var(--card)) 42%) !important;
-  box-shadow:
-    0 16px 40px -32px hsl(var(--primary) / 0.36),
-    0 8px 20px -20px hsl(var(--foreground) / 0.38) !important;
+  border-color: hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .task-detail-time-panel-header {
@@ -5249,7 +5248,7 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.18rem;
   border-radius: 11px;
-  background: hsl(var(--accent) / 0.82);
+  background: hsl(var(--muted));
   padding: 0.18rem;
 }
 
@@ -5269,7 +5268,7 @@ body {
 }
 
 .time-panel-primary-tab:hover {
-  background: hsl(var(--card) / 0.62);
+  background: hsl(var(--card) / 0.72);
   color: hsl(var(--primary-strong));
 }
 
@@ -5277,7 +5276,7 @@ body {
 .time-panel-primary-tab--active:hover {
   background: hsl(var(--card));
   color: hsl(var(--primary));
-  box-shadow: 0 5px 16px -13px hsl(var(--primary) / 0.8);
+  box-shadow: var(--shadow-sm);
 }
 
 .time-panel-subtools {
@@ -5292,7 +5291,7 @@ body {
   align-items: center;
   gap: 0.12rem;
   border-radius: 999px;
-  background: hsl(var(--card) / 0.82);
+  background: hsl(var(--muted));
   padding: 0.12rem;
 }
 
@@ -5315,7 +5314,7 @@ body {
 
 .time-panel-soft-toggle-btn:hover,
 .time-panel-day-toggle:hover {
-  background: hsl(var(--accent));
+  background: hsl(var(--card));
   color: hsl(var(--primary));
 }
 
@@ -5323,12 +5322,12 @@ body {
 .time-panel-soft-toggle-btn--active:hover,
 .time-panel-day-toggle--active,
 .time-panel-day-toggle--active:hover {
-  background: hsl(var(--muted));
+  background: hsl(var(--accent));
   color: hsl(var(--primary));
 }
 
 .time-panel-day-toggle {
-  background: hsl(var(--card) / 0.82);
+  background: hsl(var(--muted));
 }
 
 .time-quick-actions--detail {
@@ -5346,7 +5345,7 @@ body {
   gap: 0.22rem;
   border: 0;
   border-radius: 9px;
-  background: hsl(var(--card) / 0.78);
+  background: hsl(var(--muted) / 0.72);
   color: hsl(var(--foreground-strong));
   font-size: 0.7rem;
   font-weight: 600;
@@ -5378,7 +5377,7 @@ body {
 
 .time-panel-calendar-body {
   border-radius: 12px;
-  background: hsl(var(--card) / 0.76);
+  background: hsl(var(--muted) / 0.42);
   padding: 0.12rem 0.08rem 0;
 }
 
@@ -5388,7 +5387,7 @@ body {
   gap: 0.16rem;
   margin: 0 0 0.28rem;
   border-radius: 9px;
-  background: hsl(var(--card) / 0.9);
+  background: hsl(var(--muted));
   padding: 0.16rem;
 }
 
@@ -5423,15 +5422,15 @@ body {
 .task-modal-time-panel .task-solar-time-row,
 .task-modal-time-panel .task-lunar-time-row {
   margin-top: 0.32rem;
-  border-top: 1px solid hsl(var(--accent));
+  border-top: 1px solid hsl(var(--border));
   padding-top: 0.34rem;
 }
 
 .task-time-selectbox--panel-row .task-time-selectbox-trigger {
   min-height: 2.34rem;
-  border-color: transparent;
+  border-color: hsl(var(--border));
   border-radius: 10px;
-  background: hsl(var(--accent));
+  background: hsl(var(--muted) / 0.58);
   box-shadow: none;
   color: hsl(var(--foreground));
   font-size: 0.82rem;
@@ -5440,14 +5439,14 @@ body {
 }
 
 .task-time-selectbox--panel-row .task-time-selectbox-trigger:hover {
-  border-color: transparent;
-  background: hsl(var(--muted));
+  border-color: hsl(var(--input));
+  background: hsl(var(--card));
 }
 
 .task-time-selectbox--panel-row .task-time-selectbox-trigger:focus-visible {
-  border-color: transparent;
-  background: hsl(var(--muted));
-  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.12);
+  border-color: hsl(var(--primary) / 0.6);
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 2px hsl(var(--ring-focus) / 0.16);
 }
 
 .task-time-selectbox--panel-row .task-time-selectbox-value {
@@ -5459,11 +5458,9 @@ body {
 }
 
 .task-time-selectbox-menu--panel-row {
-  border-color: hsl(var(--accent));
+  border-color: hsl(var(--border));
   border-radius: 10px;
-  box-shadow:
-    0 16px 36px -26px hsl(var(--primary) / 0.46),
-    0 8px 18px -16px hsl(var(--foreground) / 0.46);
+  box-shadow: var(--shadow-lg);
 }
 
 .task-time-selectbox-menu--panel-row .task-time-selectbox-option {
@@ -5477,7 +5474,7 @@ body {
 .task-time-selectbox-menu--panel-row .task-time-selectbox-option--active,
 .task-time-selectbox-menu--panel-row .task-time-selectbox-option--active:hover {
   background: hsl(var(--accent));
-  box-shadow: inset 3px 0 0 hsl(var(--primary));
+  box-shadow: none;
   color: hsl(var(--primary));
   font-weight: 700;
 }
@@ -5488,7 +5485,7 @@ body {
   justify-content: space-between;
   gap: 0.5rem;
   margin-top: 0.48rem;
-  border-top: 1px solid hsl(var(--accent));
+  border-top: 1px solid hsl(var(--border));
   padding-top: 0.48rem;
 }
 
@@ -5823,12 +5820,12 @@ body {
 }
 
 .task-lunar-day--outside {
-  color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground) / 0.62);
 }
 
 .task-lunar-day--outside:hover {
   background: hsl(var(--muted));
-  color: hsl(var(--muted));
+  color: hsl(var(--foreground-strong));
 }
 
 .task-lunar-day-solar {
@@ -5844,7 +5841,7 @@ body {
 }
 
 .task-lunar-day--outside .task-lunar-day-lunar {
-  color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground) / 0.56);
 }
 
 .task-lunar-day--selected,
