@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   IconCalendar,
   IconClock,
@@ -19,7 +19,7 @@ import {
 import { Button } from './ui/Button';
 import ErrorBoundary from './ErrorBoundary';
 import InlineErrorState from './ui/InlineErrorState';
-import { getTokenStore } from '../api/client';
+import { getTokenStore, tasksAPI } from '../api/client';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import {
   clearCurrentDraggedTaskID,
@@ -30,7 +30,8 @@ import {
 } from '../utils/taskDrag';
 import { blurActiveTaskDescriptionEditor } from '../utils/editorFocus';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
-import { shouldIncludeTaskInTodayView } from './taskListOverdue';
+import { queryKeys } from '../query/keys';
+import { calculateTodayFocus } from './todayFocus';
 import { resolveCategoryColor } from '../lib/theme';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { moveTaskToCategoryLocal, updateTaskLocal } from '../data/taskMutations';
@@ -379,29 +380,36 @@ function MainLayout({ user, setUser }) {
   const settingsDialogRef = useRef(null);
   const { data: categories = [] } = useCategoriesQuery();
   const { data: tasks = [] } = useTasksQuery();
+  const { data: recurringNextOccurrences = [] } = useQuery({
+    queryKey: queryKeys.tasks.nextOccurrences(),
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const res = await tasksAPI.listNextOccurrences();
+      return Array.isArray(res?.data) ? res.data : [];
+    },
+  });
+  const { data: recurringHistoryPayload = { items: [] } } = useQuery({
+    queryKey: queryKeys.tasks.occurrences('history', 0, 500),
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const res = await tasksAPI.listOccurrences({ limit: 500, cursor: 0 });
+      if (Array.isArray(res?.data)) return { items: res.data };
+      return {
+        items: Array.isArray(res?.data?.items) ? res.data.items : [],
+      };
+    },
+  });
 
-  // 今日焦点：与「今天」视图口径一致（复用 taskListOverdue 权威逻辑）。
-  // total = 今日待办数（pending 且今日到期/逾期）；completed = 今日完成数。
   const todayFocus = useMemo(() => {
-    const tz = getUserTimezone();
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth();
-    const d = now.getDate();
-    const completedToday = (iso) => {
-      if (!iso) return false;
-      const dt = new Date(iso);
-      return dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d;
-    };
-    // 待办今日数：与「今天」视图完全一致（含逾期）
-    const pendingToday = tasks.filter((task) => shouldIncludeTaskInTodayView(task, tz));
-    // 今日完成数：完成时间落在今天
-    const completed = tasks.filter(
-      (task) => task.status === 'completed' && completedToday(task.completed_at || task.updated_at),
-    ).length;
-    const total = pendingToday.length + completed;
-    return { total, completed, ratio: total > 0 ? completed / total : 0 };
-  }, [tasks]);
+    return calculateTodayFocus({
+      tasks,
+      nextOccurrences: recurringNextOccurrences,
+      occurrenceHistory: recurringHistoryPayload?.items,
+      timezone: getUserTimezone(),
+    });
+  }, [recurringHistoryPayload, recurringNextOccurrences, tasks]);
 
   const openSettings = useCallback(() => {
     setSettingsOpen(true);
