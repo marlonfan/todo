@@ -868,7 +868,7 @@ function PromptManager() {
 
             <div className="prompt-dialog-body">
               {error && (
-                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <div className="mb-4 rounded-lg border border-[hsl(var(--accent-danger)/0.2)] bg-[hsl(var(--accent-danger)/0.08)] px-3 py-2 text-sm text-[hsl(var(--accent-danger))]">
                   {error}
                 </div>
               )}

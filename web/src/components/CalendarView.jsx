@@ -827,6 +827,16 @@ function CalendarView() {
     }
   }, []);
 
+  // 全局「快速新建」事件：移动端底栏胶囊「+」在日历页触发时，
+  // 复用日历的快速创建（带当日时段预填）。用 ref 持有最新实现避免闭包过期。
+  const mobileQuickCreateRef = useRef(handleMobileQuickCreate);
+  mobileQuickCreateRef.current = handleMobileQuickCreate;
+  useEffect(() => {
+    const handler = () => mobileQuickCreateRef.current();
+    window.addEventListener('todo:calendar-quick-add', handler);
+    return () => window.removeEventListener('todo:calendar-quick-add', handler);
+  }, []);
+
   const canvasOffsetRef = useRef({ x: 0, y: 0 });
 
   const applyDesktopMotion = useCallback((x, y, duration = 0) => {
@@ -1591,7 +1601,7 @@ function CalendarView() {
           </div>
 
           <div className={`min-w-0 flex-1 px-2 text-center ${isCompactMobile ? 'hidden' : ''}`}>
-            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground md:text-base">
+            <h2 className="font-display truncate text-base leading-tight tracking-tight text-foreground md:text-xl">
               {currentViewTitle || t('nav.calendar')}
             </h2>
             {!isCompactMobile && (
@@ -1653,20 +1663,7 @@ function CalendarView() {
           </div>
         </div>
       </div>
-
-      {isCompactMobile && (
-        <button
-          type="button"
-          onClick={handleMobileQuickCreate}
-          className="btn-primary fixed bottom-20 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full p-0 text-white shadow-sm"
-          title={t('task.newTask')}
-        >
-          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-            <path d="M12 5V19" />
-            <path d="M5 12H19" />
-          </svg>
-        </button>
-      )}
+      {/* 移动端新建入口已统一到底栏胶囊「+」：日历页派发 calendar 专用事件（带当日时段预填） */}
 
       {calendarLoadError && (
         <div className="absolute inset-0 z-40 bg-card/90 backdrop-blur-[1px]">

@@ -127,7 +127,7 @@ function CategoryManager() {
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-2xl">
           {error && (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+            <div className="mb-4 rounded-xl border border-[hsl(var(--accent-danger)/0.2)] bg-[hsl(var(--accent-danger)/0.08)] px-4 py-3 text-[hsl(var(--accent-danger))]">
               {error}
             </div>
           )}
@@ -218,7 +218,7 @@ function CategoryManager() {
                       </button>
                       <button
                         onClick={() => handleDelete(category.id)}
-                        className="rounded-full px-3 py-1 text-sm text-red-600 transition-colors hover:bg-red-50 hover:text-red-800"
+                        className="rounded-full px-3 py-1 text-sm text-[hsl(var(--accent-danger))] transition-colors hover:bg-[hsl(var(--accent-danger)/0.08)] hover:text-[hsl(var(--accent-danger))]"
                       >
                         {t('common.delete')}
                       </button>

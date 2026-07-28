@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconCheck, IconFlag } from '../icons/TaskIcons';
 import { cn } from '../../lib/utils';
+import { resolveCategoryColor } from '../../lib/theme';
 
 // 任务快速编辑器（阶段 3）：把 TaskList / TaskModal 各自重复的 task-quick-* 浮层抽成共享组件。
 // 受控 + 无业务状态：组件只渲染 task-quick-* DOM 并在交互时回调，写入/提交/显隐全部由调用方决定。
@@ -76,7 +77,7 @@ export function CategoryPanel({
                 ) : (
                   <span
                     className="task-quick-category-swatch"
-                    style={{ backgroundColor: cat.color || '#94a3b8' }}
+                    style={{ backgroundColor: resolveCategoryColor(cat) }}
                   />
                 )}
               </span>

@@ -16,7 +16,7 @@ function InlineErrorState({
       aria-live="polite"
     >
       <div className="w-full max-w-sm">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 shadow-sm">
+        <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-[hsl(var(--accent-danger)/0.12)] bg-[hsl(var(--accent-danger)/0.08)] text-[hsl(var(--accent-danger))] shadow-sm">
           <AlertTriangle className="h-5 w-5" />
         </div>
         <h2 className="mt-4 text-base font-semibold text-foreground">{title}</h2>

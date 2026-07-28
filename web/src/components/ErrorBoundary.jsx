@@ -46,7 +46,7 @@ class ErrorBoundary extends React.Component {
     return (
       <div className="flex min-h-full items-center justify-center bg-card px-4 py-10 text-center" role="alert">
         <div className="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-sm">
-          <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-rose-50 text-rose-600">
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-[hsl(var(--accent-danger)/0.08)] text-[hsl(var(--accent-danger))]">
             <RotateCcw className="h-5 w-5" />
           </div>
           <h2 className="mt-4 text-base font-semibold text-foreground">{title}</h2>

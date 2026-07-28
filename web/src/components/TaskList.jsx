@@ -1011,20 +1011,20 @@ const TaskRow = React.memo(function TaskRow({
   const isReadOnly = !!task.read_only;
   const priorityValue = Number.parseInt(task.priority, 10) || 0;
   const priority = priorityValue === 1
-    ? { text: labels.priorityHighShort, title: labels.priorityHigh, className: 'text-rose-600' }
+    ? { text: labels.priorityHighShort, title: labels.priorityHigh, className: 'text-[hsl(var(--accent-danger))]' }
     : priorityValue === -1
-      ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-emerald-600' }
-      : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-sky-600' };
+      ? { text: labels.priorityLowShort, title: labels.priorityLow, className: 'text-[hsl(var(--accent-energy))]' }
+      : { text: labels.priorityMediumShort, title: labels.priorityMedium, className: 'text-[hsl(var(--primary))]' };
   const displayTime = resolveTaskDisplayTime(task, timeMode);
   const overdue = timeMode === 'primary' && isTaskOverdue(task, timezone);
   const displayTimeLabel = formatDisplayDateWithYear(displayTime, timezone);
   const titleStateClass = isCompleted
-    ? 'text-muted-foreground line-through decoration-slate-300'
+    ? 'text-muted-foreground line-through decoration-muted-foreground/30'
     : isDeleted
       ? 'text-muted-foreground'
       : 'text-foreground';
   const deletedStatusTone = isSkipped
-    ? 'border-violet-200 bg-violet-50 text-violet-700'
+    ? 'border-[hsl(var(--primary)/0.2)] bg-[hsl(var(--primary)/0.08)] text-[hsl(var(--primary-strong))]'
     : 'border-border bg-muted text-muted-foreground';
   const rowAnimationClass = rowAnimation === 'complete-exit'
     ? ' task-row-animate-complete-exit'
@@ -1134,13 +1134,13 @@ const TaskRow = React.memo(function TaskRow({
         });
         onSelectTask(task);
       }}
-      className={`task-row-shell group relative cursor-pointer border-b border-border px-3.5 py-2.5 transition-colors duration-150 last:border-b-0 md:px-4 md:py-3${rowAnimationClass} ${
+      className={`task-row-shell group relative cursor-pointer py-2.5 transition-colors duration-150 md:rounded-md md:py-3${rowAnimationClass} ${
         selected
-          ? 'bg-muted/70 md:rounded-md'
-          : 'bg-card hover:bg-muted/80'
+          ? 'bg-muted/60 md:border-transparent'
+          : 'bg-card hover:bg-muted/40'
       }`}
     >
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2.5 px-3.5 md:px-4">
         <button
           type="button"
           data-testid="task-row-status-checkbox"
@@ -1158,7 +1158,7 @@ const TaskRow = React.memo(function TaskRow({
         >
           <span className="text-[10px] leading-none">✓</span>
         </button>
-        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] leading-5 ${titleStateClass}`}>
+	        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] font-medium leading-5 ${titleStateClass}`}>
           {task.title}
         </h3>
         <div className="hidden shrink-0 items-center gap-2 text-xs sm:flex">
@@ -1199,7 +1199,7 @@ const TaskRow = React.memo(function TaskRow({
             <span className="text-muted-foreground">+{task.categories.length - 2}</span>
           )}
           {displayTimeLabel && (
-            <span className={overdue ? 'font-medium text-rose-600' : 'text-muted-foreground'}>
+            <span className={overdue ? 'font-medium text-[hsl(var(--accent-danger))]' : 'text-muted-foreground'}>
               {displayTimeLabel}
             </span>
           )}
@@ -1207,9 +1207,9 @@ const TaskRow = React.memo(function TaskRow({
       </div>
 
       {/* Mobile: time and tags on second line */}
-      <div className="mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs text-muted-foreground sm:hidden">
+      <div className="mt-1 flex flex-wrap items-center gap-2 px-3.5 pl-6 text-xs text-muted-foreground sm:hidden md:px-4">
         {displayTimeLabel && (
-          <span className={overdue ? 'font-medium text-rose-600' : 'text-muted-foreground'}>
+          <span className={overdue ? 'font-medium text-[hsl(var(--accent-danger))]' : 'text-muted-foreground'}>
             {displayTimeLabel}
           </span>
         )}
@@ -1234,6 +1234,7 @@ const TaskRow = React.memo(function TaskRow({
           <span className="text-muted-foreground">+{task.categories.length - 2}</span>
         )}
       </div>
+      <div className="absolute bottom-0 left-3.5 right-3.5 border-b border-border/40 group-last:hidden md:left-4 md:right-4" />
     </div>
   );
 }, (prev, next) => (
@@ -1279,7 +1280,7 @@ function TaskListEmptyState({ view, searchKeyword, canCreateTask, onCreateTask, 
   return (
     <div className="flex min-h-[18rem] items-center justify-center px-4 py-12 text-center">
       <div className="w-full max-w-sm">
-        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-sky-100 bg-sky-50 text-sky-700 shadow-sm">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-[hsl(var(--accent)/0.4)] bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))] shadow-sm">
           {isSearch ? <IconSearch className="h-6 w-6" /> : <IconCheck className="h-6 w-6" />}
         </div>
         <h2 className="mt-4 text-base font-semibold text-foreground">{title}</h2>
@@ -2886,14 +2887,14 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const draftPriorityTone = draftPriorityValue === 1 ? 'high' : (draftPriorityValue === 0 ? 'medium' : 'default');
   const draftPriorityButtonClass = detailPanel === 'priority'
     ? draftPriorityTone === 'high'
-      ? 'bg-rose-50 text-rose-700'
+      ? 'bg-[hsl(var(--accent-danger-soft))] text-[hsl(var(--accent-danger-foreground))]'
       : draftPriorityTone === 'medium'
-        ? 'bg-sky-50 text-sky-700'
+        ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
         : 'bg-muted text-foreground-strong'
     : draftPriorityTone === 'high'
-      ? 'text-rose-600 hover:bg-rose-50'
+      ? 'text-[hsl(var(--accent-danger))] hover:bg-[hsl(var(--accent-danger-soft))]'
       : draftPriorityTone === 'medium'
-        ? 'text-sky-600 hover:bg-sky-50'
+        ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
         : 'text-muted-foreground hover:bg-muted';
   const draftPriorityTitle = draftPriorityTone === 'high'
     ? t('task.priorityHigh')
@@ -2910,9 +2911,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const hasDraftParsedTimeHint = !!draftParsePreview;
   const hasDraftTimeValue = !!(draft?.start_time || draft?.end_time);
   const draftTimeButtonClass = detailPanel === 'time'
-    ? 'bg-sky-50 text-sky-700'
+    ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
     : (hasDraftParsedTimeHint || hasDraftTimeValue)
-      ? 'text-sky-600 hover:bg-sky-50'
+      ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
       : 'text-muted-foreground hover:bg-muted';
   const draftTimeButtonTitle = hasDraftParsedTimeHint ? draftParsePreview : draftTimeSummaryLabel;
   const activityPanelFloatingStyle = useMemo(
@@ -2927,9 +2928,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     t('task.categories')
   );
   const draftCategoryButtonClass = detailPanel === 'category'
-    ? 'bg-indigo-50 text-indigo-700'
+    ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
     : hasDraftCategoryValue
-      ? 'text-indigo-600 hover:bg-indigo-50'
+      ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
       : 'text-muted-foreground hover:bg-muted';
   const draftRecurrenceSummaryLabel = buildRecurrenceSummaryLabel(
     !!draft?.recurrence_enabled,
@@ -2947,7 +2948,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const draftRecurrenceButtonClass = detailPanel === 'recurrence'
     ? 'bg-muted text-foreground-strong'
     : draft?.recurrence_enabled
-      ? 'text-emerald-600 hover:bg-emerald-50'
+      ? 'text-[hsl(var(--success))] hover:bg-[hsl(var(--success)/0.12)]'
       : 'text-muted-foreground hover:bg-muted';
   const detailPanelFloatingStyle = useMemo(
     () => getDetailPanelFloatingStyle(detailPanelTriggerRefs.current?.[detailPanel], detailPanel),
@@ -3159,9 +3160,9 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [submittingDraft]);
   const getPriorityBadge = (priorityValue) => {
     const value = Number.parseInt(priorityValue, 10) || 0;
-    if (value === 1) return { text: t('task.priorityHigh'), className: 'text-rose-600 bg-rose-50 border-rose-200' };
-    if (value === -1) return { text: t('task.priorityLow'), className: 'text-emerald-600 bg-emerald-50 border-emerald-200' };
-    return { text: t('task.priorityMedium'), className: 'text-sky-600 bg-sky-50 border-sky-200' };
+    if (value === 1) return { text: t('task.priorityHigh'), className: 'text-[hsl(var(--accent-danger))] bg-[hsl(var(--accent-danger-soft))] border-[hsl(var(--accent-danger)/0.25)]' };
+    if (value === -1) return { text: t('task.priorityLow'), className: 'text-[hsl(var(--success))] bg-[hsl(var(--success)/0.12)] border-[hsl(var(--success)/0.3)]' };
+    return { text: t('task.priorityMedium'), className: 'text-[hsl(var(--primary))] bg-[hsl(var(--accent))] border-[hsl(var(--accent)/0.5)]' };
   };
 
   const handleStatusChange = useCallback(async (task, newStatus) => {
@@ -4961,6 +4962,13 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     stageDraftForLeave,
   ]);
 
+  // 全局「快速新建」事件：移动端底栏胶囊「+」在任务页触发，打开新建任务弹窗
+  useEffect(() => {
+    const handler = () => openAdvancedModal(null);
+    window.addEventListener('todo:task-quick-add', handler);
+    return () => window.removeEventListener('todo:task-quick-add', handler);
+  }, [openAdvancedModal]);
+
   const canQuickCreate = view !== 'completed' && view !== 'deleted' && view !== 'search';
   const canShowSortGroup = filteredTasks.length > 0 || view === 'search' || view === 'all' || view === 'today' || view === 'upcoming';
   const taskPullRefreshDistance = Math.round(taskPullRefresh.distance || 0);
@@ -5243,7 +5251,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         }}
                         className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
                           sortBy === option.value
-                            ? 'bg-sky-50 text-sky-700'
+                            ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
                             : 'text-muted-foreground hover:bg-muted'
                         }`}
                       >
@@ -5270,7 +5278,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         }}
                         className={`w-full rounded-md px-2 py-1.5 text-left text-xs ${
                           effectiveGroupBy === option.value
-                            ? 'bg-indigo-50 text-indigo-700'
+                            ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
                             : 'text-muted-foreground hover:bg-muted'
                         }`}
                       >
@@ -5288,7 +5296,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'group' ? '' : 'group')}
                     className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-accent bg-card shadow-sm ${
                       listToolbarPanel === 'group' || effectiveGroupBy !== 'none'
-                        ? 'text-indigo-700 ring-2 ring-indigo-100'
+                        ? 'text-[hsl(var(--primary-strong))] ring-2 ring-[hsl(var(--primary)/0.1)]'
                         : 'text-muted-foreground'
                     }`}
                     title={t('task.groupNone')}
@@ -5301,7 +5309,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     onClick={() => setListToolbarPanel(listToolbarPanel === 'sort' ? '' : 'sort')}
                     className={`inline-flex h-10 w-10 items-center justify-center rounded-full border border-accent bg-card shadow-sm ${
                       listToolbarPanel === 'sort'
-                        ? 'text-sky-700 ring-2 ring-sky-100'
+                        ? 'text-[hsl(var(--primary-strong))] ring-2 ring-[hsl(var(--primary)/0.1)]'
                         : 'text-muted-foreground'
                     }`}
                     title={t('common.filter')}
@@ -5376,7 +5384,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         <IconClock className="h-4 w-4" />
                         <span className="max-w-[14rem] truncate text-left leading-5">{draftTimeSummaryLabel}</span>
                         {hasDraftParsedTimeHint && (
-                          <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                          <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
                         )}
                       </button>
                       {detailPanel === 'time' && (
@@ -5667,7 +5675,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                         <DropdownMenuLabel>{t('common.more')}</DropdownMenuLabel>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          className="gap-2 text-rose-600 focus:bg-rose-50 focus:text-rose-700"
+                          className="gap-2 text-[hsl(var(--accent-danger))] focus:bg-[hsl(var(--accent-danger-soft))] focus:text-[hsl(var(--accent-danger-foreground))]"
                           onSelect={handleDeleteSelected}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -5899,7 +5907,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                   onClick={() => {
                     void executeDeleteAction('series');
                   }}
-                  className="w-full rounded-xl bg-rose-600 px-3 py-2.5 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-xl bg-[hsl(var(--accent-danger))] px-3 py-2.5 text-sm font-medium text-white hover:bg-[hsl(var(--accent-danger)/0.85)] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {deleteDialogSubmitting ? t('task.submitting') : t('task.deleteAllSeries')}
                 </button>
@@ -5936,7 +5944,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
                     }
                     void executeDeleteAction('task');
                   }}
-                  className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-lg bg-[hsl(var(--accent-danger))] px-3 py-2 text-sm font-medium text-white hover:bg-[hsl(var(--accent-danger)/0.85)] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {deleteDialogSubmitting ? t('task.submitting') : t('common.delete')}
                 </button>

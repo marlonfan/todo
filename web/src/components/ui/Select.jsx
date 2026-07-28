@@ -63,7 +63,7 @@ export default function Select({
       >
         <span className="truncate">{selected?.label ?? ''}</span>
         <svg
-          className={`h-4 w-4 shrink-0 text-gray-400 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -71,7 +71,7 @@ export default function Select({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-xl border border-border bg-card shadow-lg">
           <div className="max-h-60 overflow-y-auto py-1">
             {options.map((opt) => (
               <button
@@ -80,8 +80,8 @@ export default function Select({
                 onClick={() => handleSelect(opt.value)}
                 className={`w-full px-3 py-2 text-left text-sm transition-colors
                   ${opt.value === String(value ?? '')
-                    ? 'bg-blue-50 font-medium text-blue-600'
-                    : 'text-gray-700 hover:bg-gray-50'
+                    ? 'bg-accent font-medium text-primary'
+                    : 'text-foreground hover:bg-muted'
                   }`}
               >
                 {opt.label}

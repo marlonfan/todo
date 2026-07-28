@@ -39,7 +39,7 @@ function Login({ setUser }) {
         </div>
 
         {error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700">
+          <div className="rounded-xl border border-[hsl(var(--accent-danger)/0.25)] bg-[hsl(var(--accent-danger-soft))] px-4 py-3 text-[hsl(var(--accent-danger-foreground))]">
             {error}
           </div>
         )}

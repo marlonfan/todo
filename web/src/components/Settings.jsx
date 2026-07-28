@@ -1289,7 +1289,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                             : t('settings.startupLaunchUnavailable')}
                         </p>
                         {startupStatus.status === 'requires-approval' && (
-                          <p className="mt-1 text-xs font-medium text-amber-700">
+                          <p className="mt-1 text-xs font-medium text-[hsl(var(--warning-foreground))]">
                             {t('settings.startupRequiresApproval')}
                           </p>
                         )}
@@ -1339,12 +1339,12 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                             </p>
                           )}
                           {desktopUpdateStatus.downloaded && (
-                            <p className="mt-1 text-xs font-medium text-emerald-700">
+                            <p className="mt-1 text-xs font-medium text-[hsl(var(--success-foreground))]">
                               {t('settings.desktopUpdateReady')}
                             </p>
                           )}
                           {desktopUpdateStatus.error && (
-                            <p className="mt-1 text-xs font-medium text-rose-700">
+                            <p className="mt-1 text-xs font-medium text-[hsl(var(--accent-danger))]">
                               {desktopUpdateStatus.error}
                             </p>
                           )}
@@ -1753,7 +1753,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   {t('settings.syncLastPull')}: <span className="font-medium">{formatSyncTime(syncStatus.lastPullAt)}</span>
                 </p>
                 {syncStatus.lastError && (
-                  <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <p className="mt-2 rounded-md border border-[hsl(var(--warning)/0.2)] bg-[hsl(var(--warning)/0.08)] px-3 py-2 text-sm text-[hsl(var(--warning-foreground))]">
                     {t('settings.syncLastError')}: <span className="font-medium">{syncStatus.lastError}</span>
                   </p>
                 )}
@@ -1790,9 +1790,9 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </button>
               </div>
 
-              <div className="rounded-md border border-rose-200 bg-rose-50 p-4">
-                <h4 className="text-sm font-semibold text-rose-900">{t('settings.syncRebuildTitle')}</h4>
-                <p className="mt-1 text-sm text-rose-800">{t('settings.syncRebuildHint')}</p>
+              <div className="rounded-md border border-[hsl(var(--accent-danger)/0.2)] bg-[hsl(var(--accent-danger)/0.08)] p-4">
+                <h4 className="text-sm font-semibold text-[hsl(var(--accent-danger))]">{t('settings.syncRebuildTitle')}</h4>
+                <p className="mt-1 text-sm text-[hsl(var(--accent-danger))]">{t('settings.syncRebuildHint')}</p>
                 <button
                   type="button"
                   onClick={handleRebuildSync}
@@ -1958,7 +1958,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                               : t('settings.caldav.neverSynced')}
                           </div>
                           {source.last_error ? (
-                            <div className="mt-1 text-xs text-rose-600 break-all">{t('settings.caldav.errorLabel', { error: source.last_error })}</div>
+                            <div className="mt-1 text-xs text-[hsl(var(--accent-danger))] break-all">{t('settings.caldav.errorLabel', { error: source.last_error })}</div>
                           ) : null}
                         </div>
                         <div className="flex items-center gap-2">

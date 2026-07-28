@@ -1689,22 +1689,22 @@ export default function InfiniteCalendarCanvas({
           {showNowLine && (
             <>
               <div
-                className="pointer-events-none absolute border-t border-primary/80"
+                className="pointer-events-none absolute border-t-2 border-[hsl(var(--accent-energy))]"
                 style={{
                   left: TIME_AXIS_WIDTH,
                   right: 0,
                   top: nowLineY,
                   zIndex: 56,
-                  boxShadow: '0 0 4px rgba(37,99,235,0.18)',
+                  boxShadow: '0 0 6px hsl(var(--accent-energy) / 0.28)',
                 }}
               />
               <div
-                className="pointer-events-none absolute h-2.5 w-2.5 rounded-full border border-white bg-primary shadow"
+                className="pointer-events-none absolute h-2.5 w-2.5 rounded-full border border-white bg-[hsl(var(--accent-energy))] shadow"
                 style={{
                   left: nowDotX - 5,
                   top: nowLineY - 5,
                   zIndex: 57,
-                  boxShadow: '0 0 0 3px rgba(37,99,235,0.16)',
+                  boxShadow: '0 0 0 3px hsl(var(--accent-energy) / 0.22), 0 0 8px hsl(var(--accent-energy) / 0.5)',
                 }}
               />
             </>
@@ -1973,7 +1973,7 @@ export default function InfiniteCalendarCanvas({
                       {showChineseHolidays && displayInfo.primaryHoliday && (
                         <span
                           className={`text-[10px] font-medium leading-tight truncate max-w-[50%] ${
-                            displayInfo.isHoliday ? 'text-rose-500' : 'text-teal-600'
+                            displayInfo.isHoliday ? 'text-[hsl(var(--accent-danger))]' : 'text-primary'
                           }`}
                         >
                           {displayInfo.primaryHoliday}

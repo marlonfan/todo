@@ -700,14 +700,14 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
   const priorityIconTone = displayPriorityValue === 1 ? 'high' : (displayPriorityValue === 0 ? 'medium' : 'default');
   const priorityButtonClass = basicPanel === 'priority'
     ? priorityIconTone === 'high'
-      ? 'bg-rose-50 text-rose-700'
+      ? 'bg-[hsl(var(--accent-danger-soft))] text-[hsl(var(--accent-danger-foreground))]'
       : priorityIconTone === 'medium'
-        ? 'bg-sky-50 text-sky-700'
+        ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
         : 'bg-muted text-foreground-strong'
     : priorityIconTone === 'high'
-      ? 'text-rose-600 hover:bg-rose-50'
+      ? 'text-[hsl(var(--accent-danger))] hover:bg-[hsl(var(--accent-danger-soft))]'
       : priorityIconTone === 'medium'
-        ? 'text-sky-600 hover:bg-sky-50'
+        ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
         : 'text-muted-foreground hover:bg-muted';
   const priorityButtonTitle = priorityIconTone === 'high'
     ? t('task.priorityHigh')
@@ -718,9 +718,9 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
   const hasParsedTimeHint = !!parsePreview;
   const hasTimeValue = !!(startInputValue || endInputValue);
   const timeButtonClass = basicPanel === 'time'
-    ? 'bg-sky-50 text-sky-700'
+    ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
     : (hasParsedTimeHint || hasTimeValue)
-      ? 'text-sky-600 hover:bg-sky-50'
+      ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
       : 'text-muted-foreground hover:bg-muted';
   const timeButtonTitle = hasParsedTimeHint ? parsePreview : timeSummaryLabel;
   const hasCategoryValue = selectedCategoryValues.length > 0;
@@ -731,9 +731,9 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     t('task.categories')
   );
   const categoryButtonClass = basicPanel === 'category'
-    ? 'bg-indigo-50 text-indigo-700'
+    ? 'bg-[hsl(var(--accent))] text-[hsl(var(--primary-strong))]'
     : hasCategoryValue
-      ? 'text-indigo-600 hover:bg-indigo-50'
+      ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
       : 'text-muted-foreground hover:bg-muted';
   const recurrenceSummaryLabel = buildRecurrenceSummaryLabel(showRecurrence, recurrenceType, selectedDays, t, {
     month: recurrenceLunarMonth,
@@ -746,7 +746,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
   const recurrenceButtonClass = basicPanel === 'recurrence'
     ? 'bg-muted text-foreground-strong'
     : showRecurrence
-      ? 'text-emerald-600 hover:bg-emerald-50'
+      ? 'text-[hsl(var(--success))] hover:bg-[hsl(var(--success)/0.12)]'
       : 'text-muted-foreground hover:bg-muted';
 
   const isBasicPanelRequiringConfirm = useCallback(
@@ -2096,7 +2096,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-1 flex-col overflow-hidden">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
               {error && (
-                <div className="mx-4 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
+                <div className="mx-4 mt-4 rounded-lg border border-[hsl(var(--accent-danger)/0.25)] bg-[hsl(var(--accent-danger-soft))] px-4 py-3 text-[hsl(var(--accent-danger-foreground))]">
                   {error}
                 </div>
               )}
@@ -2177,7 +2177,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                       <IconClock className="h-4 w-4" />
                       <span className="max-w-[11.5rem] truncate text-left text-[11px] leading-4">{timeSummaryLabel}</span>
                       {hasParsedTimeHint && (
-                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-sky-500" />
+                        <span className="pointer-events-none absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
                       )}
                     </button>
                   </div>

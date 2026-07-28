@@ -322,12 +322,12 @@ function NotificationSettings() {
   return (
     <div className="space-y-6">
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+        <div className="bg-[hsl(var(--accent-danger-soft))] border border-[hsl(var(--accent-danger)/0.25)] text-[hsl(var(--accent-danger-foreground))] px-4 py-3 rounded">
           {error}
         </div>
       )}
       {success && (
-        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
+        <div className="bg-[hsl(var(--success)/0.12)] border border-[hsl(var(--success)/0.3)] text-[hsl(var(--success-foreground))] px-4 py-3 rounded">
           {success}
         </div>
       )}
@@ -489,7 +489,7 @@ function NotificationSettings() {
                       <button
                         onClick={() => handleSetDefault(setting.id)}
                         disabled={loading}
-                        className="text-indigo-600 hover:text-indigo-800 text-sm"
+                        className="text-[hsl(var(--primary))] hover:text-[hsl(var(--primary-strong))] text-sm"
                       >
                         {t('common.default')}
                       </button>
@@ -503,7 +503,7 @@ function NotificationSettings() {
                     </button>
                     <button
                       onClick={() => handleDeleteSetting(setting.id)}
-                      className="text-red-600 hover:text-red-800 text-sm"
+                      className="text-[hsl(var(--accent-danger))] hover:text-[hsl(var(--accent-danger))] text-sm"
                     >
                       {t('common.delete')}
                     </button>

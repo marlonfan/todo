@@ -8,6 +8,7 @@ import {
   IconInbox,
   IconList,
   IconLogout,
+  IconPlus,
   IconPrompt,
   IconSearch,
   IconSettings,
@@ -28,7 +29,9 @@ import {
   shouldTreatPointerReleaseAsClick,
 } from '../utils/taskDrag';
 import { blurActiveTaskDescriptionEditor } from '../utils/editorFocus';
-import { useCategoriesQuery } from '../query/hooks';
+import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
+import { shouldIncludeTaskInTodayView } from './taskListOverdue';
+import { resolveCategoryColor } from '../lib/theme';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { moveTaskToCategoryLocal, updateTaskLocal } from '../data/taskMutations';
 import { closeSearchDialog, openSearchDialog, subscribeSearchOverlay } from '../state/searchOverlay';
@@ -37,7 +40,7 @@ import {
   removeSyncConflict,
   subscribeSyncConflicts,
 } from '../state/syncConflictCenter';
-import { formatDateTime } from '../utils/time';
+import { formatDateTime, getUserTimezone } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 import { clearAuthenticatedLocalState } from '../data/syncEngine';
 import { clearSyncConflicts } from '../state/syncConflictCenter';
@@ -224,6 +227,34 @@ function sortConflictFields(fields) {
   });
 }
 
+// 今日进度环（青瓷描边，按完成度填充）
+function FocusRing({ ratio }) {
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const size = 22;
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - clamped);
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0" aria-hidden="true">
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth={stroke} />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="hsl(var(--primary))"
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: 'stroke-dashoffset 0.4s ease' }}
+      />
+    </svg>
+  );
+}
+
 function StableNavLink({
   to,
   replace = false,
@@ -347,6 +378,30 @@ function MainLayout({ user, setUser }) {
   const resolveConflictDialogRef = useRef(null);
   const settingsDialogRef = useRef(null);
   const { data: categories = [] } = useCategoriesQuery();
+  const { data: tasks = [] } = useTasksQuery();
+
+  // 今日焦点：与「今天」视图口径一致（复用 taskListOverdue 权威逻辑）。
+  // total = 今日待办数（pending 且今日到期/逾期）；completed = 今日完成数。
+  const todayFocus = useMemo(() => {
+    const tz = getUserTimezone();
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const d = now.getDate();
+    const completedToday = (iso) => {
+      if (!iso) return false;
+      const dt = new Date(iso);
+      return dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d;
+    };
+    // 待办今日数：与「今天」视图完全一致（含逾期）
+    const pendingToday = tasks.filter((task) => shouldIncludeTaskInTodayView(task, tz));
+    // 今日完成数：完成时间落在今天
+    const completed = tasks.filter(
+      (task) => task.status === 'completed' && completedToday(task.completed_at || task.updated_at),
+    ).length;
+    const total = pendingToday.length + completed;
+    return { total, completed, ratio: total > 0 ? completed / total : 0 };
+  }, [tasks]);
 
   const openSettings = useCallback(() => {
     setSettingsOpen(true);
@@ -589,7 +644,8 @@ function MainLayout({ user, setUser }) {
       </div>
     </div>
   );
-  const hideMobileHeader = location.pathname === '/';
+  // 移动端统一顶栏：所有页面都显示标题条（日历页不再单独隐藏，保证入口一致）
+  const hideMobileHeader = false;
   const taskPanelLocationRef = useRef(
     location.pathname === '/tasks'
       ? location
@@ -613,6 +669,13 @@ function MainLayout({ user, setUser }) {
   const showTaskWorkspace = location.pathname === '/tasks';
   const shouldRenderCalendarWorkspace = workspaceVisited.calendar || showCalendarWorkspace;
   const shouldRenderTaskWorkspace = workspaceVisited.tasks || showTaskWorkspace;
+
+  // 今日焦点卡：仅桌面端、日历页或任务页显示
+  const showFocusCard = showCalendarWorkspace || showTaskWorkspace;
+  const focusNow = new Date();
+  const focusDayNum = focusNow.getDate();
+  const focusMonthLabel = focusNow.toLocaleDateString(undefined, { month: 'short' });
+  const focusWeekday = focusNow.toLocaleDateString(undefined, { weekday: 'long' });
   const activeSyncConflict = syncConflicts[0] || null;
   const syncConflictMoreCount = Math.max(0, syncConflicts.length - 1);
   const resolvingConflictItem = syncConflicts.find(
@@ -805,15 +868,15 @@ function MainLayout({ user, setUser }) {
   return (
     <div className="app-shell flex h-screen min-w-0 flex-col overflow-hidden bg-card md:flex-row">
       {activeSyncConflict && (
-        <div className="sync-conflict-toast fixed right-2 top-14 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
-          <div className="text-xs font-semibold text-amber-900">{t('task.syncConflictTitle')}</div>
-          <div className="mt-1 text-xs leading-relaxed text-amber-800">
+        <div className="sync-conflict-toast fixed right-2 top-14 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-xl border border-[hsl(var(--accent-energy)/0.3)] bg-[hsl(var(--accent-energy-soft))]/95 p-3 shadow-lg backdrop-blur md:right-4 md:top-4">
+          <div className="text-xs font-semibold text-[hsl(var(--warning-foreground))]">{t('task.syncConflictTitle')}</div>
+          <div className="mt-1 text-xs leading-relaxed text-[hsl(var(--warning-foreground))]">
             {activeSyncConflict.task_title
               ? t('task.syncConflictHint', { title: activeSyncConflict.task_title })
               : t('task.syncConflictHintFallback')}
           </div>
           {syncConflictMoreCount > 0 && (
-            <div className="mt-1 text-[11px] text-amber-700">
+            <div className="mt-1 text-[11px] text-[hsl(var(--accent-energy-foreground))]">
               {t('task.syncConflictMore', { count: syncConflictMoreCount })}
             </div>
           )}
@@ -821,14 +884,14 @@ function MainLayout({ user, setUser }) {
             <button
               type="button"
               onClick={handleDismissSyncConflict}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-amber-300 bg-card px-2.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-[hsl(var(--accent-energy)/0.4)] bg-card px-2.5 text-xs font-medium text-[hsl(var(--warning-foreground))] hover:bg-[hsl(var(--accent-energy)/0.12)]"
             >
               {t('task.syncConflictDismiss')}
             </button>
             <button
               type="button"
               onClick={() => handleOpenResolveConflict(activeSyncConflict)}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-amber-500 bg-amber-500 px-2.5 text-xs font-medium text-white hover:bg-amber-600"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-[hsl(var(--accent-energy)/0.7)] bg-[hsl(var(--accent-energy))] px-2.5 text-xs font-medium text-white hover:bg-[hsl(var(--accent-energy)/0.8)]"
             >
               {syncConflictMoreCount > 0 ? t('task.syncConflictViewAll') : t('task.syncConflictResolve')}
             </button>
@@ -836,7 +899,7 @@ function MainLayout({ user, setUser }) {
         </div>
       )}
       {!hideMobileHeader && (
-        <div className="mobile-top-bar md:hidden flex h-12 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur">
+        <div className="mobile-top-bar relative z-[100] md:hidden flex h-12 shrink-0 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur">
           <h1 className="truncate text-sm font-semibold text-foreground">{mobilePageTitle}</h1>
           <Button
             type="button"
@@ -859,16 +922,16 @@ function MainLayout({ user, setUser }) {
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar —— 青瓷 Jade 玻璃浮岛，分组语义化 */}
       <div
-        className={`sidebar fixed inset-y-0 left-0 z-40 flex flex-col transform transition-transform duration-200 md:static md:shrink-0
+        className={`sidebar glass-sidebar fixed bottom-0 left-0 top-12 z-40 flex w-[280px] flex-col transform transition-transform duration-200 md:static md:inset-y-0 md:shrink-0
           ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
       >
-        <div className="mx-5 mb-5 mt-6 flex h-12 items-center gap-3">
+        <div className="mx-5 mb-3 mt-6 flex h-12 items-center gap-3">
           <button
             type="button"
             onClick={openSettings}
-            className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary text-sm font-semibold text-white shadow-sm transition hover:ring-2 hover:ring-ring"
+            className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary text-sm font-semibold text-primary-foreground shadow-sm transition hover:ring-2 hover:ring-ring"
             title={t('nav.settings')}
             aria-label={t('nav.settings')}
           >
@@ -886,90 +949,115 @@ function MainLayout({ user, setUser }) {
             )}
           </button>
           <div className="flex min-w-0 flex-col justify-center">
-            <h1 className="truncate text-lg font-semibold leading-6 text-foreground">{t('app.name')}</h1>
+            <h1 className="truncate font-display text-xl leading-7 text-foreground">{t('app.name')}</h1>
             <p className="-mt-0.5 truncate text-sm leading-5 text-muted-foreground">{user.username}</p>
           </div>
         </div>
 
-        <nav className="flex-1 space-y-1.5 px-5 pb-4">
-          <StableNavLink
-            to="/"
-            className={navItemClass(activeTab === 'calendar')}
-          >
-            <span className="inline-flex min-w-0 items-center gap-2">
-              <IconCalendar className="h-[18px] w-[18px] shrink-0" />
-              <span className="truncate">{t('nav.calendar')}</span>
-            </span>
-          </StableNavLink>
-
-          <div className="mt-5 px-3 pb-1 text-xs font-semibold text-muted-foreground">
-            {t('task.listView')}
+        <nav className="nav-scroll flex-1 space-y-1 px-4 pb-4">
+          {/* —— 收集 —— */}
+          <div className="nav-section">
+            <StableNavLink to="/" className={navItemClass(activeTab === 'calendar')}>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <IconCalendar className="h-[18px] w-[18px] shrink-0" />
+                <span className="truncate">{t('nav.calendar')}</span>
+              </span>
+            </StableNavLink>
+            {taskNavItems
+              .filter((item) => item.key === 'inbox' || item.action === 'open_search')
+              .map((item) => {
+                const ItemIcon = item.icon;
+                if (item.action === 'open_search') {
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => openSearchDialog()}
+                      className={`${navItemClass(location.pathname === '/search')} w-full text-left`}
+                    >
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <ItemIcon className="h-[18px] w-[18px] shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </span>
+                    </button>
+                  );
+                }
+                return (
+                  <StableNavLink
+                    key={item.key}
+                    to={item.to}
+                    className={navItemClass(isTaskNavActive(item.to))}
+                  >
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <ItemIcon className="h-[18px] w-[18px] shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </span>
+                  </StableNavLink>
+                );
+              })}
           </div>
-          {taskNavItems.map((item) => {
-            const ItemIcon = item.icon;
-            if (item.action === 'open_search') {
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => openSearchDialog()}
-                  className={`${navItemClass(location.pathname === '/search')} w-full text-left`}
-                >
-                  <span className="inline-flex min-w-0 items-center gap-2">
-                    <ItemIcon className="h-[18px] w-[18px] shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                  </span>
-                </button>
-              );
-            }
-            return (
-              <StableNavLink
-                key={item.key}
-                to={item.to}
-                className={navItemClass(isTaskNavActive(item.to))}
-              >
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  <ItemIcon className="h-[18px] w-[18px] shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </span>
-              </StableNavLink>
-            );
-          })}
 
+          {/* —— 视图 —— */}
+          <div className="nav-section">
+            <div className="nav-section-label">{t('task.listView')}</div>
+            {taskNavItems
+              .filter((item) => ['all', 'today', 'upcoming'].includes(item.key))
+              .map((item) => {
+                const ItemIcon = item.icon;
+                return (
+                  <StableNavLink
+                    key={item.key}
+                    to={item.to}
+                    className={navItemClass(isTaskNavActive(item.to))}
+                  >
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <ItemIcon className="h-[18px] w-[18px] shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </span>
+                  </StableNavLink>
+                );
+              })}
+          </div>
+
+          {/* —— 我的清单（分类，可拖拽改分类） —— */}
           {categories.length > 0 && (
-            <div className="mt-4 space-y-1.5 border-t border-border pt-3">
-              {categories.map((cat) => (
-                <StableNavLink
-                  key={cat.id}
-                  to={`/tasks?category_id=${cat.id}`}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragOverCategoryID(cat.id);
-                  }}
-                  onDragLeave={() => setDragOverCategoryID(0)}
-                  onDrop={(event) => handleDropToCategory(event, cat.id)}
-                  className={`md-nav-item ${
-                    isTaskNavActive(`/tasks?category_id=${cat.id}`)
-                      ? 'md-nav-item-active'
-                      : dragOverCategoryID === cat.id
-                        ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-300'
-                        : 'md-nav-item-idle'
-                  }`}
-                >
-                  <span className="inline-flex min-w-0 items-center gap-2">
-                    {showCategoryEmoji && cat.emoji ? (
-                      <span className="shrink-0">{cat.emoji}</span>
-                    ) : (
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: cat.color || '#94a3b8' }} />
-                    )}
-                    <span className="truncate">{cat.name}</span>
-                  </span>
-                </StableNavLink>
-              ))}
+            <div className="nav-section">
+              <div className="nav-section-label">{t('nav.categories')}</div>
+              <div className="space-y-0.5">
+                {categories.map((cat) => (
+                  <StableNavLink
+                    key={cat.id}
+                    to={`/tasks?category_id=${cat.id}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragOverCategoryID(cat.id);
+                    }}
+                    onDragLeave={() => setDragOverCategoryID(0)}
+                    onDrop={(event) => handleDropToCategory(event, cat.id)}
+                    className={`md-nav-item ${
+                      isTaskNavActive(`/tasks?category_id=${cat.id}`)
+                        ? 'md-nav-item-active'
+                        : dragOverCategoryID === cat.id
+                          ? 'bg-[hsl(var(--success)/0.12)] text-[hsl(var(--success-foreground))] ring-1 ring-[hsl(var(--success)/0.3)]'
+                          : 'md-nav-item-idle'
+                    }`}
+                  >
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      {showCategoryEmoji && cat.emoji ? (
+                        <span className="shrink-0">{cat.emoji}</span>
+                      ) : (
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: resolveCategoryColor(cat) }} />
+                      )}
+                      <span className="truncate">{cat.name}</span>
+                    </span>
+                  </StableNavLink>
+                ))}
+              </div>
             </div>
           )}
 
-          <div className={`${categories.length > 0 ? 'mt-4' : 'mt-5'} border-t border-border pt-3`}>
+          {/* —— 归档 —— */}
+          <div className="nav-section">
             <StableNavLink
               to="/tasks?view=completed"
               className={navItemClass(isTaskNavActive('/tasks?view=completed'))}
@@ -988,6 +1076,10 @@ function MainLayout({ user, setUser }) {
                 <span className="truncate">{t('task.deletedTasks')}</span>
               </span>
             </StableNavLink>
+          </div>
+
+          {/* —— 系统 —— */}
+          <div className="nav-section">
             <StableNavLink
               to="/categories"
               className={navItemClass(activeTab === 'categories')}
@@ -1006,21 +1098,20 @@ function MainLayout({ user, setUser }) {
                 <span className="truncate">{t('nav.prompts')}</span>
               </span>
             </StableNavLink>
+            <button
+              type="button"
+              onClick={openSettings}
+              className={`${navItemClass(settingsOpen)} w-full text-left`}
+            >
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <IconSettings className="h-[18px] w-[18px] shrink-0" />
+                <span className="truncate">{t('nav.settings')}</span>
+              </span>
+            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={openSettings}
-            className={`${navItemClass(settingsOpen)} w-full text-left`}
-          >
-            <span className="inline-flex min-w-0 items-center gap-2">
-              <IconSettings className="h-[18px] w-[18px] shrink-0" />
-              <span className="truncate">{t('nav.settings')}</span>
-            </span>
-          </button>
         </nav>
 
-        <div className="border-t border-border p-5">
+        <div className="px-5 pb-5 pt-2">
           <button
             onClick={handleLogout}
             className="md-nav-item md-nav-item-idle w-full text-left"
@@ -1034,17 +1125,40 @@ function MainLayout({ user, setUser }) {
       </div>
 
       {/* Main Content */}
-      <div className="main-workspace relative min-w-0 flex-1 overflow-hidden pb-14 md:pb-0">
+      <div className="main-workspace relative min-w-0 flex-1 overflow-hidden pb-28 md:pb-0">
+        {/* 顶部状态条：今日进度，单行克制，不喧宾夺主 */}
+        {showFocusCard && (
+          <div className="focus-bar absolute inset-x-0 top-0 z-20 hidden items-center justify-between gap-4 border-b border-border bg-card/80 px-6 py-2.5 backdrop-blur md:flex">
+            <div className="flex min-w-0 items-baseline gap-2.5">
+              <span className="font-display text-xl leading-none text-foreground">{focusDayNum}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {focusMonthLabel} · {focusWeekday}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              {todayFocus.total > 0 ? (
+                <>
+                  <span className="text-xs text-muted-foreground">
+                    {t('task.today')} · {todayFocus.completed}/{todayFocus.total}
+                  </span>
+                  <FocusRing ratio={todayFocus.ratio} />
+                </>
+              ) : (
+                <span className="text-xs text-muted-foreground">{t('task.emptyHint')}</span>
+              )}
+            </div>
+          </div>
+        )}
         <Suspense fallback={workspaceFallback}>
           {shouldRenderCalendarWorkspace && (
-            <div className={`absolute inset-0 ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
+            <div className={`absolute inset-x-0 bottom-0 top-0 ${showFocusCard ? 'md:top-[3.25rem]' : ''} ${showCalendarWorkspace ? 'z-10' : 'pointer-events-none opacity-0 [contain:layout_paint]'}`}>
               <ErrorBoundary fallback={workspaceErrorFallback}>
                 <CalendarView />
               </ErrorBoundary>
             </div>
           )}
           {shouldRenderTaskWorkspace && (
-            <div className={`absolute inset-0 ${showTaskWorkspace ? 'z-10' : 'hidden'}`}>
+            <div className={`absolute inset-x-0 bottom-0 top-0 ${showFocusCard ? 'md:top-[3.25rem]' : ''} ${showTaskWorkspace ? 'z-10' : 'hidden'}`}>
               <ErrorBoundary fallback={workspaceErrorFallback}>
                 <TaskListView routeLocation={taskPanelLocationRef.current} />
               </ErrorBoundary>
@@ -1080,8 +1194,9 @@ function MainLayout({ user, setUser }) {
         </Suspense>
       </div>
 
-      <div className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card md:hidden">
-        <div className={`grid h-14 ${mobileTabs.length === 5 ? 'grid-cols-5' : mobileTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
+      {/* 移动端浮岛胶囊底栏：玻璃胶囊 + 中央凸起「+」主按钮 */}
+      <div className="mobile-dock fixed inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] md:hidden">
+        <div className="mobile-dock-capsule glass-panel-strong flex items-center gap-1 rounded-full px-2 py-1.5">
           {mobileTabs.map((item) => {
             const ItemIcon = item.icon;
             const active = isMobileTabActive(item);
@@ -1099,17 +1214,9 @@ function MainLayout({ user, setUser }) {
                     }
                     openSearchDialog();
                   }}
-                  className={`appearance-none border-0 bg-transparent p-0 flex items-center justify-center ${
-                    (item.action === 'open_settings' ? settingsOpen : active) ? 'text-foreground' : 'text-muted-foreground'
-                  }`}
+                  className={`dock-tab ${active ? 'dock-tab-active' : ''}`}
                 >
-                  <span
-                    className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                      (item.action === 'open_settings' ? settingsOpen : active) ? 'border-[hsl(var(--primary))]' : 'border-transparent hover:border-[hsl(var(--border-strong))]'
-                    }`}
-                  >
-                    <ItemIcon className="h-[18px] w-[18px]" />
-                  </span>
+                  <ItemIcon className="h-[20px] w-[20px]" />
                 </button>
               );
             }
@@ -1119,20 +1226,36 @@ function MainLayout({ user, setUser }) {
                 to={item.to}
                 aria-label={item.label}
                 title={item.label}
-                className={`flex items-center justify-center ${
-                  active ? 'text-foreground' : 'text-muted-foreground'
-                }`}
+                className={`dock-tab ${active ? 'dock-tab-active' : ''}`}
               >
-                <span
-                  className={`inline-flex h-8 w-8 items-center justify-center border-b-2 transition-colors ${
-                    active ? 'border-[hsl(var(--primary))]' : 'border-transparent hover:border-[hsl(var(--border-strong))]'
-                  }`}
-                >
-                  <ItemIcon className="h-[18px] w-[18px]" />
-                </span>
+                <ItemIcon className="h-[20px] w-[20px]" />
               </StableNavLink>
             );
           })}
+
+          {/* 中央凸起「+」：青瓷→琥珀渐变，轻拟物凸出 */}
+          <button
+            type="button"
+            aria-label={t('common.add')}
+            title={t('common.add')}
+            onClick={() => {
+              const onCalendar = location.pathname === '/';
+              if (onCalendar) {
+                // 日历页：复用日历快速创建（带当日时段预填）
+                window.dispatchEvent(new CustomEvent('todo:calendar-quick-add'));
+              } else if (location.pathname === '/tasks') {
+                // 任务页：打开新建弹窗
+                window.dispatchEvent(new CustomEvent('todo:task-quick-add'));
+              } else {
+                // 其它页：先回任务页，挂载后再派发
+                navigate('/tasks?view=all');
+                setTimeout(() => window.dispatchEvent(new CustomEvent('todo:task-quick-add')), 60);
+              }
+            }}
+            className="dock-fab"
+          >
+            <IconPlus className="h-6 w-6" strokeWidth={2.4} />
+          </button>
         </div>
       </div>
 
@@ -1168,7 +1291,7 @@ function MainLayout({ user, setUser }) {
                         aria-pressed={active}
                         className={`inline-flex min-w-[8rem] max-w-[12rem] shrink-0 flex-col rounded-md border px-2.5 py-2 text-left text-xs ${
                           active
-                            ? 'border-amber-400 bg-amber-50 text-amber-900'
+                            ? 'border-[hsl(var(--accent-energy)/0.5)] bg-[hsl(var(--accent-energy-soft))] text-[hsl(var(--warning-foreground))]'
                             : 'border-border bg-card text-muted-foreground hover:bg-muted'
                         }`}
                       >
@@ -1199,7 +1322,7 @@ function MainLayout({ user, setUser }) {
                           aria-pressed={selected === 'server'}
                           className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                             selected === 'server'
-                              ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                              ? 'border-[hsl(var(--success))] bg-[hsl(var(--success)/0.12)] text-[hsl(var(--success-foreground))]'
                               : 'border-border bg-card text-foreground-strong'
                           }`}
                         >
@@ -1226,7 +1349,7 @@ function MainLayout({ user, setUser }) {
               </div>
 
               {resolveConflictError && (
-                <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs text-rose-700">
+                <div className="mt-2 rounded-md border border-[hsl(var(--accent-danger)/0.25)] bg-[hsl(var(--accent-danger-soft))] px-2 py-1.5 text-xs text-[hsl(var(--accent-danger-foreground))]">
                   {resolveConflictError}
                 </div>
               )}

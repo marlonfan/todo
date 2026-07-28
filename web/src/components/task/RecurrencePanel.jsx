@@ -232,7 +232,7 @@ export function RecurrencePanel({
             <div className="task-quick-section task-quick-subpanel">
               <div className="task-quick-section-title">{t('task.lunarYearly')}</div>
               {renderDatePicker?.({ value: lunarPickerDate, onChange: handleLunarPickerChange })}
-              <div className="mt-2 rounded-xl bg-white px-2 py-1.5 text-xs text-slate-600">
+              <div className="mt-2 rounded-xl bg-card px-2 py-1.5 text-xs text-muted-foreground">
                 {`${t('task.lunarYearly')} ${lunar.isLeapMonth ? t('task.lunarLeapPrefix') : ''}${Number.parseInt(lunar.month, 10) || 1}/${Number.parseInt(lunar.day, 10) || 1}`}
               </div>
             </div>

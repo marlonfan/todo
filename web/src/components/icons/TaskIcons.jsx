@@ -246,3 +246,11 @@ export function IconGroup({ className }) {
     </BaseIcon>
   );
 }
+
+export function IconPlus({ className }) {
+  return (
+    <BaseIcon className={className} >
+      <path d="M12 5v14M5 12h14" />
+    </BaseIcon>
+  );
+}

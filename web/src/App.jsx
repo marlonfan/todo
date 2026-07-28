@@ -22,18 +22,18 @@ const isNativeApp = typeof window !== 'undefined' && (
 function AppLoadingSkeleton() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--card))] px-4">
-      <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-sm" aria-label="Loading">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-sm" aria-label="Loading">
         <div className="mb-5 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-slate-200" />
+          <div className="h-10 w-10 rounded-xl bg-muted" />
           <div className="min-w-0 flex-1 space-y-2">
-            <div className="h-3.5 w-32 rounded-full bg-slate-200" />
-            <div className="h-2.5 w-24 rounded-full bg-slate-100" />
+            <div className="h-3.5 w-32 rounded-full bg-muted" />
+            <div className="h-2.5 w-24 rounded-full bg-muted/50" />
           </div>
         </div>
         <div className="space-y-3">
-          <div className="h-9 rounded-md bg-slate-100" />
-          <div className="h-9 rounded-md bg-slate-100" />
-          <div className="h-9 rounded-md bg-slate-100" />
+          <div className="h-9 rounded-md bg-muted/50" />
+          <div className="h-9 rounded-md bg-muted/50" />
+          <div className="h-9 rounded-md bg-muted/50" />
         </div>
       </div>
     </div>

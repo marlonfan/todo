@@ -37,7 +37,7 @@ function PWAInstallCard() {
 
   if (installed) {
     return (
-      <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+      <div className="rounded-md border border-[hsl(var(--success)/0.2)] bg-[hsl(var(--success)/0.08)] p-3 text-sm text-[hsl(var(--success-foreground))]">
         {t('settings.pwaInstalled')}
       </div>
     );

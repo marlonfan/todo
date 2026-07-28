@@ -29,10 +29,10 @@ const MOCK_TASKS = [
 ];
 
 const TONE_DOT = {
-  rose: 'bg-rose-400',
+  rose: 'bg-[hsl(var(--accent-danger))]',
   primary: 'bg-primary',
-  amber: 'bg-amber-400',
-  emerald: 'bg-emerald-400',
+  amber: 'bg-[hsl(var(--accent-energy))]',
+  emerald: 'bg-[hsl(var(--success))]',
 };
 
 const STATS = [
@@ -138,9 +138,9 @@ export default function Landing() {
         <div className="relative mx-auto -mt-6 max-w-5xl px-6 pb-24 md:-mt-16 md:pb-28">
           <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
             <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-3">
-              <span className="h-3 w-3 rounded-full bg-rose-400" />
-              <span className="h-3 w-3 rounded-full bg-amber-400" />
-              <span className="h-3 w-3 rounded-full bg-emerald-400" />
+              <span className="h-3 w-3 rounded-full bg-[hsl(var(--accent-danger))]" />
+              <span className="h-3 w-3 rounded-full bg-[hsl(var(--accent-energy))]" />
+              <span className="h-3 w-3 rounded-full bg-[hsl(var(--success))]" />
               <div className="ml-4 flex-1">
                 <div className="mx-auto h-5 max-w-xs rounded-full bg-background" />
               </div>
