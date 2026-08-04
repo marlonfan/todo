@@ -22,6 +22,7 @@ const NOTIFICATION_REF_TTL_MS = 5 * 60 * 1000;
 const MAC_TRAY_ICON_SIZE = 18;
 const MAC_TRAY_TEMPLATE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAAAfElEQVR4nO3VUQrAIAwDUO9/aXeCimlTU1gC/jiID6e4lvOT7MsxCtOKQhGtOBaGgmJjyqioDFm4FaTuoR5IgwyK5m+vt0FSkKzLoGxJ5uGkPB8GZUGVHvmhRnaxHYT+VriQgaGCdvANwdBBjFHKKAwb9SSyhU8ZB3Ke5QM4aGimfd1r3QAAAABJRU5ErkJggg==';
 const UPDATE_CHECK_DELAY_MS = 15 * 1000;
+const DESKTOP_TITLE_BAR_HEIGHT = 42;
 
 function resolveResourcePath(...segments) {
   if (app.isPackaged) {
@@ -497,12 +498,25 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     title: 'Todo',
     autoHideMenuBar: !isMac,
+    backgroundColor: '#fbfaf7',
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
     show: false,
     icon: isMac ? undefined : getIconPath(),
+    ...(isMac ? {
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 16, y: 14 },
+    } : {}),
+    ...(isWindows ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: {
+        color: '#fbfaf7',
+        symbolColor: '#3d3935',
+        height: DESKTOP_TITLE_BAR_HEIGHT,
+      },
+    } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

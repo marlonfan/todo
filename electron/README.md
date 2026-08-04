@@ -5,6 +5,7 @@ Electron desktop shell for the Todo app.
 ## What It Covers
 
 - Desktop window: `1280x800`, minimum `900x600`, title `Todo`.
+- Integrated title bar: macOS uses inset traffic lights and Windows uses Window Controls Overlay, while the app surface provides the draggable area.
 - macOS tray menu with `显示 Todo` and `退出`.
 - macOS close-to-hide behavior.
 - System notifications through an Electron IPC bridge.

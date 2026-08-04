@@ -32,6 +32,13 @@ function ensureMobileViewport() {
 (async () => {
   const isDesktopRuntime = Boolean(window.todoElectron);
   const shouldUseServiceWorker = 'serviceWorker' in navigator && !isDesktopRuntime && !import.meta.env.DEV;
+  if (isDesktopRuntime) {
+    const platform = String(window.todoElectron?.platform || '').trim();
+    document.documentElement.classList.add('todo-electron');
+    if (platform) {
+      document.documentElement.classList.add(`todo-platform-${platform}`);
+    }
+  }
   ensureMobileViewport();
   initInputModality();
 
@@ -99,6 +106,7 @@ function ensureMobileViewport() {
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <Router>
+          {isDesktopRuntime && <div className="desktop-window-drag-region" aria-hidden="true" />}
           <App />
         </Router>
       </QueryClientProvider>

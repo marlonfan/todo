@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  --desktop-titlebar-height: 0px;
   /* ===== 青瓷 Jade · 暖雾 Aurora：暖中性 + 毛玻璃 + 轻拟物（2026） ===== */
   /* surface — 暖雾画布 + 暖白卡片，玻璃浮岛质感，靠半透明与光斑分层 */
   --background: 40 30% 93%;          /* 暖雾背景 */
@@ -156,6 +157,44 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+/* Electron: extend the app surface into the native title-bar area. */
+.desktop-window-drag-region {
+  display: none;
+}
+
+html.todo-electron {
+  --desktop-titlebar-height: 42px;
+}
+
+html.todo-electron .desktop-window-drag-region {
+  -webkit-app-region: drag;
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 60;
+  display: block;
+  height: var(--desktop-titlebar-height);
+  background: linear-gradient(
+    90deg,
+    hsl(var(--sidebar) / 0.96) 0,
+    hsl(var(--sidebar) / 0.96) 280px,
+    hsl(var(--card) / 0.96) 280px,
+    hsl(var(--card) / 0.96) 100%
+  );
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  user-select: none;
+}
+
+@media (min-width: 768px) {
+  html.todo-electron .app-shell {
+    padding-top: var(--desktop-titlebar-height);
+  }
+
+  html.todo-electron .sync-conflict-toast {
+    top: calc(var(--desktop-titlebar-height) + 1rem);
+  }
 }
 
 * {
