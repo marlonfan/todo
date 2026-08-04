@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useLayoutEffect, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { authAPI, getToken, getTokenStore } from './api/client';
@@ -44,6 +44,11 @@ function App() {
   const { t } = useTranslation();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  useLayoutEffect(() => {
+    document.documentElement.classList.toggle('todo-authenticated-layout', Boolean(user));
+    return () => document.documentElement.classList.remove('todo-authenticated-layout');
+  }, [user]);
 
   useEffect(() => {
     tokenReady.then(() => {

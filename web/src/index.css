@@ -168,6 +168,17 @@ html.todo-electron {
   --desktop-titlebar-height: 42px;
 }
 
+html.todo-electron.todo-platform-win32 {
+  --desktop-window-controls-width: max(
+    0px,
+    calc(
+      100vw
+      - env(titlebar-area-x, 0px)
+      - env(titlebar-area-width, 100vw)
+    )
+  );
+}
+
 html.todo-electron .desktop-window-drag-region {
   -webkit-app-region: drag;
   position: fixed;
@@ -181,9 +192,52 @@ html.todo-electron .desktop-window-drag-region {
   user-select: none;
 }
 
+html.todo-electron.todo-authenticated-layout .desktop-window-drag-region {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--sidebar) / 0.96) 0,
+    hsl(var(--sidebar) / 0.96) 279px,
+    hsl(var(--border) / 0.5) 279px,
+    hsl(var(--border) / 0.5) 280px,
+    transparent 280px,
+    transparent 100%
+  );
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html.todo-electron.todo-authenticated-layout:has(:is(
+  [aria-modal="true"],
+  .modal-overlay,
+  .fixed.inset-0[class*="bg-black/"]
+)) .desktop-window-drag-region::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 280px;
+  background: rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+
 @media (min-width: 768px) {
   html.todo-electron .app-shell {
     padding-top: var(--desktop-titlebar-height);
+  }
+
+  html.todo-electron.todo-authenticated-layout .app-shell {
+    padding-top: 0;
+  }
+
+  html.todo-electron.todo-authenticated-layout .sidebar {
+    padding-top: var(--desktop-titlebar-height);
+  }
+
+  html.todo-electron.todo-platform-win32 .focus-bar {
+    padding-right: calc(1.5rem + var(--desktop-window-controls-width));
+  }
+
+  html.todo-electron .desktop-search-dialog-overlay {
+    padding-top: calc(5rem + var(--desktop-titlebar-height));
   }
 
   html.todo-electron .sync-conflict-toast {

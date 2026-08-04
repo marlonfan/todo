@@ -640,7 +640,7 @@ function MainLayout({ user, setUser }) {
     />
   ), [t]);
   const searchDialogFallback = (
-    <div className="fixed inset-0 z-[80] flex items-start justify-center bg-black/35 p-3 pt-14 md:p-4 md:pt-20">
+    <div className="desktop-search-dialog-overlay fixed inset-0 z-[80] flex items-start justify-center bg-black/35 p-3 pt-14 md:p-4 md:pt-20">
       <div className="w-full max-w-2xl rounded-lg border border-border bg-card shadow-xl" aria-hidden="true">
         <div className="border-b border-border px-3 py-2.5 md:px-4 md:py-3">
           <div className="h-4 w-24 animate-pulse rounded-full bg-muted" />

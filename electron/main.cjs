@@ -512,7 +512,7 @@ function createWindow() {
     ...(isWindows ? {
       titleBarStyle: 'hidden',
       titleBarOverlay: {
-        color: '#fbfaf7',
+        color: '#00000000',
         symbolColor: '#3d3935',
         height: DESKTOP_TITLE_BAR_HEIGHT,
       },
