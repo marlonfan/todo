@@ -131,6 +131,8 @@ func (r *Router) Setup() *gin.Engine {
 			protected.GET("/tasks/:id/activities", r.taskHandler.ListActivities)
 			protected.GET("/tasks/:id/notifications", r.taskHandler.ListNotifications)
 			protected.POST("/tasks/:id/notifications", r.taskHandler.CreateNotification)
+			protected.PATCH("/tasks/:id/notifications/:notificationId", r.taskHandler.UpdateNotification)
+			protected.DELETE("/tasks/:id/notifications/:notificationId", r.taskHandler.DeleteNotification)
 
 			// Categories
 			protected.GET("/categories", r.categoryHandler.List)

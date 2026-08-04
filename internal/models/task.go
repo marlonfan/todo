@@ -26,6 +26,14 @@ const (
 	PriorityHigh   Priority = 1
 )
 
+type TaskReminderPolicy string
+
+const (
+	TaskReminderInherit TaskReminderPolicy = "inherit"
+	TaskReminderNone    TaskReminderPolicy = "none"
+	TaskReminderOffset  TaskReminderPolicy = "offset"
+)
+
 // RecurrenceRule represents recurring task rule
 type RecurrenceRule struct {
 	Freq             string   `json:"freq,omitempty"`                // daily, weekly, monthly, yearly, lunar_yearly
@@ -60,29 +68,31 @@ func (r *RecurrenceRule) Scan(value interface{}) error {
 }
 
 type Task struct {
-	ID                int64           `json:"id" gorm:"primaryKey;autoIncrement;index:idx_tasks_user_updated_id,priority:3"`
-	UserID            int64           `json:"user_id" gorm:"index;not null;index:idx_tasks_user_updated_id,priority:1"`
-	ParentTaskID      *int64          `json:"parent_task_id,omitempty" gorm:"index"`
-	Title             string          `json:"title" gorm:"size:200;not null"`
-	Description       string          `json:"description" gorm:"type:text"`
-	Status            TaskStatus      `json:"status" gorm:"size:20;default:'pending'"`
-	Priority          Priority        `json:"priority" gorm:"default:0"`
-	StartTime         *time.Time      `json:"start_time"`
-	EndTime           *time.Time      `json:"end_time"`
-	DueDate           *time.Time      `json:"due_date"`
-	AllDay            bool            `json:"all_day" gorm:"default:false"`
-	Revision          int64           `json:"revision" gorm:"not null;default:1;index"`
-	RecurrenceRule    *RecurrenceRule `json:"recurrence_rule,omitempty" gorm:"type:text"`
-	RecurrenceEndDate *time.Time      `json:"recurrence_end_date"`
-	CompletedAt       *time.Time      `json:"completed_at"`
-	DeletedAt         *time.Time      `json:"deleted_at"`
-	CreatedAt         time.Time       `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt         time.Time       `json:"updated_at" gorm:"autoUpdateTime;index:idx_tasks_user_updated_id,priority:2"`
-	CalDAVUID         string          `json:"caldav_uid,omitempty" gorm:"size:255;index"`
-	CalDAVHref        string          `json:"caldav_href,omitempty" gorm:"size:255;index"`
-	ReadOnly          bool            `json:"read_only" gorm:"-"`
-	Source            string          `json:"source,omitempty" gorm:"-"`
-	ExternalRef       string          `json:"external_ref,omitempty" gorm:"-"`
+	ID                    int64              `json:"id" gorm:"primaryKey;autoIncrement;index:idx_tasks_user_updated_id,priority:3"`
+	UserID                int64              `json:"user_id" gorm:"index;not null;index:idx_tasks_user_updated_id,priority:1"`
+	ParentTaskID          *int64             `json:"parent_task_id,omitempty" gorm:"index"`
+	Title                 string             `json:"title" gorm:"size:200;not null"`
+	Description           string             `json:"description" gorm:"type:text"`
+	Status                TaskStatus         `json:"status" gorm:"size:20;default:'pending'"`
+	Priority              Priority           `json:"priority" gorm:"default:0"`
+	StartTime             *time.Time         `json:"start_time"`
+	EndTime               *time.Time         `json:"end_time"`
+	DueDate               *time.Time         `json:"due_date"`
+	AllDay                bool               `json:"all_day" gorm:"default:false"`
+	ReminderPolicy        TaskReminderPolicy `json:"reminder_policy" gorm:"size:20;not null;default:'inherit'"`
+	ReminderMinutesBefore *int               `json:"reminder_minutes_before,omitempty"`
+	Revision              int64              `json:"revision" gorm:"not null;default:1;index"`
+	RecurrenceRule        *RecurrenceRule    `json:"recurrence_rule,omitempty" gorm:"type:text"`
+	RecurrenceEndDate     *time.Time         `json:"recurrence_end_date"`
+	CompletedAt           *time.Time         `json:"completed_at"`
+	DeletedAt             *time.Time         `json:"deleted_at"`
+	CreatedAt             time.Time          `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt             time.Time          `json:"updated_at" gorm:"autoUpdateTime;index:idx_tasks_user_updated_id,priority:2"`
+	CalDAVUID             string             `json:"caldav_uid,omitempty" gorm:"size:255;index"`
+	CalDAVHref            string             `json:"caldav_href,omitempty" gorm:"size:255;index"`
+	ReadOnly              bool               `json:"read_only" gorm:"-"`
+	Source                string             `json:"source,omitempty" gorm:"-"`
+	ExternalRef           string             `json:"external_ref,omitempty" gorm:"-"`
 
 	// Relations
 	User       *User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
@@ -157,38 +167,42 @@ type TaskInstance struct {
 
 // API Request/Response types
 type CreateTaskRequest struct {
-	Title             string          `json:"title" binding:"required,max=200"`
-	Description       string          `json:"description"`
-	Priority          Priority        `json:"priority"`
-	StartTime         *time.Time      `json:"start_time"`
-	EndTime           *time.Time      `json:"end_time"`
-	StartTimeLocal    string          `json:"start_time_local"`
-	EndTimeLocal      string          `json:"end_time_local"`
-	ClientTimezone    string          `json:"client_timezone" binding:"omitempty,max=50"`
-	DueDate           *time.Time      `json:"due_date"`
-	AllDay            bool            `json:"all_day"`
-	RecurrenceRule    *RecurrenceRule `json:"recurrence_rule"`
-	RecurrenceEndDate *time.Time      `json:"recurrence_end_date"`
-	CategoryIDs       []int64         `json:"category_ids"`
+	Title                 string             `json:"title" binding:"required,max=200"`
+	Description           string             `json:"description"`
+	Priority              Priority           `json:"priority"`
+	StartTime             *time.Time         `json:"start_time"`
+	EndTime               *time.Time         `json:"end_time"`
+	StartTimeLocal        string             `json:"start_time_local"`
+	EndTimeLocal          string             `json:"end_time_local"`
+	ClientTimezone        string             `json:"client_timezone" binding:"omitempty,max=50"`
+	DueDate               *time.Time         `json:"due_date"`
+	AllDay                bool               `json:"all_day"`
+	ReminderPolicy        TaskReminderPolicy `json:"reminder_policy" binding:"omitempty,oneof=inherit none offset"`
+	ReminderMinutesBefore *int               `json:"reminder_minutes_before" binding:"omitempty,min=0,max=10080"`
+	RecurrenceRule        *RecurrenceRule    `json:"recurrence_rule"`
+	RecurrenceEndDate     *time.Time         `json:"recurrence_end_date"`
+	CategoryIDs           []int64            `json:"category_ids"`
 }
 
 type UpdateTaskRequest struct {
-	Title             string          `json:"title" binding:"omitempty,max=200"`
-	Description       string          `json:"description"`
-	Priority          *Priority       `json:"priority"`
-	Status            TaskStatus      `json:"status" binding:"omitempty,oneof=pending completed cancelled skipped"` // Fix 2: 添加 Status
-	InstanceID        string          `json:"instance_id"`
-	OccurrenceDate    string          `json:"occurrence_date"`
-	StartTime         *time.Time      `json:"start_time"`
-	EndTime           *time.Time      `json:"end_time"`
-	StartTimeLocal    string          `json:"start_time_local"`
-	EndTimeLocal      string          `json:"end_time_local"`
-	ClientTimezone    string          `json:"client_timezone" binding:"omitempty,max=50"`
-	DueDate           *time.Time      `json:"due_date"`
-	AllDay            *bool           `json:"all_day"`
-	RecurrenceRule    *RecurrenceRule `json:"recurrence_rule"`
-	RecurrenceEndDate *time.Time      `json:"recurrence_end_date"`
-	CategoryIDs       []int64         `json:"category_ids"`
+	Title                 string              `json:"title" binding:"omitempty,max=200"`
+	Description           string              `json:"description"`
+	Priority              *Priority           `json:"priority"`
+	Status                TaskStatus          `json:"status" binding:"omitempty,oneof=pending completed cancelled skipped"` // Fix 2: 添加 Status
+	InstanceID            string              `json:"instance_id"`
+	OccurrenceDate        string              `json:"occurrence_date"`
+	StartTime             *time.Time          `json:"start_time"`
+	EndTime               *time.Time          `json:"end_time"`
+	StartTimeLocal        string              `json:"start_time_local"`
+	EndTimeLocal          string              `json:"end_time_local"`
+	ClientTimezone        string              `json:"client_timezone" binding:"omitempty,max=50"`
+	DueDate               *time.Time          `json:"due_date"`
+	AllDay                *bool               `json:"all_day"`
+	ReminderPolicy        *TaskReminderPolicy `json:"reminder_policy" binding:"omitempty,oneof=inherit none offset"`
+	ReminderMinutesBefore *int                `json:"reminder_minutes_before" binding:"omitempty,min=0,max=10080"`
+	RecurrenceRule        *RecurrenceRule     `json:"recurrence_rule"`
+	RecurrenceEndDate     *time.Time          `json:"recurrence_end_date"`
+	CategoryIDs           []int64             `json:"category_ids"`
 }
 
 type UpdateTaskStatusRequest struct {

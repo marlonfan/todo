@@ -130,16 +130,6 @@ func (s *TaskService) withTaskTransaction(fn func(*TaskService) error) error {
 	})
 }
 
-func (s *TaskService) afterTaskWrite(userID int64, task *models.Task, operation string) {
-	if task == nil {
-		return
-	}
-	if err := s.syncTaskReminder(userID, task); err != nil {
-		log.Printf("Warning: failed to sync reminder after task %s for user %d task %d: %v", operation, userID, task.ID, err)
-	}
-	s.notifyTaskChanged(userID)
-}
-
 func (s *TaskService) SetCaldavService(caldavSvc *CaldavService) {
 	s.caldavSvc = caldavSvc
 }
@@ -161,17 +151,51 @@ func (s *TaskService) touchTaskForSync(task *models.Task) error {
 	return s.taskRepo.Update(task)
 }
 
+func normalizeTaskReminderPolicy(
+	policy models.TaskReminderPolicy,
+	minutes *int,
+	startTime *time.Time,
+) (models.TaskReminderPolicy, *int, error) {
+	if policy == "" {
+		policy = models.TaskReminderInherit
+	}
+	switch policy {
+	case models.TaskReminderInherit, models.TaskReminderNone:
+		if minutes != nil {
+			return "", nil, errors.New("reminder_minutes_before requires reminder_policy offset")
+		}
+		return policy, nil, nil
+	case models.TaskReminderOffset:
+		if startTime == nil {
+			return "", nil, errors.New("start_time is required for reminder_policy offset")
+		}
+		if minutes == nil {
+			return "", nil, errors.New("reminder_minutes_before is required for reminder_policy offset")
+		}
+		if *minutes < 0 || *minutes > 10080 {
+			return "", nil, errors.New("reminder_minutes_before must be between 0 and 10080")
+		}
+		value := *minutes
+		return policy, &value, nil
+	default:
+		return "", nil, errors.New("invalid reminder_policy")
+	}
+}
+
 func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*models.Task, error) {
 	var task *models.Task
 	err := s.withTaskTransaction(func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.createInTransaction(userID, req)
-		return err
+		if err != nil {
+			return err
+		}
+		return scoped.syncTaskReminder(userID, task)
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.afterTaskWrite(userID, task, "create")
+	s.notifyTaskChanged(userID)
 	return task, nil
 }
 
@@ -186,6 +210,14 @@ func (s *TaskService) createInTransaction(userID int64, req *models.CreateTaskRe
 	if err := validateTaskTimeRange(req.StartTime, req.EndTime); err != nil {
 		return nil, err
 	}
+	reminderPolicy, reminderMinutes, err := normalizeTaskReminderPolicy(
+		req.ReminderPolicy,
+		req.ReminderMinutesBefore,
+		req.StartTime,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	// Validate categories
 	if len(req.CategoryIDs) > 0 {
@@ -198,17 +230,19 @@ func (s *TaskService) createInTransaction(userID int64, req *models.CreateTaskRe
 	}
 
 	task := &models.Task{
-		UserID:            userID,
-		Title:             req.Title,
-		Description:       req.Description,
-		Priority:          req.Priority,
-		StartTime:         req.StartTime,
-		EndTime:           req.EndTime,
-		DueDate:           req.DueDate,
-		AllDay:            req.AllDay,
-		Revision:          1,
-		RecurrenceRule:    normalizedRule,
-		RecurrenceEndDate: req.RecurrenceEndDate,
+		UserID:                userID,
+		Title:                 req.Title,
+		Description:           req.Description,
+		Priority:              req.Priority,
+		StartTime:             req.StartTime,
+		EndTime:               req.EndTime,
+		DueDate:               req.DueDate,
+		AllDay:                req.AllDay,
+		ReminderPolicy:        reminderPolicy,
+		ReminderMinutesBefore: reminderMinutes,
+		Revision:              1,
+		RecurrenceRule:        normalizedRule,
+		RecurrenceEndDate:     req.RecurrenceEndDate,
 	}
 
 	if err := s.taskRepo.Create(task); err != nil {
@@ -487,12 +521,15 @@ func (s *TaskService) Update(
 	err := s.withTaskTransaction(func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.updateInTransaction(userID, taskID, req, fieldMask, expectedRevision, activityMeta)
-		return err
+		if err != nil {
+			return err
+		}
+		return scoped.syncTaskReminder(userID, task)
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.afterTaskWrite(userID, task, "update")
+	s.notifyTaskChanged(userID)
 	return task, nil
 }
 
@@ -599,6 +636,39 @@ func (s *TaskService) updateInTransaction(
 	if fieldMask["all_day"] && req.AllDay != nil {
 		if task.AllDay != *req.AllDay {
 			task.AllDay = *req.AllDay
+			baseChanged = true
+		}
+	}
+	if fieldMask["reminder_policy"] || fieldMask["reminder_minutes_before"] {
+		candidatePolicy := task.ReminderPolicy
+		candidateMinutes := task.ReminderMinutesBefore
+		if fieldMask["reminder_policy"] {
+			if req.ReminderPolicy == nil {
+				return nil, errors.New("reminder_policy cannot be null")
+			}
+			candidatePolicy = *req.ReminderPolicy
+			if candidatePolicy != models.TaskReminderOffset && !fieldMask["reminder_minutes_before"] {
+				candidateMinutes = nil
+			}
+		}
+		if fieldMask["reminder_minutes_before"] {
+			candidateMinutes = req.ReminderMinutesBefore
+		}
+		normalizedPolicy, normalizedMinutes, err := normalizeTaskReminderPolicy(
+			candidatePolicy,
+			candidateMinutes,
+			task.StartTime,
+		)
+		if err != nil {
+			return nil, err
+		}
+		minutesChanged := (task.ReminderMinutesBefore == nil) != (normalizedMinutes == nil)
+		if task.ReminderMinutesBefore != nil && normalizedMinutes != nil && *task.ReminderMinutesBefore != *normalizedMinutes {
+			minutesChanged = true
+		}
+		if task.ReminderPolicy != normalizedPolicy || minutesChanged {
+			task.ReminderPolicy = normalizedPolicy
+			task.ReminderMinutesBefore = normalizedMinutes
 			baseChanged = true
 		}
 	}
@@ -735,12 +805,15 @@ func (s *TaskService) UpdateStatus(
 	err := s.withTaskTransaction(func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.updateStatusInTransaction(userID, taskID, status, instanceID, occurrenceDate, expectedRevision, activityMeta)
-		return err
+		if err != nil {
+			return err
+		}
+		return scoped.syncTaskReminder(userID, task)
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.afterTaskWrite(userID, task, "status update")
+	s.notifyTaskChanged(userID)
 	return task, nil
 }
 
@@ -876,12 +949,15 @@ func (s *TaskService) UpdateSchedule(
 	err := s.withTaskTransaction(func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.updateScheduleInTransaction(userID, taskID, req, expectedRevision, activityMeta)
-		return err
+		if err != nil {
+			return err
+		}
+		return scoped.syncTaskReminder(userID, task)
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.afterTaskWrite(userID, task, "schedule update")
+	s.notifyTaskChanged(userID)
 	return task, nil
 }
 
@@ -1022,20 +1098,29 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	if err != nil {
 		return err
 	}
-	if !user.DefaultReminderEnabled {
+	if task.ReminderPolicy == models.TaskReminderNone {
+		return nil
+	}
+	explicitReminder := task.ReminderPolicy == models.TaskReminderOffset
+	if !explicitReminder && !user.DefaultReminderEnabled {
 		return nil
 	}
 
 	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, gorm.ErrRecordNotFound) && !explicitReminder {
 			return nil
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("no default notification setting for explicit reminder")
 		}
 		return err
 	}
 
 	minutes := user.DefaultReminderMinutes
-	if minutes <= 0 {
+	if explicitReminder && task.ReminderMinutesBefore != nil {
+		minutes = *task.ReminderMinutesBefore
+	} else if minutes <= 0 {
 		minutes = 5
 	}
 
@@ -1047,6 +1132,9 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	)
 	notifyAt := resolvedStart.Add(-time.Duration(minutes) * time.Minute)
 	if !notifyAt.After(now) {
+		if explicitReminder {
+			return errors.New("explicit reminder time must be in the future")
+		}
 		return nil
 	}
 
@@ -1126,17 +1214,19 @@ func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, tas
 }
 
 type taskActivitySnapshot struct {
-	Title             string
-	Description       string
-	Priority          models.Priority
-	Status            models.TaskStatus
-	StartTime         *time.Time
-	EndTime           *time.Time
-	DueDate           *time.Time
-	AllDay            bool
-	CategoryIDs       []int64
-	RecurrenceRule    *models.RecurrenceRule
-	RecurrenceEndDate *time.Time
+	Title                 string
+	Description           string
+	Priority              models.Priority
+	Status                models.TaskStatus
+	StartTime             *time.Time
+	EndTime               *time.Time
+	DueDate               *time.Time
+	AllDay                bool
+	ReminderPolicy        models.TaskReminderPolicy
+	ReminderMinutesBefore *int
+	CategoryIDs           []int64
+	RecurrenceRule        *models.RecurrenceRule
+	RecurrenceEndDate     *time.Time
 }
 
 func snapshotTaskForActivity(task *models.Task) taskActivitySnapshot {
@@ -1144,18 +1234,28 @@ func snapshotTaskForActivity(task *models.Task) taskActivitySnapshot {
 		return taskActivitySnapshot{}
 	}
 	return taskActivitySnapshot{
-		Title:             task.Title,
-		Description:       task.Description,
-		Priority:          task.Priority,
-		Status:            task.Status,
-		StartTime:         cloneTimePointer(task.StartTime),
-		EndTime:           cloneTimePointer(task.EndTime),
-		DueDate:           cloneTimePointer(task.DueDate),
-		AllDay:            task.AllDay,
-		CategoryIDs:       normalizeCategoryIDs(task.Categories),
-		RecurrenceRule:    cloneRecurrenceRule(task.RecurrenceRule),
-		RecurrenceEndDate: cloneTimePointer(task.RecurrenceEndDate),
+		Title:                 task.Title,
+		Description:           task.Description,
+		Priority:              task.Priority,
+		Status:                task.Status,
+		StartTime:             cloneTimePointer(task.StartTime),
+		EndTime:               cloneTimePointer(task.EndTime),
+		DueDate:               cloneTimePointer(task.DueDate),
+		AllDay:                task.AllDay,
+		ReminderPolicy:        task.ReminderPolicy,
+		ReminderMinutesBefore: cloneIntPointer(task.ReminderMinutesBefore),
+		CategoryIDs:           normalizeCategoryIDs(task.Categories),
+		RecurrenceRule:        cloneRecurrenceRule(task.RecurrenceRule),
+		RecurrenceEndDate:     cloneTimePointer(task.RecurrenceEndDate),
 	}
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	next := *value
+	return &next
 }
 
 func cloneTimePointer(value *time.Time) *time.Time {
@@ -1268,6 +1368,8 @@ func buildTaskActivityChanges(before, after taskActivitySnapshot) models.TaskAct
 	appendActivityFieldChange(changes, "end_time", normalizeActivityTime(before.EndTime), normalizeActivityTime(after.EndTime))
 	appendActivityFieldChange(changes, "due_date", normalizeActivityTime(before.DueDate), normalizeActivityTime(after.DueDate))
 	appendActivityFieldChange(changes, "all_day", before.AllDay, after.AllDay)
+	appendActivityFieldChange(changes, "reminder_policy", before.ReminderPolicy, after.ReminderPolicy)
+	appendActivityFieldChange(changes, "reminder_minutes_before", before.ReminderMinutesBefore, after.ReminderMinutesBefore)
 	appendActivityFieldChange(changes, "category_ids", before.CategoryIDs, after.CategoryIDs)
 	appendActivityFieldChange(
 		changes,

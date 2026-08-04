@@ -19,9 +19,22 @@ func (r *NotificationRepository) Create(notification *models.Notification) error
 	return r.db.Create(notification).Error
 }
 
+func (r *NotificationRepository) Update(notification *models.Notification) error {
+	return r.db.Save(notification).Error
+}
+
 func (r *NotificationRepository) GetByID(id int64) (*models.Notification, error) {
 	var notification models.Notification
 	err := r.db.First(&notification, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &notification, nil
+}
+
+func (r *NotificationRepository) GetByTaskAndClientOpID(taskID int64, clientOpID string) (*models.Notification, error) {
+	var notification models.Notification
+	err := r.db.Where("task_id = ? AND client_op_id = ?", taskID, clientOpID).First(&notification).Error
 	if err != nil {
 		return nil, err
 	}

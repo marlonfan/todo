@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 	"todo-app/internal/models"
 	"todo-app/internal/notify"
@@ -84,16 +85,33 @@ func (s *NotifyService) resolveDeliveryTarget(n *models.Notification, userID int
 	return n.Channel, cloneNotifyConfig(n.Config), nil
 }
 
-func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.CreateNotificationRequest) (*models.Notification, error) {
+func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.CreateNotificationRequest, clientOpID string) (*models.Notification, bool, error) {
+	clientOpID = strings.TrimSpace(clientOpID)
+	if len(clientOpID) > 128 {
+		clientOpID = clientOpID[:128]
+	}
+	if clientOpID != "" {
+		existing, err := s.notifyRepo.GetByTaskAndClientOpID(taskID, clientOpID)
+		if err == nil {
+			return existing, true, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, err
+		}
+	}
+	if !req.NotifyAt.UTC().After(time.Now().UTC()) {
+		return nil, false, errors.New("notify_at must be in the future")
+	}
+
 	channel := req.Channel
 	config := req.Config
 	if channel == "" {
 		setting, err := s.notifyRepo.GetDefaultSetting(userID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, errors.New("no default notification setting")
+				return nil, false, errors.New("no default notification setting")
 			}
-			return nil, err
+			return nil, false, err
 		}
 		channel = setting.Channel
 		config = setting.Config
@@ -101,10 +119,10 @@ func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.Cre
 
 	notifier, ok := s.registry.Get(string(channel))
 	if !ok {
-		return nil, errors.New("unsupported notification channel")
+		return nil, false, errors.New("unsupported notification channel")
 	}
 	if err := notifier.ValidateConfig(config); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	notification := &models.Notification{
@@ -120,13 +138,21 @@ func (s *NotifyService) CreateNotification(userID, taskID int64, req *models.Cre
 		LastAttemptAt: nil,
 		Status:        models.NotifyStatusPending,
 	}
-
-	// Keep only one active reminder per task to avoid duplicates when users edit repeatedly.
-	if err := s.notifyRepo.ReplaceActiveByTaskSource(notification); err != nil {
-		return nil, err
+	if clientOpID != "" {
+		notification.ClientOpID = &clientOpID
 	}
 
-	return notification, nil
+	if err := s.notifyRepo.Create(notification); err != nil {
+		if clientOpID != "" {
+			existing, getErr := s.notifyRepo.GetByTaskAndClientOpID(taskID, clientOpID)
+			if getErr == nil {
+				return existing, true, nil
+			}
+		}
+		return nil, false, err
+	}
+
+	return notification, false, nil
 }
 
 func (s *NotifyService) GetUserSettings(userID int64) ([]models.UserNotifySetting, error) {
@@ -416,6 +442,57 @@ func (s *NotifyService) ListChannels() []string {
 // GetTaskNotifications 获取任务的通知列表
 func (s *NotifyService) GetTaskNotifications(taskID int64) ([]models.Notification, error) {
 	return s.notifyRepo.GetByTask(taskID)
+}
+
+func (s *NotifyService) UpdateNotification(
+	userID,
+	taskID,
+	notificationID int64,
+	req *models.UpdateNotificationRequest,
+) (*models.Notification, error) {
+	if _, err := s.taskRepo.GetByIDAndUser(taskID, userID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("task not found")
+		}
+		return nil, err
+	}
+	notification, err := s.notifyRepo.GetByID(notificationID)
+	if err != nil || notification.TaskID != taskID {
+		return nil, errors.New("notification not found")
+	}
+	if notification.Source != models.NotificationSourceManual {
+		return nil, errors.New("automatic reminders must be changed through task reminder policy")
+	}
+	notifyAt := req.NotifyAt.UTC()
+	if !notifyAt.After(time.Now().UTC()) {
+		return nil, errors.New("notify_at must be in the future")
+	}
+	notification.NotifyAt = notifyAt
+	notification.NextRetryAt = &notifyAt
+	notification.DedupeKey = buildDedupeKey(taskID, models.NotificationSourceManual, notifyAt)
+	notification.Status = models.NotifyStatusPending
+	notification.RetryCount = 0
+	notification.LastAttemptAt = nil
+	notification.SentAt = nil
+	notification.ErrorMsg = ""
+	if err := s.notifyRepo.Update(notification); err != nil {
+		return nil, err
+	}
+	return notification, nil
+}
+
+func (s *NotifyService) DeleteTaskNotification(userID, taskID, notificationID int64) error {
+	if _, err := s.taskRepo.GetByIDAndUser(taskID, userID); err != nil {
+		return errors.New("task not found")
+	}
+	notification, err := s.notifyRepo.GetByID(notificationID)
+	if err != nil || notification.TaskID != taskID {
+		return errors.New("notification not found")
+	}
+	if notification.Source != models.NotificationSourceManual {
+		return errors.New("automatic reminders must be changed through task reminder policy")
+	}
+	return s.notifyRepo.Delete(notificationID)
 }
 
 // DeleteNotification 删除通知

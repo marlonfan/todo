@@ -27,7 +27,7 @@ func (h *NotifyHandler) GetSettings(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, settings)
+	c.JSON(http.StatusOK, models.NotifySettingResponses(settings))
 }
 
 func (h *NotifyHandler) CreateSetting(c *gin.Context) {
@@ -45,7 +45,7 @@ func (h *NotifyHandler) CreateSetting(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, setting)
+	c.JSON(http.StatusCreated, setting.ToResponse())
 }
 
 func (h *NotifyHandler) DeleteSetting(c *gin.Context) {

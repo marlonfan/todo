@@ -1,6 +1,11 @@
 ---
 name: todo-cli
-description: Use the Todo app CLI to manage tasks, categories, calendar events, and auth from AI tools. Prefer this skill whenever the user asks to create, list, update, complete, cancel, delete, search, or inspect Todo app data through the local project.
+description: "Todo 待办与提醒：通过已安装的 todo-cli 创建、查看、更新、完成、取消和删除任务，设置一次或重复提醒，管理分类与日历。当用户说‘提醒我’‘创建待办’‘记个任务’‘今天有什么任务’，或提到 Todo CLI、Todo、task、reminder 时使用。若用户已明确把 Todo 配置为默认提醒系统，优先使用本 Skill；用户明确指定其他系统时遵从其选择。"
+metadata:
+  version: "0.2.0"
+  requires:
+    bins: ["todo-cli"]
+  cliHelp: "todo-cli --help;todo-cli task --help;todo-cli notify --help;todo-cli skill doctor"
 ---
 
 # Todo CLI Skill
@@ -65,6 +70,14 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 
 ## Operating Rules
 
+- **Visible-time invariant:** whenever the user supplies a task/reminder time, the created task must have a visible `start_time`. Never send `end_time` or `--end-time-local` by itself: an end-only task can disappear from time-based views or be cleared by a later client save. Never simulate a timed reminder with an unscheduled task plus a hidden notification, and never shift the task time to compensate for a reminder offset.
+- When the user gives only an exact deadline such as “今天 19:00 前完成”, preserve the existing `start_time` when updating a task. For a new task, use the current account-local time as `start_time` and the requested deadline as `end_time`, and send both in the same create call. If the deadline is already past, ask for or choose an explicitly stated future deadline instead of creating an invalid range. Use `due_date` only for a date-only deadline with no clock time.
+- After every create or update that changes task timing, run `task detail ID` and verify that `start_time` is non-null and `end_time` matches the requested deadline when one was supplied. Do not report success while `end_time` exists without `start_time`, or while either requested field was cleared; repair the task with one `task schedule` call containing both times, then verify again.
+- Interpret “20:37 提醒我打熊” as a task starting at 20:37 with `--remind-at-start`. Interpret “安排我 20:37 打熊” as a task at 20:37 inheriting the user's default reminder. Use `--reminder-policy offset --reminder-minutes-before N` only when the user asks for an offset, and `--reminder-policy none` only when the user asks for no notification.
+- Relative or ambiguous wall times use the Todo account timezone from `auth me`. Choose the nearest reasonable future time when cues such as “一会”“今晚”“明早” make it unambiguous; state explicitly when the chosen date crosses midnight. Do not silently create a past reminder.
+- Generate one stable `--client-op-id` for each user intent and reuse it for retries. Do not generate a new operation ID merely because a response was lost.
+- After creating a timed reminder, verify the returned `start_time` and `reminder_summary`; use `task detail ID` and `task notifications ID` when additional confirmation is needed. Report the visible task time and actual notification time.
+- CLI output is agent-safe by default. Never request, reproduce, log, or store notification credentials, tokens, chat IDs, webhook URLs, cookies, passwords, or avatar Data URLs.
 - Define `todo_cli() { ... }` from Command Setup before running Todo commands in a new shell session.
 - Put resource/action before flags when possible: use `todo_cli task create --base-url URL --title "Task"`, not `todo_cli --base-url URL task create --title "Task"`.
 - If `todo-cli` is not found, do not switch to unrelated task systems such as Feishu/Lark tasks and do not run the npm package through `npx`. Ask the user to install or update the Todo CLI.
@@ -96,8 +109,21 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 
 ```bash
 todo_cli doctor
+todo_cli --version
+todo_cli skill doctor
 todo_cli init --base-url https://your-todo-server.example.com
 ```
+
+If the binary exists but the current agent cannot discover this Skill, inspect or explicitly install the bundled version, then start a new agent session:
+
+```bash
+todo_cli skill path
+todo_cli skill install --target minis
+todo_cli skill install --target minis --force
+todo_cli skill doctor --target minis
+```
+
+Installation refuses to replace an existing target by default. Use `--force` only for an intentional upgrade; the CLI moves the old target to a timestamped `todo-cli.backup-*` path before creating the new symlink.
 
 ### Auth
 
@@ -146,6 +172,19 @@ todo_cli task create \
   --timezone Asia/Shanghai
 ```
 
+For a new task that only specifies a 19:00 deadline, set the current account-local time as its visible start and send both fields together:
+
+```bash
+todo_cli task create \
+  --title "Token 板块跟进" \
+  --start-time-local "2026-05-11T15:00:00" \
+  --end-time-local "2026-05-11T19:00:00" \
+  --timezone Asia/Shanghai \
+  --client-op-id STABLE_UUID
+```
+
+Then run `todo_cli task detail ID`; require a non-null `start_time` and the requested `end_time` before telling the user the task is scheduled.
+
 For a workday recurring task at 20:30:
 
 ```bash
@@ -180,21 +219,35 @@ Useful flags:
 ```bash
 todo_cli auth me
 todo_cli notify settings
-todo_cli task notifications TASK_ID
-todo_cli task remind TASK_ID --notify-at "2026-05-11T20:30:00+08:00"
+todo_cli task create \
+  --title "打熊" \
+  --start-time-local "2026-08-04T20:37:00" \
+  --timezone Asia/Shanghai \
+  --remind-at-start \
+  --client-op-id STABLE_UUID
 ```
 
-Automatic reminders:
+Reminder policies:
 
-- `auth me` returns `default_reminder_enabled` and `default_reminder_minutes`.
-- `notify settings` returns delivery channels; one setting must be `is_default: true`.
-- When both are configured, creating or updating a scheduled task generates one `default_auto` reminder, usually `default_reminder_minutes` before the task start.
-- Always verify with `task notifications TASK_ID` after creating a reminder-bearing task.
+- Omit reminder flags to inherit the user's default reminder settings.
+- `--remind-at-start` is shorthand for `--reminder-policy offset --reminder-minutes-before 0`; it preserves the visible task time and creates exactly one automatic reminder at that time.
+- Use `--reminder-policy offset --reminder-minutes-before 5` for “提前 5 分钟提醒”.
+- Use `--reminder-policy none` for a scheduled task with no automatic reminder.
+- Explicit reminder creation is atomic: if no default delivery setting exists or the reminder cannot be scheduled, task creation fails instead of silently creating an unnotified task.
+- The create response includes `reminder_summary`. Verify it rather than inferring delivery from the task alone.
 
-Manual reminders:
+Additional manual reminders:
 
-- Use `task remind TASK_ID --notify-at RFC3339` when the user asks for an exact notification time, when default reminders are disabled, or when no default notify setting exists.
-- If the user says "晚上 8:30 提醒我复盘", interpret 20:30 as the task time. If they explicitly want the notification exactly at 20:30, add a manual reminder at `20:30`.
+- Use `task remind TASK_ID --notify-at RFC3339 --client-op-id STABLE_UUID` only for an additional reminder on an existing task.
+- Multiple manual reminder times are supported. Reusing the same client operation ID safely returns the original reminder.
+- Change or remove one manual reminder without deleting the task:
+
+```bash
+todo_cli task reminder-update TASK_ID REMINDER_ID --notify-at RFC3339 --client-op-id STABLE_UUID
+todo_cli task reminder-delete TASK_ID REMINDER_ID --yes --client-op-id STABLE_UUID
+```
+
+- Automatic reminders must be changed through the task's reminder policy, not by deleting their notification rows directly.
 
 Notification settings:
 

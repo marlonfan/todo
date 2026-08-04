@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
+const CLI_VERSION = '0.2.0';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
 const DEFAULT_TIMEOUT_MS = 30000;
-const NO_VALUE_FLAGS = new Set(['dry-run', 'help', 'h', 'yes']);
+const BUNDLED_SKILL_PATH = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'todo-cli', 'SKILL.md');
+const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes', 'remind-at-start', 'notify-at-start']);
 
 class CliError extends Error {
   constructor(message, code = 1) {
@@ -302,6 +305,20 @@ async function buildTaskPayload(flags, { partial = false } = {}) {
   const allDay = optionalBool(flags, ['all-day']);
   if (allDay !== undefined) payload.all_day = allDay;
 
+  const reminderPolicy = optionalString(flags, ['reminder-policy']);
+  if (reminderPolicy !== undefined) payload.reminder_policy = reminderPolicy;
+
+  const reminderMinutesBefore = optionalNumber(flags, ['reminder-minutes-before', 'remind-before']);
+  if (reminderMinutesBefore !== undefined) payload.reminder_minutes_before = reminderMinutesBefore;
+
+  if (flagEnabled(flags, ['remind-at-start', 'notify-at-start'])) {
+    if (reminderPolicy !== undefined || reminderMinutesBefore !== undefined) {
+      throw new CliError('use --remind-at-start or explicit reminder policy flags, not both');
+    }
+    payload.reminder_policy = 'offset';
+    payload.reminder_minutes_before = 0;
+  }
+
   const categoryIDs = parseIDList(firstFlag(flags, ['category-ids', 'categories']));
   if (categoryIDs !== undefined) payload.category_ids = categoryIDs;
 
@@ -534,6 +551,29 @@ function truncate(value, width) {
   return `${text.slice(0, Math.max(0, width - 1))}…`;
 }
 
+const SENSITIVE_OUTPUT_KEY = /^(?:config|token|access_token|refresh_token|bot_token|password|secret|app_secret|api_key|apikey|authorization|cookie|webhook_url|chat_id)$/i;
+
+function sanitizeOutput(value, key = '') {
+  if (SENSITIVE_OUTPUT_KEY.test(key)) return '<redacted>';
+  if (typeof value === 'string' && /^data:image\//i.test(value.trim())) return '<redacted>';
+  if (Array.isArray(value)) return value.map((item) => sanitizeOutput(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, childValue]) => [childKey, sanitizeOutput(childValue, childKey)]),
+    );
+  }
+  return value;
+}
+
+function sanitizeErrorText(value) {
+  return String(value)
+    .replace(/data:image\/[^\s"'\\]+/gi, '<redacted>')
+    .replace(
+      /(["']?(?:config|token|access_token|refresh_token|bot_token|password|secret|app_secret|api_key|apikey|authorization|cookie|webhook_url|chat_id)["']?\s*[:=]\s*)(?:["'][^"']*["']|[^\s,}]+)/gi,
+      '$1<redacted>',
+    );
+}
+
 function printTable(rows) {
   if (!Array.isArray(rows)) {
     console.log(JSON.stringify(rows, null, 2));
@@ -559,16 +599,18 @@ function printResult(result, flags = {}) {
     process.stdout.write(result);
     return;
   }
+
+  const safeResult = sanitizeOutput(result);
   if (format === 'ndjson') {
-    const rows = Array.isArray(result) ? result : [result];
+    const rows = Array.isArray(safeResult) ? safeResult : [safeResult];
     for (const row of rows) console.log(JSON.stringify(row));
     return;
   }
   if (format === 'table') {
-    printTable(result);
+    printTable(safeResult);
     return;
   }
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(safeResult, null, 2));
 }
 
 async function makeContext(flags) {
@@ -749,6 +791,7 @@ async function handleAuth(ctx, args) {
 async function handleTask(ctx, args) {
   const action = args[0] || 'list';
   const id = args[1];
+  const notificationID = args[2];
 
   if (action === 'list') {
     const query = buildQuery(ctx.flags, {
@@ -880,6 +923,24 @@ async function handleTask(ctx, args) {
   if (action === 'notifications') {
     if (!id) throw new CliError('missing task id');
     return apiRequest(ctx, 'GET', `/tasks/${id}/notifications`);
+  }
+  if (action === 'reminder-update') {
+    if (!id) throw new CliError('missing task id');
+    if (!notificationID) throw new CliError('missing notification id');
+    return apiRequest(ctx, 'PATCH', `/tasks/${id}/notifications/${notificationID}`, {
+      data: { notify_at: requireValue(ctx.flags, ['notify-at'], 'notify-at') },
+      headers: buildMutationHeaders(ctx.flags, 'cli.task.reminder-update'),
+    });
+  }
+  if (action === 'reminder-delete') {
+    if (!id) throw new CliError('missing task id');
+    if (!notificationID) throw new CliError('missing notification id');
+    if (!flagEnabled(ctx.flags, ['yes']) && !flagEnabled(ctx.flags, ['dry-run'])) {
+      throw new CliError('reminder-delete requires --yes');
+    }
+    return apiRequest(ctx, 'DELETE', `/tasks/${id}/notifications/${notificationID}`, {
+      headers: buildMutationHeaders(ctx.flags, 'cli.task.reminder-delete'),
+    });
   }
   if (['next-occurrences', 'next-instances'].includes(action)) {
     const items = await apiRequest(ctx, 'GET', '/tasks/next-occurrences', {
@@ -1079,6 +1140,83 @@ async function handleDoctor(ctx) {
   return report;
 }
 
+function resolveSkillTargetDir(flags) {
+  const explicit = optionalString(flags, ['target-dir']);
+  if (explicit !== undefined) return explicit;
+  const target = optionalString(flags, ['target']);
+  if (!target) return undefined;
+  if (target === 'minis') return '/var/minis/skills';
+  if (target === 'codex') return join(homedir(), '.codex', 'skills');
+  if (target === 'claude') return join(homedir(), '.claude', 'skills');
+  throw new CliError('invalid --target: expected minis, codex, or claude');
+}
+
+async function pathExists(path) {
+  try {
+    await lstat(path);
+    return true;
+  } catch (err) {
+    if (err?.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+async function bundledSkillVersion() {
+  const content = await readFile(BUNDLED_SKILL_PATH, 'utf8');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const match = frontmatter?.[1].match(/^(?:version| {2}version):\s*["']?([^\s"']+)/m);
+  return match?.[1] || null;
+}
+
+async function handleSkill(ctx, args) {
+  const action = args[0] || 'doctor';
+  const skillVersion = await bundledSkillVersion();
+  const targetDir = resolveSkillTargetDir(ctx.flags);
+  const targetPath = targetDir ? join(targetDir, 'todo-cli') : null;
+
+  if (action === 'path') {
+    return { path: BUNDLED_SKILL_PATH, version: skillVersion };
+  }
+  if (action === 'doctor') {
+    const targetReady = targetPath ? await pathExists(join(targetPath, 'SKILL.md')) : null;
+    return {
+      ok: Boolean(skillVersion) && skillVersion === CLI_VERSION && targetReady !== false,
+      cli_version: CLI_VERSION,
+      skill_version: skillVersion,
+      version_match: skillVersion === CLI_VERSION,
+      skill_path: BUNDLED_SKILL_PATH,
+      target_path: targetPath,
+      target_ready: targetReady,
+    };
+  }
+  if (action === 'install') {
+    if (!targetDir || !targetPath) {
+      throw new CliError('skill install requires --target minis|codex|claude or --target-dir PATH');
+    }
+    await mkdir(targetDir, { recursive: true });
+    let backup = null;
+    if (await pathExists(targetPath)) {
+      if (!ctx.flags.force) {
+        throw new CliError(`skill target already exists: ${targetPath}`);
+      }
+      backup = `${targetPath}.backup-${Date.now()}`;
+      await rename(targetPath, backup);
+    }
+    await symlink(dirname(BUNDLED_SKILL_PATH), targetPath, 'dir');
+    return {
+      ok: true,
+      installed: true,
+      cli_version: CLI_VERSION,
+      skill_version: skillVersion,
+      source: dirname(BUNDLED_SKILL_PATH),
+      target: targetPath,
+      backup,
+      new_session_required: true,
+    };
+  }
+  throw new CliError(`unknown skill action: ${action}`);
+}
+
 function help(topic = []) {
   const [resource, action] = topic;
   if (resource === 'task') return taskHelp(action);
@@ -1089,6 +1227,7 @@ function help(topic = []) {
   if (resource === 'config') return configHelp();
   if (resource === 'api') return apiHelp();
   if (resource === 'recurrence') return recurrenceHelp();
+  if (resource === 'skill' || resource === 'skills') return skillHelp();
 
   return `todo-cli - HTTP CLI for the Todo app
 
@@ -1096,6 +1235,7 @@ Usage:
   todo-cli [global options] <resource> <action> [args] [options]
 
 Global options:
+  --version            Print the CLI/Skill compatibility version
   --base-url URL       Server URL. Defaults to ${DEFAULT_BASE_URL} for local development.
   --token TOKEN        Auth token, or set TODO_TOKEN
   --config PATH        Config path, default ~/.todo-cli/config.json
@@ -1135,6 +1275,8 @@ Tasks:
   todo-cli task cancel <id>
   todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
   todo-cli task notifications <id>
+  todo-cli task reminder-update <task-id> <reminder-id> --notify-at 2026-05-11T20:25:00+08:00
+  todo-cli task reminder-delete <task-id> <reminder-id> --yes
   todo-cli task next-occurrences --task-id <id>
   todo-cli task delete <id> --yes
   todo-cli task +today --format table
@@ -1161,6 +1303,24 @@ Raw API:
   todo-cli api GET /tasks
   todo-cli api PATCH /tasks/1/status --data '{"status":"completed"}'
   todo-cli api PUT /tasks/42 --data-file ./payload.json
+`;
+}
+
+function skillHelp() {
+  return `todo-cli skill - inspect and install the bundled AI skill
+
+Examples:
+  todo-cli --version
+  todo-cli skill path
+  todo-cli skill doctor
+  todo-cli skill doctor --target minis
+  todo-cli skill install --target minis
+  todo-cli skill install --target minis --force
+  todo-cli skill install --target-dir /custom/skills
+
+Installation is explicit and creates a todo-cli directory symlink. Use --force to move an existing target
+to a timestamped backup before installing the symlink.
+Start a new agent session after installation so the host can refresh its skill index.
 `;
 }
 
@@ -1233,6 +1393,9 @@ Task fields:
   --timezone TZ                        Example: Asia/Shanghai
   --due-date YYYY-MM-DD
   --all-day=true|false
+  --remind-at-start                   Atomic reminder at the visible task start
+  --reminder-policy inherit|none|offset
+  --reminder-minutes-before N         Required for offset; 0 means at start
   --category-ids 1,2
   --recurrence-rule JSON               {"freq":"weekly","interval":1,"byday":["MO"]}
   --recurrence-end-date YYYY-MM-DD
@@ -1264,10 +1427,13 @@ Examples:
   todo-cli task notifications 42
   todo-cli task remind 42 --notify-at 2026-05-11T20:25:00+08:00
   todo-cli task remind 42 --notify-at 2026-05-11T20:25:00+08:00 --channel ntfy --config '{"topic":"todo"}'
+  todo-cli task reminder-update 42 9 --notify-at 2026-05-11T20:20:00+08:00
+  todo-cli task reminder-delete 42 9 --yes
 
 Notes:
   task notifications <id> lists reminders for a task.
   task remind <id> creates a manual reminder.
+  reminder-update and reminder-delete change one manual reminder without recreating the task.
   Without --channel/--config, the server uses the user's default notification setting.
 `;
   }
@@ -1447,6 +1613,10 @@ Use --start-time-local with --timezone for human wall-clock recurrence creation.
 
 async function dispatch() {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
+  if (flags.version) {
+    console.log(CLI_VERSION);
+    return;
+  }
   if (flags.help || flags.h || positionals.length === 0) {
     console.log(help(positionals));
     return;
@@ -1473,6 +1643,7 @@ async function dispatch() {
     cal: 'calendar',
     notifications: 'notify',
     notification: 'notify',
+    skills: 'skill',
   };
   resource = aliases[resource] || resource;
 
@@ -1487,6 +1658,7 @@ async function dispatch() {
   else if (resource === 'api') result = await handleRawAPI(ctx, args);
   else if (resource === 'health') result = await handleHealth(ctx);
   else if (resource === 'doctor') result = await handleDoctor(ctx);
+  else if (resource === 'skill') result = await handleSkill(ctx, args);
   else throw new CliError(`unknown resource: ${resource}`);
 
   printResult(result, flags);
@@ -1494,6 +1666,6 @@ async function dispatch() {
 
 dispatch().catch((err) => {
   const message = err instanceof CliError ? err.message : err?.stack || err?.message || String(err);
-  console.error(message);
+  console.error(sanitizeErrorText(message));
   process.exitCode = err instanceof CliError ? err.code : 1;
 });

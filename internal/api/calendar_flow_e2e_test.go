@@ -17,6 +17,7 @@ import (
 	"todo-app/internal/config"
 	"todo-app/internal/models"
 	"todo-app/internal/notify"
+	"todo-app/internal/notify/telegram"
 	"todo-app/internal/repository"
 	"todo-app/internal/service"
 	"todo-app/migrations"
@@ -57,7 +58,9 @@ func setupE2ERouterWithDB(t *testing.T) (*gin.Engine, *gorm.DB) {
 		Secret: "e2e-secret",
 		Expire: 24 * time.Hour,
 	})
-	notifySvc := service.NewNotifyService(notifyRepo, userRepo, taskRepo, notify.NewRegistry())
+	notifyRegistry := notify.NewRegistry()
+	notifyRegistry.Register(telegram.New())
+	notifySvc := service.NewNotifyService(notifyRepo, userRepo, taskRepo, notifyRegistry)
 	taskSvc := service.NewTaskService(taskRepo, taskActivityRepo, catRepo, userRepo, notifyRepo)
 	caldavSvc := service.NewCaldavService(caldavRepo, "e2e-secret")
 	taskSvc.SetCaldavService(caldavSvc)

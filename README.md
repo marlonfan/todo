@@ -2,6 +2,16 @@
 
 一个功能完善的 Todo 应用，支持日历视图、重复任务和插件式通知系统。
 
+## 让 AI 一键安装 Todo CLI
+
+把下面这句话直接发给 Codex、Claude Code 或其他支持联网和终端操作的 AI Agent：
+
+> 帮我安装 Todo CLI：https://raw.githubusercontent.com/marlonfan/todo/main/docs/TODO_CLI_INSTALLATION_GUIDE.md
+
+Agent 会按照指南安装 CLI 与 Todo Skill，并协助完成服务配置、登录和验证。安装期间账号密码应由用户在自己的终端输入，不要发送到聊天中。
+
+也可以直接查看：[Todo CLI 安装指南](docs/TODO_CLI_INSTALLATION_GUIDE.md)。
+
 ## 功能特性
 
 - ✅ **多用户支持**：JWT 认证，安全的多用户系统
@@ -94,6 +104,12 @@ docker run --rm -p 8080:8080 yourname/todo-app:latest
 ## CLI 与 AI Skill 安装
 
 Todo CLI 通过 npm 安装，AI 工具使用的 `todo-cli` skill 可以直接从 GitHub 用 `npx skills add` 安装。
+
+推荐直接把这条安装提示发给 AI Agent：
+
+> 帮我安装 Todo CLI：https://raw.githubusercontent.com/marlonfan/todo/main/docs/TODO_CLI_INSTALLATION_GUIDE.md
+
+完整步骤和故障处理参见 [Todo CLI 安装指南](docs/TODO_CLI_INSTALLATION_GUIDE.md)。
 
 安装 CLI：
 

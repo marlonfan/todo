@@ -59,6 +59,8 @@ Server URL precedence is:
 todo-cli init --base-url https://your-todo-server.example.com
 todo-cli init --base-url https://your-todo-server.example.com --username alice --password secret123
 todo-cli doctor
+todo-cli --version
+todo-cli skill doctor
 todo-cli config set --base-url https://your-todo-server.example.com
 todo-cli auth login --username alice --password secret123
 todo-cli config show
@@ -87,6 +89,17 @@ published version than the installed skill expects.
 ## Skill Installation
 
 Install the AI-facing skill directly with `skills`.
+
+The npm package also includes an explicit, version-checked installer for hosts that do not discover package skills automatically:
+
+```bash
+todo-cli skill path
+todo-cli skill install --target minis
+todo-cli skill install --target minis --force
+todo-cli skill doctor --target minis
+```
+
+Supported built-in targets are `minis`, `codex`, and `claude`; use `--target-dir PATH` for another host. Installation creates a symlink and refuses to overwrite an existing target by default. Pass `--force` to move the old target to a timestamped `todo-cli.backup-*` path before installing. The new Skill takes effect in a new agent session.
 
 If the GitHub repository is public:
 
@@ -170,6 +183,8 @@ todo-cli task cancel 42
 todo-cli task schedule 42 --start-time-local "2026-05-11T09:00:00" --timezone Asia/Shanghai
 todo-cli task remind 42 --notify-at "2026-05-11T20:25:00+08:00"
 todo-cli task notifications 42
+todo-cli task reminder-update 42 9 --notify-at "2026-05-11T20:20:00+08:00"
+todo-cli task reminder-delete 42 9 --yes
 todo-cli task next-occurrences --task-id 42
 todo-cli task delete 42 --yes
 ```
@@ -191,6 +206,9 @@ Useful task flags:
 - `--occurrence-date YYYY-MM-DD` for updating one recurring occurrence
 - `--if-match REVISION`
 - `--client-op-id ID`
+- `--remind-at-start`
+- `--reminder-policy inherit|none|offset`
+- `--reminder-minutes-before N`
 
 Workday recurrence example:
 
@@ -218,6 +236,19 @@ Use a manual reminder when you need an exact notification time:
 ```bash
 todo-cli task remind 42 --notify-at "2026-05-11T20:30:00+08:00"
 ```
+
+For “20:37 提醒我打熊”, keep 20:37 as the visible task time and request one atomic at-start reminder:
+
+```bash
+todo-cli task create \
+  --title "打熊" \
+  --start-time-local "2026-08-04T20:37:00" \
+  --timezone Asia/Shanghai \
+  --remind-at-start \
+  --client-op-id STABLE_UUID
+```
+
+Default JSON/table/NDJSON output recursively redacts credentials, channel configs, chat IDs, webhook URLs, tokens, passwords, cookies, and avatar Data URLs. Notification read APIs also return safe projections rather than stored delivery configs.
 
 For recurring tasks, `task get 42` reads the series task. If the UI detail was opened from a
 calendar/today occurrence, also verify that instance:

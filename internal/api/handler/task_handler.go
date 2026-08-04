@@ -162,6 +162,22 @@ func (h *TaskHandler) rememberMutation(userID int64, clientOpID string, taskID i
 	})
 }
 
+func (h *TaskHandler) respondTaskWithReminders(c *gin.Context, status int, task *models.Task) {
+	if task == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "task response is unavailable"})
+		return
+	}
+	notifications, err := h.notifyService.GetTaskNotifications(task.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(status, models.TaskWithReminderResponse{
+		Task:            *task,
+		ReminderSummary: models.NotificationResponses(notifications),
+	})
+}
+
 func (h *TaskHandler) Create(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	clientOpID := parseClientOpID(c)
@@ -173,7 +189,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 
 	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
-		c.JSON(http.StatusOK, replayTask)
+		h.respondTaskWithReminders(c, http.StatusOK, replayTask)
 		return
 	}
 
@@ -184,7 +200,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 	h.rememberMutation(userID, clientOpID, task.ID, "create")
 
-	c.JSON(http.StatusCreated, task)
+	h.respondTaskWithReminders(c, http.StatusCreated, task)
 }
 
 func (h *TaskHandler) Get(c *gin.Context) {
@@ -689,6 +705,7 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 
 func (h *TaskHandler) CreateNotification(c *gin.Context) {
 	userID := middleware.GetUserID(c)
+	clientOpID := parseClientOpID(c)
 
 	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -709,13 +726,17 @@ func (h *TaskHandler) CreateNotification(c *gin.Context) {
 		return
 	}
 
-	notification, err := h.notifyService.CreateNotification(userID, taskID, &req)
+	notification, replayed, err := h.notifyService.CreateNotification(userID, taskID, &req, clientOpID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusCreated, notification)
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	c.JSON(status, notification.ToResponse())
 }
 
 func (h *TaskHandler) ListNotifications(c *gin.Context) {
@@ -740,5 +761,49 @@ func (h *TaskHandler) ListNotifications(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, notifications)
+	c.JSON(http.StatusOK, models.NotificationResponses(notifications))
+}
+
+func (h *TaskHandler) UpdateNotification(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task ID"})
+		return
+	}
+	notificationID, err := strconv.ParseInt(c.Param("notificationId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification ID"})
+		return
+	}
+	var req models.UpdateNotificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	notification, err := h.notifyService.UpdateNotification(userID, taskID, notificationID, &req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, notification.ToResponse())
+}
+
+func (h *TaskHandler) DeleteNotification(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	taskID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task ID"})
+		return
+	}
+	notificationID, err := strconv.ParseInt(c.Param("notificationId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification ID"})
+		return
+	}
+	if err := h.notifyService.DeleteTaskNotification(userID, taskID, notificationID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
