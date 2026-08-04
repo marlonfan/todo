@@ -1912,6 +1912,7 @@ html.todo-electron.todo-authenticated-layout:has(:is(
 }
 
 .prompt-search-input {
+  align-self: stretch;
   min-width: 0;
   width: 100%;
   border: 0;
@@ -2894,6 +2895,11 @@ html.todo-electron.todo-authenticated-layout:has(:is(
 @media (min-width: 768px) {
   .prompt-page-header {
     padding: 1rem 1.5rem;
+  }
+
+  /* Keep the interactive header below Windows' native caption-button layer. */
+  html.todo-electron.todo-platform-win32 .prompt-page-header {
+    padding-top: calc(1rem + var(--desktop-titlebar-height));
   }
 
   .prompt-search {

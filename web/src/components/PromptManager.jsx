@@ -732,7 +732,7 @@ function PromptManager() {
             <h2 className="text-xl font-semibold text-foreground">{t('nav.prompts')}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{t('prompt.pageHint')}</p>
           </div>
-          <div className="prompt-search">
+          <label className="prompt-search">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               value={query}
@@ -741,7 +741,7 @@ function PromptManager() {
               placeholder={t('prompt.searchPlaceholder')}
               aria-label={t('prompt.searchPlaceholder')}
             />
-          </div>
+          </label>
         </div>
         <div className="prompt-mobile-tabs" role="tablist" aria-label={t('prompt.mobileTabsLabel')}>
           <button
