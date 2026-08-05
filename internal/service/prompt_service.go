@@ -85,7 +85,9 @@ func (s *PromptService) Delete(userID, promptID int64) error {
 
 func (s *PromptService) CreateAskHistory(userID int64, req *models.CreatePromptAskHistoryRequest) (*models.PromptAskHistory, error) {
 	input := strings.TrimSpace(req.Input)
+	reasoning := strings.TrimSpace(req.Reasoning)
 	output := strings.TrimSpace(req.Output)
+	finishReason := strings.TrimSpace(req.FinishReason)
 	if input == "" {
 		return nil, errors.New("prompt ask input is required")
 	}
@@ -100,7 +102,7 @@ func (s *PromptService) CreateAskHistory(userID int64, req *models.CreatePromptA
 
 	status := strings.TrimSpace(req.Status)
 	switch status {
-	case "stopped":
+	case "stopped", "incomplete":
 	default:
 		status = "completed"
 	}
@@ -111,8 +113,10 @@ func (s *PromptService) CreateAskHistory(userID int64, req *models.CreatePromptA
 		PromptTitle:   prompt.Title,
 		PromptContent: prompt.Content,
 		Input:         input,
+		Reasoning:     reasoning,
 		Output:        output,
 		Status:        status,
+		FinishReason:  finishReason,
 	}
 	if err := s.promptRepo.CreateAskHistory(history); err != nil {
 		return nil, err

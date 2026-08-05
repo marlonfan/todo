@@ -204,6 +204,155 @@ test('generateAIResponse streams OpenAI-compatible alternate delta fields withou
   }
 });
 
+test('generateAIResponse exposes reasoning separately from visible output', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (key === AI_CONFIG_STORAGE_KEY ? JSON.stringify({
+        protocol: AI_PROTOCOL_OPENAI,
+        baseURL: 'https://ai.example.test/v1',
+        apiKey: 'test-key',
+        modelID: 'test-model',
+      }) : null),
+    },
+  };
+  globalThis.fetch = async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'data: {"choices":[{"delta":{"reasoning_content":"先分析"}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"再作答"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"最终答案"},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    return new Response(new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const reasoningSnapshots = [];
+    const answerSnapshots = [];
+    const result = await generateAIResponse({
+      systemPrompt: 'system',
+      userInput: 'user',
+      onReasoning: (content) => reasoningSnapshots.push(content),
+      onDelta: (content) => answerSnapshots.push(content),
+    });
+
+    assert.deepEqual(reasoningSnapshots, ['先分析', '先分析再作答']);
+    assert.deepEqual(answerSnapshots, ['最终答案']);
+    assert.equal(result, '最终答案');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalWindow === 'undefined') {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test('generateAIResponse reports output truncated by the model token limit', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (key === AI_CONFIG_STORAGE_KEY ? JSON.stringify({
+        protocol: AI_PROTOCOL_OPENAI,
+        baseURL: 'https://ai.example.test/v1',
+        apiKey: 'test-key',
+        modelID: 'test-model',
+      }) : null),
+    },
+  };
+  globalThis.fetch = async () => {
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'data: {"choices":[{"delta":{"content":"回答到一半"},"finish_reason":"length"}]}\n\n'
+        ));
+        controller.close();
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const finishes = [];
+    const result = await generateAIResponse({
+      systemPrompt: 'system',
+      userInput: 'user',
+      onFinish: (finish) => finishes.push(finish),
+    });
+
+    assert.equal(result, '回答到一半');
+    assert.deepEqual(finishes, [{ reason: 'length', incomplete: true }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalWindow === 'undefined') {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test('generateAIResponse reports token truncation from a non-stream OpenAI response', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (key === AI_CONFIG_STORAGE_KEY ? JSON.stringify({
+        protocol: AI_PROTOCOL_OPENAI,
+        baseURL: 'https://ai.example.test/v1',
+        apiKey: 'test-key',
+        modelID: 'test-model',
+      }) : null),
+    },
+  };
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{
+      message: { content: '回答到一半', reasoning_content: '分析过程' },
+      finish_reason: 'length',
+    }],
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  try {
+    const reasoningSnapshots = [];
+    const finishes = [];
+    const result = await generateAIResponse({
+      systemPrompt: 'system',
+      userInput: 'user',
+      onReasoning: (content) => reasoningSnapshots.push(content),
+      onFinish: (finish) => finishes.push(finish),
+    });
+
+    assert.equal(result, '回答到一半');
+    assert.deepEqual(reasoningSnapshots, ['分析过程']);
+    assert.deepEqual(finishes, [{ reason: 'length', incomplete: true }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalWindow === 'undefined') {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
 test('generateAIResponse streams SSE lines without blank-line event separators', async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
@@ -290,15 +439,18 @@ test('generateAIResponse hides streamed think blocks from visible output', async
 
   try {
     const snapshots = [];
+    const reasoningSnapshots = [];
     const statuses = [];
     const result = await generateAIResponse({
       systemPrompt: 'system',
       userInput: 'user',
       onStatus: (status) => statuses.push(status),
+      onReasoning: (content) => reasoningSnapshots.push(content),
       onDelta: (content) => snapshots.push(content),
     });
 
     assert.deepEqual(statuses, ['thinking']);
+    assert.deepEqual(reasoningSnapshots, ['hidden', 'hidden thoughts']);
     assert.deepEqual(snapshots, ['Visible', 'Visible\n- Item']);
     assert.equal(result, 'Visible\n- Item');
   } finally {
@@ -354,6 +506,110 @@ test('generateAIResponse reports Anthropic thinking before visible text', async 
     assert.deepEqual(statuses, ['thinking']);
     assert.deepEqual(snapshots, ['Visible']);
     assert.equal(result, 'Visible');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalWindow === 'undefined') {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test('generateAIResponse reports Anthropic max token truncation and requests a 32K answer budget', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (key === AI_CONFIG_STORAGE_KEY ? JSON.stringify({
+        protocol: AI_PROTOCOL_ANTHROPIC,
+        baseURL: 'https://ai.example.test/v1',
+        apiKey: 'test-key',
+        modelID: 'test-model',
+      }) : null),
+    },
+  };
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    assert.equal(request.max_tokens, 32768);
+    const encoder = new TextEncoder();
+    const chunks = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"分析"}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"回答到一半"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ];
+    return new Response(new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+        controller.close();
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    const reasoningSnapshots = [];
+    const finishes = [];
+    const result = await generateAIResponse({
+      systemPrompt: 'system',
+      userInput: 'user',
+      onReasoning: (content) => reasoningSnapshots.push(content),
+      onFinish: (finish) => finishes.push(finish),
+    });
+
+    assert.equal(result, '回答到一半');
+    assert.deepEqual(reasoningSnapshots, ['分析']);
+    assert.deepEqual(finishes, [{ reason: 'max_tokens', incomplete: true }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (typeof originalWindow === 'undefined') {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test('generateAIResponse separates reasoning in a non-stream Anthropic response', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => (key === AI_CONFIG_STORAGE_KEY ? JSON.stringify({
+        protocol: AI_PROTOCOL_ANTHROPIC,
+        baseURL: 'https://ai.example.test/v1',
+        apiKey: 'test-key',
+        modelID: 'test-model',
+      }) : null),
+    },
+  };
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    content: [
+      { type: 'thinking', thinking: '分析过程' },
+      { type: 'text', text: '最终答案' },
+    ],
+    stop_reason: 'end_turn',
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  try {
+    const reasoningSnapshots = [];
+    const finishes = [];
+    const result = await generateAIResponse({
+      systemPrompt: 'system',
+      userInput: 'user',
+      onReasoning: (content) => reasoningSnapshots.push(content),
+      onFinish: (finish) => finishes.push(finish),
+    });
+
+    assert.equal(result, '最终答案');
+    assert.deepEqual(reasoningSnapshots, ['分析过程']);
+    assert.deepEqual(finishes, [{ reason: 'end_turn', incomplete: false }]);
   } finally {
     globalThis.fetch = originalFetch;
     if (typeof originalWindow === 'undefined') {

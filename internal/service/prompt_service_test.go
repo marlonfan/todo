@@ -132,6 +132,41 @@ func TestPromptServiceAskHistoryIsUserScoped(t *testing.T) {
 	}
 }
 
+func TestPromptServiceAskHistoryStoresReasoningAndIncompleteFinish(t *testing.T) {
+	service := newTestPromptService(t)
+	prompt, err := service.Create(1, &models.CreatePromptRequest{
+		Title:   "Planner",
+		Content: "Think before answering.",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	history, err := service.CreateAskHistory(1, &models.CreatePromptAskHistoryRequest{
+		PromptID:     prompt.ID,
+		Input:        "Make a plan",
+		Reasoning:    "  Consider dependencies first.  ",
+		Output:       "  Partial plan  ",
+		Status:       "incomplete",
+		FinishReason: "max_tokens",
+	})
+	if err != nil {
+		t.Fatalf("CreateAskHistory returned error: %v", err)
+	}
+	if history.Reasoning != "Consider dependencies first." {
+		t.Fatalf("expected trimmed reasoning, got %q", history.Reasoning)
+	}
+	if history.Output != "Partial plan" {
+		t.Fatalf("expected trimmed output, got %q", history.Output)
+	}
+	if history.Status != "incomplete" {
+		t.Fatalf("expected incomplete status, got %q", history.Status)
+	}
+	if history.FinishReason != "max_tokens" {
+		t.Fatalf("expected max_tokens finish reason, got %q", history.FinishReason)
+	}
+}
+
 func TestPromptServiceAskHistoryPaginationAndDelete(t *testing.T) {
 	service := newTestPromptService(t)
 

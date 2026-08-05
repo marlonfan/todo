@@ -2191,6 +2191,11 @@ html.todo-electron.todo-authenticated-layout:has(:is(
   font-weight: 650;
 }
 
+.prompt-history-status--warning {
+  background: hsl(var(--accent-energy-soft));
+  color: hsl(var(--accent-energy-foreground));
+}
+
 .prompt-history-more,
 .prompt-history-load-more {
   display: flex;
@@ -2743,6 +2748,76 @@ html.todo-electron.todo-authenticated-layout:has(:is(
   flex: 1 1 auto;
   overflow: auto;
   padding: 0.9rem;
+}
+
+.prompt-reasoning {
+  margin-bottom: 0.85rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.28);
+}
+
+.prompt-reasoning-summary {
+  display: flex;
+  min-height: 2.65rem;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.72rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.82rem;
+  font-weight: 650;
+  user-select: none;
+}
+
+.prompt-reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.prompt-reasoning-summary::after {
+  margin-left: auto;
+  color: hsl(var(--muted-foreground));
+  content: "⌄";
+  font-size: 0.95rem;
+  transition: transform 0.16s ease;
+}
+
+.prompt-reasoning[open] .prompt-reasoning-summary::after {
+  transform: rotate(180deg);
+}
+
+.prompt-reasoning-live {
+  border-radius: 999px;
+  background: hsl(var(--accent));
+  padding: 0.15rem 0.42rem;
+  color: hsl(var(--primary));
+  font-size: 0.68rem;
+}
+
+.prompt-reasoning-content {
+  max-height: 16rem;
+  overflow: auto;
+  border-top: 1px solid hsl(var(--border));
+  padding: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-output-warning {
+  margin-bottom: 0.85rem;
+  border: 1px solid hsl(var(--accent-energy) / 0.28);
+  border-radius: 8px;
+  background: hsl(var(--accent-energy-soft));
+  padding: 0.68rem 0.78rem;
+  color: hsl(var(--accent-energy-foreground));
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .prompt-thinking-state {

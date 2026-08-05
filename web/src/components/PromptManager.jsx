@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, Copy, Edit3, FileText, History, MessageSquareText, Plus, Search, Send, Square, Trash2, X } from 'lucide-react';
+import { Bot, BrainCircuit, Check, Copy, Edit3, FileText, History, MessageSquareText, Plus, Search, Send, Square, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { promptsAPI } from '../api/client';
 import { usePromptHistoryQuery, usePromptsQuery } from '../query/hooks';
@@ -59,7 +59,9 @@ function PromptManager() {
   const [askPrompt, setAskPrompt] = useState(null);
   const [selectedHistoryID, setSelectedHistoryID] = useState(0);
   const [askInput, setAskInput] = useState('');
+  const [askReasoning, setAskReasoning] = useState('');
   const [askOutput, setAskOutput] = useState('');
+  const [askFinish, setAskFinish] = useState({ reason: '', incomplete: false });
   const [askError, setAskError] = useState('');
   const [asking, setAsking] = useState(false);
   const [askStreamStatus, setAskStreamStatus] = useState('idle');
@@ -74,7 +76,10 @@ function PromptManager() {
   const activeAskRef = useRef({
     prompt: null,
     input: '',
+    reasoning: '',
     output: '',
+    finishReason: '',
+    incomplete: false,
     saved: false,
   });
 
@@ -83,6 +88,12 @@ function PromptManager() {
   ), [askHistoryPages]);
   const askHistoryCountLabel = historyHasNextPage ? `${askHistory.length}+` : String(askHistory.length);
   const visibleAskOutput = useMemo(() => cleanGeneratedTaskDescription(askOutput).trim(), [askOutput]);
+  const askIncompleteMessage = useMemo(() => {
+    if (!askFinish.incomplete) return '';
+    return ['length', 'max_tokens'].includes(askFinish.reason)
+      ? t('prompt.outputTruncated')
+      : t('prompt.outputInterrupted');
+  }, [askFinish.incomplete, askFinish.reason, t]);
   const showAskProgress = asking && !visibleAskOutput;
   const askProgressMode = askStreamStatus === 'thinking' ? 'thinking' : 'requesting';
 
@@ -171,7 +182,14 @@ function PromptManager() {
     });
   };
 
-  const saveAskHistory = async ({ prompt, input, output, status = 'completed' } = {}) => {
+  const saveAskHistory = async ({
+    prompt,
+    input,
+    reasoning,
+    output,
+    finishReason,
+    status = 'completed',
+  } = {}) => {
     const promptID = readPromptID(prompt?.id);
     const textInput = String(input || '').trim();
     const textOutput = String(output || '').trim();
@@ -180,7 +198,9 @@ function PromptManager() {
       const res = await promptsAPI.createHistory({
         prompt_id: promptID,
         input: textInput,
+        reasoning: String(reasoning || '').trim(),
         output: textOutput,
+        finish_reason: String(finishReason || '').trim(),
         status,
       });
       const saved = res?.data;
@@ -206,7 +226,9 @@ function PromptManager() {
     return saveAskHistory({
       prompt: active.prompt,
       input: active.input,
+      reasoning: active.reasoning,
       output,
+      finishReason: active.finishReason,
       status,
     });
   };
@@ -319,12 +341,16 @@ function PromptManager() {
     askControllerRef.current?.abort?.();
     askControllerRef.current = null;
     await persistActiveAskIfNeeded('stopped');
-    activeAskRef.current = { prompt: null, input: '', output: '', saved: false };
+    activeAskRef.current = {
+      prompt: null, input: '', reasoning: '', output: '', finishReason: '', incomplete: false, saved: false,
+    };
     setAsking(false);
     setAskDialogOpen(false);
     setAskPrompt(null);
     setAskInput('');
+    setAskReasoning('');
     setAskOutput('');
+    setAskFinish({ reason: '', incomplete: false });
     setAskError('');
     setAskStreamStatus('idle');
     setAskCopied(false);
@@ -358,11 +384,15 @@ function PromptManager() {
   const openAskPanel = (prompt) => {
     askControllerRef.current?.abort?.();
     askControllerRef.current = null;
-    activeAskRef.current = { prompt: null, input: '', output: '', saved: false };
+    activeAskRef.current = {
+      prompt: null, input: '', reasoning: '', output: '', finishReason: '', incomplete: false, saved: false,
+    };
     setAskPrompt(prompt);
     setSelectedHistoryID(0);
     setAskInput('');
+    setAskReasoning('');
     setAskOutput('');
+    setAskFinish({ reason: '', incomplete: false });
     setAskError('');
     setAskCopied(false);
     setAskStreamStatus('idle');
@@ -373,7 +403,9 @@ function PromptManager() {
   const openHistory = (history) => {
     askControllerRef.current?.abort?.();
     askControllerRef.current = null;
-    activeAskRef.current = { prompt: null, input: '', output: '', saved: false };
+    activeAskRef.current = {
+      prompt: null, input: '', reasoning: '', output: '', finishReason: '', incomplete: false, saved: false,
+    };
     const promptID = readPromptID(history?.prompt_id);
     const matchedPrompt = prompts.find((prompt) => readPromptID(prompt?.id) === promptID) || null;
     setAskPrompt(matchedPrompt || {
@@ -383,7 +415,12 @@ function PromptManager() {
     });
     setSelectedHistoryID(history?.id || 0);
     setAskInput(history?.input || '');
+    setAskReasoning(history?.reasoning || '');
     setAskOutput(history?.output || '');
+    setAskFinish({
+      reason: history?.finish_reason || '',
+      incomplete: history?.status === 'incomplete',
+    });
     setAskError('');
     setAskCopied(false);
     setAskStreamStatus('idle');
@@ -426,13 +463,18 @@ function PromptManager() {
     activeAskRef.current = {
       prompt: askPrompt,
       input,
+      reasoning: '',
       output: '',
+      finishReason: '',
+      incomplete: false,
       saved: false,
     };
     setSelectedHistoryID(0);
     setAsking(true);
     setAskStreamStatus('requesting');
+    setAskReasoning('');
     setAskOutput('');
+    setAskFinish({ reason: '', incomplete: false });
     setAskError('');
     setHistoryError('');
     let streamedContent = '';
@@ -446,6 +488,25 @@ function PromptManager() {
           if (status === 'thinking') {
             setAskStreamStatus('thinking');
           }
+        },
+        onReasoning: (next) => {
+          activeAskRef.current = {
+            ...activeAskRef.current,
+            reasoning: next,
+          };
+          setAskReasoning(next);
+        },
+        onFinish: (finish) => {
+          const nextFinish = {
+            reason: String(finish?.reason || ''),
+            incomplete: Boolean(finish?.incomplete),
+          };
+          activeAskRef.current = {
+            ...activeAskRef.current,
+            finishReason: nextFinish.reason,
+            incomplete: nextFinish.incomplete,
+          };
+          setAskFinish(nextFinish);
         },
         onDelta: (next) => {
           streamedContent = next;
@@ -469,7 +530,7 @@ function PromptManager() {
       };
       setAskOutput(finalContent);
       setAskStreamStatus('idle');
-      await persistActiveAskIfNeeded('completed');
+      await persistActiveAskIfNeeded(activeAskRef.current?.incomplete ? 'incomplete' : 'completed');
     } catch (err) {
       if (err?.name === 'AbortError') {
         const output = String(streamedContent || activeAskRef.current?.output || '').trim();
@@ -480,7 +541,22 @@ function PromptManager() {
         setAskStreamStatus('idle');
         return;
       }
-      activeAskRef.current = { prompt: null, input: '', output: '', saved: false };
+      const partialOutput = String(streamedContent || activeAskRef.current?.output || '').trim();
+      if (partialOutput) {
+        activeAskRef.current = {
+          ...activeAskRef.current,
+          output: partialOutput,
+          finishReason: 'stream_error',
+          incomplete: true,
+        };
+        setAskOutput(partialOutput);
+        setAskFinish({ reason: 'stream_error', incomplete: true });
+        await persistActiveAskIfNeeded('incomplete');
+      } else {
+        activeAskRef.current = {
+          prompt: null, input: '', reasoning: '', output: '', finishReason: '', incomplete: false, saved: false,
+        };
+      }
       setAskStreamStatus('idle');
       setAskError(
         err?.code === AI_CONFIG_REQUIRED_CODE
@@ -618,6 +694,11 @@ function PromptManager() {
             {selectedHistory?.status === 'stopped' && !asking && (
               <span className="prompt-history-status">{t('prompt.historyStopped')}</span>
             )}
+            {askFinish.incomplete && !asking && (
+              <span className="prompt-history-status prompt-history-status--warning">
+                {t('prompt.historyIncomplete')}
+              </span>
+            )}
             <button
               type="button"
               onClick={copyAskOutput}
@@ -632,6 +713,21 @@ function PromptManager() {
         <div
           className={`prompt-output-body${asking ? ' task-ai-result--streaming' : ''}`}
         >
+          {String(askReasoning || '').trim() && (
+            <details className="prompt-reasoning">
+              <summary className="prompt-reasoning-summary">
+                <BrainCircuit className="h-4 w-4" />
+                <span>{t('prompt.reasoning')}</span>
+                {asking && <span className="prompt-reasoning-live">{t('prompt.streaming')}</span>}
+              </summary>
+              <div className="prompt-reasoning-content">{askReasoning}</div>
+            </details>
+          )}
+          {askIncompleteMessage && (
+            <div className="prompt-output-warning" role="status">
+              {askIncompleteMessage}
+            </div>
+          )}
           {showAskProgress ? (
             <div className="prompt-thinking-state" role="status" aria-live="polite">
               <div className={`prompt-thinking-mark prompt-thinking-mark--${askProgressMode}`} aria-hidden="true">
@@ -696,6 +792,7 @@ function PromptManager() {
             <span className="prompt-history-time">
               {formatDateTime(item.created_at)}
               {item.status === 'stopped' ? ` · ${t('prompt.historyStopped')}` : ''}
+              {item.status === 'incomplete' ? ` · ${t('prompt.historyIncomplete')}` : ''}
             </span>
           </button>
           <button

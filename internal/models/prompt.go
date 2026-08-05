@@ -22,8 +22,10 @@ type PromptAskHistory struct {
 	PromptTitle   string    `json:"prompt_title" gorm:"size:120;not null"`
 	PromptContent string    `json:"prompt_content,omitempty" gorm:"type:text"`
 	Input         string    `json:"input" gorm:"type:text;not null"`
+	Reasoning     string    `json:"reasoning,omitempty" gorm:"type:text"`
 	Output        string    `json:"output" gorm:"type:text;not null"`
 	Status        string    `json:"status" gorm:"size:20;not null;default:'completed'"`
+	FinishReason  string    `json:"finish_reason,omitempty" gorm:"size:50"`
 	CreatedAt     time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt     time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 
@@ -42,10 +44,12 @@ type UpdatePromptRequest struct {
 }
 
 type CreatePromptAskHistoryRequest struct {
-	PromptID int64  `json:"prompt_id" binding:"required"`
-	Input    string `json:"input" binding:"required,max=200000"`
-	Output   string `json:"output" binding:"max=500000"`
-	Status   string `json:"status" binding:"omitempty,oneof=completed stopped"`
+	PromptID     int64  `json:"prompt_id" binding:"required"`
+	Input        string `json:"input" binding:"required,max=200000"`
+	Reasoning    string `json:"reasoning" binding:"max=500000"`
+	Output       string `json:"output" binding:"max=500000"`
+	Status       string `json:"status" binding:"omitempty,oneof=completed stopped incomplete"`
+	FinishReason string `json:"finish_reason" binding:"max=50"`
 }
 
 type PromptAskHistoryListResponse struct {

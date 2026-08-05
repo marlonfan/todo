@@ -11,6 +11,7 @@ export const AI_CONFIG_REQUIRED_CODE = 'AI_CONFIG_REQUIRED';
 const MAX_CONTEXT_TASKS = 160;
 const MAX_TEXT_CHARS = 520;
 const MAX_CONTEXT_JSON_CHARS = 26000;
+const ANTHROPIC_MAX_OUTPUT_TOKENS = 32768;
 
 function truncateText(value, max = MAX_TEXT_CHARS) {
   const text = String(value || '').trim();
@@ -209,6 +210,8 @@ function isEventStreamResponse(response) {
 
 function isLikelyStreamResponse(response) {
   if (isEventStreamResponse(response)) return true;
+  const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) return false;
   return Boolean(response.body?.getReader);
 }
 
@@ -338,6 +341,22 @@ function stripThinkingBlocks(value) {
   return text;
 }
 
+function extractThinkingBlocks(value) {
+  const text = String(value || '');
+  const parts = [];
+  const blockPattern = /<think\b[^>]*>([\s\S]*?)<\/think>/gi;
+  let match;
+  let consumedUntil = 0;
+  while ((match = blockPattern.exec(text)) !== null) {
+    parts.push(match[1]);
+    consumedUntil = blockPattern.lastIndex;
+  }
+  const remaining = text.slice(consumedUntil);
+  const openMatch = /<think\b[^>]*>([\s\S]*)$/i.exec(remaining);
+  if (openMatch) parts.push(openMatch[1]);
+  return parts.join('');
+}
+
 function emitVisibleText(rawContent, visibleState, onDelta) {
   const nextVisible = stripThinkingBlocks(rawContent);
   if (nextVisible === visibleState.content) return;
@@ -451,7 +470,7 @@ function yieldForStreamUpdate() {
 }
 
 async function callOpenAICompatible(config, prompt, options = {}) {
-  const { signal, onDelta } = options;
+  const { signal, onDelta, onReasoning, onFinish } = options;
   const emitStatus = createAIStatusEmitter(options.onStatus);
   const response = await fetch(joinAPIURL(config.baseURL, 'chat/completions'), {
     method: 'POST',
@@ -476,6 +495,8 @@ async function callOpenAICompatible(config, prompt, options = {}) {
   }
   if (isLikelyStreamResponse(response)) {
     let content = '';
+    let reasoning = '';
+    let finishReason = '';
     const visibleState = { content: '' };
     if (!isEventStreamResponse(response)) {
       const rawContent = await readTextStream(response, async (next, chunk) => {
@@ -489,10 +510,20 @@ async function callOpenAICompatible(config, prompt, options = {}) {
     }
     await readSSEStream(response, async ({ data }, rawBlock) => {
       const payload = String(data || '').trim();
-      if (!payload || payload === '[DONE]') return;
+      if (!payload) return;
+      if (payload === '[DONE]') {
+        finishReason ||= 'stop';
+        return;
+      }
       const chunk = tryParseJSON(payload);
+      const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : null;
+      if (choice?.finish_reason) {
+        finishReason = String(choice.finish_reason);
+      }
       const reasoningDelta = chunk ? extractOpenAIReasoningDelta(chunk) : '';
       if (reasoningDelta) {
+        reasoning += reasoningDelta;
+        onReasoning?.(reasoning, reasoningDelta);
         emitStatus('thinking');
         return;
       }
@@ -502,17 +533,37 @@ async function callOpenAICompatible(config, prompt, options = {}) {
         emitStatus('thinking');
       }
       content += delta;
+      if (containsThinkingMarkup(content)) {
+        const nextReasoning = extractThinkingBlocks(content);
+        if (nextReasoning !== reasoning) {
+          const reasoningDeltaFromMarkup = nextReasoning.startsWith(reasoning)
+            ? nextReasoning.slice(reasoning.length)
+            : nextReasoning;
+          reasoning = nextReasoning;
+          onReasoning?.(reasoning, reasoningDeltaFromMarkup);
+        }
+      }
       emitVisibleText(content, visibleState, onDelta);
       await yieldForStreamUpdate();
     }, signal);
+    const reason = finishReason || 'unexpected_eof';
+    onFinish?.({ reason, incomplete: reason === 'length' || reason === 'unexpected_eof' });
     return stripThinkingBlocks(content);
   }
   const data = await response.json();
-  return stripThinkingBlocks(data?.choices?.[0]?.message?.content || '');
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  const reasoning = extractOpenAIReasoningDelta(data);
+  if (reasoning) {
+    onReasoning?.(reasoning, reasoning);
+    emitStatus('thinking');
+  }
+  const reason = String(choice?.finish_reason || 'stop');
+  onFinish?.({ reason, incomplete: reason === 'length' });
+  return stripThinkingBlocks(choice?.message?.content || '');
 }
 
 async function callAnthropicCompatible(config, prompt, options = {}) {
-  const { signal, onDelta } = options;
+  const { signal, onDelta, onReasoning, onFinish } = options;
   const emitStatus = createAIStatusEmitter(options.onStatus);
   const response = await fetch(joinAPIURL(config.baseURL, 'messages'), {
     method: 'POST',
@@ -524,7 +575,7 @@ async function callAnthropicCompatible(config, prompt, options = {}) {
     },
     body: JSON.stringify({
       model: config.modelID,
-      max_tokens: 1400,
+      max_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
       temperature: 0.2,
       stream: true,
       system: prompt.system,
@@ -539,6 +590,8 @@ async function callAnthropicCompatible(config, prompt, options = {}) {
   }
   if (isLikelyStreamResponse(response)) {
     let content = '';
+    let reasoning = '';
+    let finishReason = '';
     const visibleState = { content: '' };
     if (!isEventStreamResponse(response)) {
       const rawContent = await readTextStream(response, async (next, chunk) => {
@@ -556,8 +609,16 @@ async function callAnthropicCompatible(config, prompt, options = {}) {
         throw new Error(payload?.error?.message || 'Anthropic stream error');
       }
       if (!payload) return;
+      const stopReason = payload?.delta?.stop_reason ?? payload?.stop_reason;
+      if (stopReason) {
+        finishReason = String(stopReason);
+      } else if (event === 'message_stop' || payload?.type === 'message_stop') {
+        finishReason ||= 'end_turn';
+      }
       const thinkingDelta = extractAnthropicThinkingDelta(payload);
       if (thinkingDelta) {
+        reasoning += thinkingDelta;
+        onReasoning?.(reasoning, thinkingDelta);
         emitStatus('thinking');
         return;
       }
@@ -570,11 +631,25 @@ async function callAnthropicCompatible(config, prompt, options = {}) {
       emitVisibleText(content, visibleState, onDelta);
       await yieldForStreamUpdate();
     }, signal);
+    const reason = finishReason || 'unexpected_eof';
+    onFinish?.({ reason, incomplete: reason === 'max_tokens' || reason === 'unexpected_eof' });
     return stripThinkingBlocks(content);
   }
   const data = await response.json();
   const blocks = Array.isArray(data?.content) ? data.content : [];
+  const reasoning = blocks
+    .filter((block) => String(block?.type || '').toLowerCase().includes('thinking'))
+    .map((block) => extractString(block?.thinking ?? block?.text ?? ''))
+    .filter(Boolean)
+    .join('');
+  if (reasoning) {
+    onReasoning?.(reasoning, reasoning);
+    emitStatus('thinking');
+  }
+  const reason = String(data?.stop_reason || 'end_turn');
+  onFinish?.({ reason, incomplete: reason === 'max_tokens' });
   return stripThinkingBlocks(blocks
+    .filter((block) => !String(block?.type || '').toLowerCase().includes('thinking'))
     .map((block) => block?.text || '')
     .filter(Boolean)
     .join('\n'));
@@ -620,7 +695,9 @@ export async function generateAIResponse({
   userInput = '',
   signal,
   onDelta,
+  onReasoning,
   onStatus,
+  onFinish,
 } = {}) {
   const config = normalizeAIConfig(readAIConfig());
   if (!isAIConfigReady(config)) {
@@ -642,8 +719,8 @@ export async function generateAIResponse({
   }
 
   return config.protocol === AI_PROTOCOL_ANTHROPIC
-    ? callAnthropicCompatible(config, prompt, { signal, onDelta, onStatus })
-    : callOpenAICompatible(config, prompt, { signal, onDelta, onStatus });
+    ? callAnthropicCompatible(config, prompt, { signal, onDelta, onReasoning, onStatus, onFinish })
+    : callOpenAICompatible(config, prompt, { signal, onDelta, onReasoning, onStatus, onFinish });
 }
 
 export async function generateTaskDescriptionDraft({
