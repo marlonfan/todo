@@ -207,7 +207,6 @@ html.todo-electron.todo-authenticated-layout .desktop-window-drag-region {
 }
 
 html.todo-electron.todo-authenticated-layout:has(:is(
-  [aria-modal="true"],
   .modal-overlay,
   .fixed.inset-0[class*="bg-black/"]
 )) .desktop-window-drag-region::after {

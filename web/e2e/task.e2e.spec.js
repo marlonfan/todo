@@ -54,6 +54,51 @@ test('task: add, edit, complete', async ({ page, request }) => {
 
 });
 
+test('task: opening the detail date picker does not shade the Windows title bar', async ({ page }) => {
+  const account = createE2EAccount();
+  const title = `Date Picker Title Bar ${Date.now()}`;
+
+  await registerAndLogin(page, account);
+  await page.goto('/tasks?view=all');
+  await page.evaluate(() => {
+    document.documentElement.classList.add('todo-electron', 'todo-platform-win32');
+    const dragRegion = document.createElement('div');
+    dragRegion.className = 'desktop-window-drag-region';
+    document.body.appendChild(dragRegion);
+  });
+
+  const titleBarShade = () => page.locator('.desktop-window-drag-region').evaluate((element) => {
+    const style = getComputedStyle(element, '::after');
+    return {
+      content: style.content,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+
+  await page.getByTestId('task-new-button').click();
+  await expect.poll(titleBarShade).toEqual({
+    content: '""',
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+  });
+  await page.getByTestId('task-modal-title-input').fill(title);
+  await page.getByTestId('task-modal-save-button').click();
+
+  const createdRow = page.locator('[data-testid="task-row"]').filter({ hasText: title }).first();
+  await expect(createdRow).toBeVisible();
+  await createdRow.click();
+
+  await expect.poll(titleBarShade).toEqual({
+    content: 'none',
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+  });
+  await page.getByRole('button', { name: /^\d{2}\/\d{2} \d{2}:\d{2}$/ }).click();
+  await expect(page.locator('.task-detail-time-panel .react-datepicker[role="dialog"]')).toBeVisible();
+  await expect.poll(titleBarShade).toEqual({
+    content: 'none',
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+  });
+});
+
 test('task: completed/deleted view sorting supports status time and created time', async ({ page, request }) => {
   const account = createE2EAccount();
   const requestCtxReady = registerAndLogin(page, account);
