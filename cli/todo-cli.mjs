@@ -6,12 +6,29 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const CLI_VERSION = '0.2.0';
+const CLI_VERSION = '0.3.0';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
 const DEFAULT_TIMEOUT_MS = 30000;
 const BUNDLED_SKILL_PATH = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'todo-cli', 'SKILL.md');
-const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes', 'remind-at-start', 'notify-at-start']);
+const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes']);
+const RETIRED_TASK_REMINDER_FLAGS = [
+  'remind-at-start',
+  'notify-at-start',
+  'reminder-policy',
+  'reminder-minutes-before',
+  'remind-before',
+  'notify-at',
+];
+const SERVER_MANAGED_REMINDER_KEYS = new Set([
+  'default_morning_time',
+  'default_reminder_enabled',
+  'default_reminder_minutes',
+  'notify_at',
+  'reminder_minutes_before',
+  'reminder_policy',
+  'reminder_summary',
+]);
 
 class CliError extends Error {
   constructor(message, code = 1) {
@@ -266,6 +283,11 @@ function timeoutMessage(ctx) {
 async function buildTaskPayload(flags, { partial = false } = {}) {
   const payload = {};
 
+  const retiredReminderFlag = RETIRED_TASK_REMINDER_FLAGS.find((name) => flags[name] !== undefined);
+  if (retiredReminderFlag) {
+    throw new CliError(`--${retiredReminderFlag} is no longer supported; set the task time and let the server apply account defaults`);
+  }
+
   const title = optionalString(flags, ['title']);
   if (title !== undefined) payload.title = title;
   if (!partial && !payload.title) throw new CliError('missing required option --title');
@@ -305,20 +327,6 @@ async function buildTaskPayload(flags, { partial = false } = {}) {
   const allDay = optionalBool(flags, ['all-day']);
   if (allDay !== undefined) payload.all_day = allDay;
 
-  const reminderPolicy = optionalString(flags, ['reminder-policy']);
-  if (reminderPolicy !== undefined) payload.reminder_policy = reminderPolicy;
-
-  const reminderMinutesBefore = optionalNumber(flags, ['reminder-minutes-before', 'remind-before']);
-  if (reminderMinutesBefore !== undefined) payload.reminder_minutes_before = reminderMinutesBefore;
-
-  if (flagEnabled(flags, ['remind-at-start', 'notify-at-start'])) {
-    if (reminderPolicy !== undefined || reminderMinutesBefore !== undefined) {
-      throw new CliError('use --remind-at-start or explicit reminder policy flags, not both');
-    }
-    payload.reminder_policy = 'offset';
-    payload.reminder_minutes_before = 0;
-  }
-
   const categoryIDs = parseIDList(firstFlag(flags, ['category-ids', 'categories']));
   if (categoryIDs !== undefined) payload.category_ids = categoryIDs;
 
@@ -345,16 +353,6 @@ function buildMutationHeaders(flags, source) {
   headers['X-Client-Submit-Source'] = source;
   headers['X-Client-Op-Id'] = optionalString(flags, ['client-op-id', 'op-id']) || randomUUID();
   return headers;
-}
-
-function buildNotificationPayload(flags) {
-  const notifyAt = requireValue(flags, ['notify-at'], 'notify-at');
-  const payload = { notify_at: notifyAt };
-  const channel = optionalString(flags, ['channel']);
-  if (channel !== undefined) payload.channel = channel;
-  const config = parseJSONFlag(optionalString(flags, ['config']), 'config');
-  if (config !== undefined) payload.config = config;
-  return payload;
 }
 
 function buildNotifySettingPayload(flags) {
@@ -554,13 +552,14 @@ function truncate(value, width) {
 const SENSITIVE_OUTPUT_KEY = /^(?:config|token|access_token|refresh_token|bot_token|password|secret|app_secret|api_key|apikey|authorization|cookie|webhook_url|chat_id)$/i;
 
 function sanitizeOutput(value, key = '') {
+  if (SERVER_MANAGED_REMINDER_KEYS.has(key)) return undefined;
   if (SENSITIVE_OUTPUT_KEY.test(key)) return '<redacted>';
   if (typeof value === 'string' && /^data:image\//i.test(value.trim())) return '<redacted>';
   if (Array.isArray(value)) return value.map((item) => sanitizeOutput(item));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([childKey, childValue]) => [childKey, sanitizeOutput(childValue, childKey)]),
-    );
+    return Object.fromEntries(Object.entries(value)
+      .filter(([childKey]) => !SERVER_MANAGED_REMINDER_KEYS.has(childKey))
+      .map(([childKey, childValue]) => [childKey, sanitizeOutput(childValue, childKey)]));
   }
   return value;
 }
@@ -791,7 +790,6 @@ async function handleAuth(ctx, args) {
 async function handleTask(ctx, args) {
   const action = args[0] || 'list';
   const id = args[1];
-  const notificationID = args[2];
 
   if (action === 'list') {
     const query = buildQuery(ctx.flags, {
@@ -920,28 +918,6 @@ async function handleTask(ctx, args) {
       query: buildQuery(ctx.flags, { limit: ['limit'], cursor: ['cursor'] }),
     });
   }
-  if (action === 'notifications') {
-    if (!id) throw new CliError('missing task id');
-    return apiRequest(ctx, 'GET', `/tasks/${id}/notifications`);
-  }
-  if (action === 'reminder-update') {
-    if (!id) throw new CliError('missing task id');
-    if (!notificationID) throw new CliError('missing notification id');
-    return apiRequest(ctx, 'PATCH', `/tasks/${id}/notifications/${notificationID}`, {
-      data: { notify_at: requireValue(ctx.flags, ['notify-at'], 'notify-at') },
-      headers: buildMutationHeaders(ctx.flags, 'cli.task.reminder-update'),
-    });
-  }
-  if (action === 'reminder-delete') {
-    if (!id) throw new CliError('missing task id');
-    if (!notificationID) throw new CliError('missing notification id');
-    if (!flagEnabled(ctx.flags, ['yes']) && !flagEnabled(ctx.flags, ['dry-run'])) {
-      throw new CliError('reminder-delete requires --yes');
-    }
-    return apiRequest(ctx, 'DELETE', `/tasks/${id}/notifications/${notificationID}`, {
-      headers: buildMutationHeaders(ctx.flags, 'cli.task.reminder-delete'),
-    });
-  }
   if (['next-occurrences', 'next-instances'].includes(action)) {
     const items = await apiRequest(ctx, 'GET', '/tasks/next-occurrences', {
       query: buildQuery(ctx.flags, { from: ['from'] }),
@@ -960,13 +936,6 @@ async function handleTask(ctx, args) {
       ...body,
       items: filterTaskInstances(body.items || [], ctx.flags),
     };
-  }
-  if (['remind', 'notify', 'notification'].includes(action)) {
-    if (!id) throw new CliError('missing task id');
-    return apiRequest(ctx, 'POST', `/tasks/${id}/notifications`, {
-      data: buildNotificationPayload(ctx.flags),
-      headers: buildMutationHeaders(ctx.flags, 'cli.task.remind'),
-    });
   }
   if (action === '+today' || action === 'today') {
     return listDayTasks(ctx, 0);
@@ -1050,11 +1019,6 @@ async function handleNotify(ctx, args) {
     return apiRequest(ctx, 'POST', '/notify/test', {
       data: buildNotifySettingPayload(ctx.flags),
       headers: buildMutationHeaders(ctx.flags, 'cli.notify.test'),
-    });
-  }
-  if (['reconcile', 'rebuild-reminders'].includes(action)) {
-    return apiRequest(ctx, 'POST', '/auth/reconcile-reminders', {
-      headers: buildMutationHeaders(ctx.flags, 'cli.notify.reconcile'),
     });
   }
   throw new CliError(`unknown notify action: ${action}`);
@@ -1246,7 +1210,7 @@ Global options:
 Tips:
   Run Todo operations with the installed todo-cli binary.
   Avoid npx fallbacks for normal commands because they may run a different published version.
-  Use --help after a resource for focused help, e.g. todo-cli task --help or todo-cli notify --help.
+  Use --help after a resource for focused help, e.g. todo-cli task --help or todo-cli calendar --help.
 
 First run:
   todo-cli init --base-url https://your-todo-server.example.com
@@ -1273,10 +1237,6 @@ Tasks:
   todo-cli task pending <id>
   todo-cli task skip <id>
   todo-cli task cancel <id>
-  todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
-  todo-cli task notifications <id>
-  todo-cli task reminder-update <task-id> <reminder-id> --notify-at 2026-05-11T20:25:00+08:00
-  todo-cli task reminder-delete <task-id> <reminder-id> --yes
   todo-cli task next-occurrences --task-id <id>
   todo-cli task delete <id> --yes
   todo-cli task +today --format table
@@ -1293,11 +1253,10 @@ Calendar:
   todo-cli calendar events --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00
   todo-cli calendar +agenda --days 7 --format table
 
-Notifications:
+Delivery channels:
   todo-cli notify settings
   todo-cli notify channels
   todo-cli notify create-setting --channel ntfy --config '{"topic":"todo"}' --default=true
-  todo-cli notify reconcile
 
 Raw API:
   todo-cli api GET /tasks
@@ -1393,9 +1352,6 @@ Task fields:
   --timezone TZ                        Example: Asia/Shanghai
   --due-date YYYY-MM-DD
   --all-day=true|false
-  --remind-at-start                   Atomic reminder at the visible task start
-  --reminder-policy inherit|none|offset
-  --reminder-minutes-before N         Required for offset; 0 means at start
   --category-ids 1,2
   --recurrence-rule JSON               {"freq":"weekly","interval":1,"byday":["MO"]}
   --recurrence-end-date YYYY-MM-DD
@@ -1403,38 +1359,11 @@ Task fields:
   --if-match REVISION                  Update guard
   --client-op-id ID                    Idempotency/debug id
 
-Reminder behavior:
-  New tasks use the user's default reminder settings. Check with:
-    todo-cli auth me
-    todo-cli notify settings
-  Verify generated reminders after create with:
-    todo-cli task notifications <id>
-  Add a manual reminder with:
-    todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
-
 Recurring occurrence checks:
   If a recurring task detail is opened from calendar/today/next occurrence views, verify that instance too:
     todo-cli task next-occurrences --task-id 42
   To update just the displayed occurrence:
     todo-cli task update 42 --description-file ./daily-review.md --occurrence-date 2026-05-11 --if-match 3
-`;
-  }
-
-  if (['remind', 'notify', 'notification', 'notifications'].includes(action)) {
-    return `todo-cli task reminders - inspect or create task reminders
-
-Examples:
-  todo-cli task notifications 42
-  todo-cli task remind 42 --notify-at 2026-05-11T20:25:00+08:00
-  todo-cli task remind 42 --notify-at 2026-05-11T20:25:00+08:00 --channel ntfy --config '{"topic":"todo"}'
-  todo-cli task reminder-update 42 9 --notify-at 2026-05-11T20:20:00+08:00
-  todo-cli task reminder-delete 42 9 --yes
-
-Notes:
-  task notifications <id> lists reminders for a task.
-  task remind <id> creates a manual reminder.
-  reminder-update and reminder-delete change one manual reminder without recreating the task.
-  Without --channel/--config, the server uses the user's default notification setting.
 `;
   }
 
@@ -1475,8 +1404,6 @@ Examples:
   todo-cli task update <id> --description-file ./notes.md --if-match <revision>
   todo-cli task complete <id>
   todo-cli task schedule <id> --start-time-local "2026-05-11T14:00:00" --timezone Asia/Shanghai
-  todo-cli task remind <id> --notify-at 2026-05-11T20:25:00+08:00
-  todo-cli task notifications <id>
   todo-cli task next-occurrences --task-id <id>
   todo-cli task delete <id> --yes
 `;
@@ -1498,7 +1425,7 @@ Examples:
 Notes:
   Login stores token and user in ~/.todo-cli/config.json unless --no-save is passed.
   auth refresh exchanges the stored or TODO_TOKEN bearer token for a new token and saves it unless --no-save is passed.
-  auth me includes timezone and default reminder fields such as default_reminder_enabled and default_reminder_minutes.
+  auth me includes the account timezone used to interpret local task times.
 `;
 }
 
@@ -1534,7 +1461,7 @@ Notes:
 }
 
 function notifyHelp() {
-  return `todo-cli notify - notification settings and reminder utilities
+  return `todo-cli notify - notification delivery settings
 
 Examples:
   todo-cli notify settings
@@ -1543,14 +1470,10 @@ Examples:
   todo-cli notify create-setting --channel webhook --config '{"url":"https://example.com/hook"}'
   todo-cli notify default <setting-id>
   todo-cli notify test --channel ntfy --config '{"topic":"todo"}'
-  todo-cli notify reconcile
 
 Notes:
-  Task creation can auto-generate reminders only when the user has default reminders enabled and a default notify setting.
-  Check default reminder profile fields with:
-    todo-cli auth me
-  Check delivery settings with:
-    todo-cli notify settings
+  Delivery settings select and configure notification channels.
+  Credentials are redacted from command output.
 `;
 }
 

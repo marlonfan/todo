@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, nativeImage, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
+const { buildDeveloperMenu } = require('./menu.cjs');
 
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
@@ -320,6 +321,7 @@ function buildApplicationMenu() {
           { role: 'selectAll' },
         ],
       },
+      buildDeveloperMenu(false),
     ]);
   }
 
@@ -371,6 +373,7 @@ function buildApplicationMenu() {
         { role: 'selectAll' },
       ],
     },
+    buildDeveloperMenu(true),
     {
       label: '窗口',
       submenu: [
@@ -520,6 +523,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
+      devTools: true,
       nodeIntegration: false,
       sandbox: false,
     },

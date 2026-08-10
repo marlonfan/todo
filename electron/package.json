@@ -6,6 +6,7 @@
   "author": "marlon",
   "main": "main.cjs",
   "scripts": {
+    "test": "node --test --test-concurrency=1 ./*.test.cjs",
     "dev": "node ./scripts/dev.mjs",
     "start": "electron .",
     "build": "node ./scripts/build.mjs && electron-builder",
@@ -36,6 +37,7 @@
     ],
     "files": [
       "main.cjs",
+      "menu.cjs",
       "preload.cjs",
       "package.json"
     ],

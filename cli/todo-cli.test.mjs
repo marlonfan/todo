@@ -96,7 +96,7 @@ test('HTTP errors are redacted before they reach stderr', async () => {
   });
 });
 
-test('task create can request one atomic reminder at the visible start time', async () => {
+test('timed task creation submits only task time and hides server-managed scheduling fields', async () => {
   await withFixtureServer(async (req, res) => {
     assert.equal(req.method, 'POST');
     assert.equal(req.url, '/api/tasks');
@@ -105,65 +105,58 @@ test('task create can request one atomic reminder at the visible start time', as
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     assert.equal(body.start_time_local, '2026-08-04T20:37:00');
     assert.equal(body.client_timezone, 'Asia/Shanghai');
-    assert.equal(body.reminder_policy, 'offset');
-    assert.equal(body.reminder_minutes_before, 0);
+    assert.equal('reminder_policy' in body, false);
+    assert.equal('reminder_minutes_before' in body, false);
     assert.equal(req.headers['x-client-op-id'], 'at-start-op');
     res.statusCode = 201;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ id: 61, title: body.title, ...body, reminder_summary: [] }));
+    res.end(JSON.stringify({
+      id: 61,
+      title: body.title,
+      ...body,
+      reminder_policy: 'inherit',
+      reminder_minutes_before: null,
+      reminder_summary: [{ id: 9, notify_at: '2026-08-04T20:32:00+08:00' }],
+    }));
   }, async (baseUrl) => {
-    await runCLI(baseUrl, [
+    const { stdout } = await runCLI(baseUrl, [
       'task', 'create',
       '--title', '打熊',
       '--start-time-local', '2026-08-04T20:37:00',
       '--timezone', 'Asia/Shanghai',
-      '--remind-at-start',
       '--client-op-id', 'at-start-op',
     ]);
+    assert.match(stdout, /2026-08-04T20:37:00/);
+    assert.doesNotMatch(stdout, /reminder|notify_at|20:32/);
   });
 });
 
-test('task reminder update and delete use item endpoints', async () => {
-  const requests = [];
-  await withFixtureServer(async (req, res) => {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    requests.push({ method: req.method, url: req.url, body: Buffer.concat(chunks).toString('utf8') });
-    res.statusCode = req.method === 'DELETE' ? 204 : 200;
-    if (req.method !== 'DELETE') {
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ id: 9, task_id: 42, notify_at: '2026-08-04T20:07:00+08:00' }));
-    } else {
-      res.end();
-    }
+test('retired task reminder flags fail instead of being silently ignored', async () => {
+  await withFixtureServer((_req, res) => {
+    res.statusCode = 500;
+    res.end();
   }, async (baseUrl) => {
-    await runCLI(baseUrl, [
-      'task', 'reminder-update', '42', '9',
-      '--notify-at', '2026-08-04T20:07:00+08:00',
-      '--client-op-id', 'update-reminder-op',
-    ]);
-    await runCLI(baseUrl, [
-      'task', 'reminder-delete', '42', '9', '--yes',
-      '--client-op-id', 'delete-reminder-op',
-    ]);
+    await assert.rejects(
+      runCLI(baseUrl, [
+        'task', 'create',
+        '--title', '打熊',
+        '--start-time-local', '2026-08-04T20:37:00',
+        '--remind-at-start',
+      ]),
+      /--remind-at-start is no longer supported; set the task time/,
+    );
   });
-
-  assert.deepEqual(requests.map(({ method, url }) => ({ method, url })), [
-    { method: 'PATCH', url: '/api/tasks/42/notifications/9' },
-    { method: 'DELETE', url: '/api/tasks/42/notifications/9' },
-  ]);
-  assert.equal(JSON.parse(requests[0].body).notify_at, '2026-08-04T20:07:00+08:00');
 });
 
 test('version and skill doctor report matching bundled versions', async () => {
   const versionResult = await runLocalCLI(['--version']);
-  assert.equal(versionResult.stdout.trim(), '0.2.0');
+  assert.equal(versionResult.stdout.trim(), '0.3.0');
 
   const doctorResult = await runLocalCLI(['skill', 'doctor']);
   const report = JSON.parse(doctorResult.stdout);
   assert.equal(report.ok, true);
-  assert.equal(report.cli_version, '0.2.0');
-  assert.equal(report.skill_version, '0.2.0');
+  assert.equal(report.cli_version, '0.3.0');
+  assert.equal(report.skill_version, '0.3.0');
   assert.equal(report.version_match, true);
 });
 

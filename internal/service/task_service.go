@@ -1065,6 +1065,25 @@ func (s *TaskService) resolveUserTimezone(userID int64) string {
 	return user.Timezone
 }
 
+func (s *TaskService) hasDeliveredAutoReminderAt(taskID int64, notifyAt time.Time) (bool, error) {
+	notifications, err := s.notifyRepo.GetByTask(taskID)
+	if err != nil {
+		return false, err
+	}
+	for _, notification := range notifications {
+		if notification.Source != models.NotificationSourceDefaultAuto {
+			continue
+		}
+		if notification.Status != models.NotifyStatusSent || notification.SentAt == nil {
+			continue
+		}
+		if notification.NotifyAt.UTC().Equal(notifyAt.UTC()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	if task == nil {
 		return nil
@@ -1106,17 +1125,6 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 		return nil
 	}
 
-	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) && !explicitReminder {
-			return nil
-		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("no default notification setting for explicit reminder")
-		}
-		return err
-	}
-
 	minutes := user.DefaultReminderMinutes
 	if explicitReminder && task.ReminderMinutesBefore != nil {
 		minutes = *task.ReminderMinutesBefore
@@ -1133,9 +1141,27 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	notifyAt := resolvedStart.Add(-time.Duration(minutes) * time.Minute)
 	if !notifyAt.After(now) {
 		if explicitReminder {
+			delivered, err := s.hasDeliveredAutoReminderAt(task.ID, notifyAt)
+			if err != nil {
+				return err
+			}
+			if delivered {
+				return nil
+			}
 			return errors.New("explicit reminder time must be in the future")
 		}
 		return nil
+	}
+
+	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) && !explicitReminder {
+			return nil
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("no default notification setting for explicit reminder")
+		}
+		return err
 	}
 
 	notification := &models.Notification{

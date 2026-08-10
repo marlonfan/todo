@@ -112,6 +112,113 @@ func TestCreateTaskWithAtStartReminderIsAtomicAndVisible(t *testing.T) {
 	}
 }
 
+func TestEditAfterAtStartReminderWasSentDoesNotRejectPastTime(t *testing.T) {
+	router, db := setupE2ERouterWithDB(t)
+	token, user := registerAndLoginReminderUser(t, router)
+	setting := models.UserNotifySetting{
+		UserID:    user.ID,
+		Channel:   models.NotifyChannelTelegram,
+		Config:    models.NotifyConfigMap{"bot_token": "telegram-secret", "chat_id": "private-chat"},
+		IsDefault: true,
+	}
+	if err := db.Create(&setting).Error; err != nil {
+		t.Fatalf("create notify setting: %v", err)
+	}
+
+	future := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	createResp := doJSON(t, router, http.MethodPost, "/api/tasks", token, map[string]any{
+		"title":                   "Created before reminder",
+		"start_time":              future.Format(time.RFC3339),
+		"reminder_policy":         "offset",
+		"reminder_minutes_before": 0,
+	}, map[string]string{"X-Client-Op-Id": "create-before-reminder"})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	created := decodeJSON[models.Task](t, createResp)
+
+	past := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	sentAt := past.Add(7 * time.Second)
+	if err := db.Model(&models.Task{}).Where("id = ?", created.ID).Update("start_time", past).Error; err != nil {
+		t.Fatalf("move task to sent reminder time: %v", err)
+	}
+	if err := db.Model(&models.Notification{}).
+		Where("task_id = ? AND source = ?", created.ID, models.NotificationSourceDefaultAuto).
+		Updates(map[string]any{
+			"notify_at":     past,
+			"status":        models.NotifyStatusSent,
+			"sent_at":       sentAt,
+			"next_retry_at": nil,
+		}).Error; err != nil {
+		t.Fatalf("mark reminder sent: %v", err)
+	}
+
+	updateResp := doJSON(t, router, http.MethodPut, "/api/tasks/"+strconv.FormatInt(created.ID, 10), token, map[string]any{
+		"title":           "Edited after reminder",
+		"description":     "The reminder time was not changed.",
+		"priority":        1,
+		"status":          "pending",
+		"client_timezone": "UTC",
+		"category_ids":    []int64{},
+		"recurrence_rule": nil,
+	}, map[string]string{
+		"If-Match":               strconv.FormatInt(created.Revision, 10),
+		"X-Client-Op-Id":         "edit-after-reminder",
+		"X-Client-Submit-Source": "manual",
+	})
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want 200 body=%s", updateResp.Code, updateResp.Body.String())
+	}
+	updated := decodeJSON[models.Task](t, updateResp)
+	if updated.Title != "Edited after reminder" || updated.Revision != created.Revision+1 {
+		t.Fatalf("updated task = title %q revision %d", updated.Title, updated.Revision)
+	}
+}
+
+func TestCreateTaskWithoutReminderFieldsUsesAccountDefaults(t *testing.T) {
+	router, db := setupE2ERouterWithDB(t)
+	token, user := registerAndLoginReminderUser(t, router)
+
+	if err := db.Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"default_reminder_enabled": true,
+		"default_reminder_minutes": 15,
+	}).Error; err != nil {
+		t.Fatalf("enable default reminders: %v", err)
+	}
+	setting := models.UserNotifySetting{
+		UserID:    user.ID,
+		Channel:   models.NotifyChannelTelegram,
+		Config:    models.NotifyConfigMap{"bot_token": "telegram-secret", "chat_id": "private-chat"},
+		IsDefault: true,
+	}
+	if err := db.Create(&setting).Error; err != nil {
+		t.Fatalf("create notify setting: %v", err)
+	}
+
+	start := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	createResp := doJSON(t, router, http.MethodPost, "/api/tasks", token, map[string]any{
+		"title":      "Server-managed reminder",
+		"start_time": start.Format(time.RFC3339),
+	}, map[string]string{"X-Client-Op-Id": "account-default-reminder"})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	created := decodeJSON[struct {
+		models.Task
+		ReminderSummary []models.NotificationResponse `json:"reminder_summary"`
+	}](t, createResp)
+	if created.ReminderPolicy != models.TaskReminderInherit || created.ReminderMinutesBefore != nil {
+		t.Fatalf("reminder policy = %q minutes=%v, want inherit with no task override", created.ReminderPolicy, created.ReminderMinutesBefore)
+	}
+	if len(created.ReminderSummary) != 1 {
+		t.Fatalf("reminder_summary = %#v, want one reminder", created.ReminderSummary)
+	}
+	wantNotifyAt := start.Add(-15 * time.Minute)
+	if !created.ReminderSummary[0].NotifyAt.Equal(wantNotifyAt) || created.ReminderSummary[0].Source != models.NotificationSourceDefaultAuto {
+		t.Fatalf("reminder = %#v, want default_auto at %v", created.ReminderSummary[0], wantNotifyAt)
+	}
+}
+
 func TestExplicitReminderCreationRollsBackWithoutDeliverySetting(t *testing.T) {
 	router, db := setupE2ERouterWithDB(t)
 	token, user := registerAndLoginReminderUser(t, router)

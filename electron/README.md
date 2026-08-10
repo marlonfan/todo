@@ -12,6 +12,23 @@ Electron desktop shell for the Todo app.
 - Hash routing for desktop builds loaded from `file://`.
 - Reuses the existing React frontend in `web/`.
 - Bundles its own icon assets in `electron/icons/`.
+- Keeps Chromium Developer Tools available in packaged builds for production diagnostics.
+
+## Production Diagnostics
+
+Open Developer Tools from the `开发` / `Developer` application menu. The shortcut is
+`Option+Command+I` on macOS and `Control+Shift+I` on Windows and Linux.
+
+To inspect task sync conflicts, enable the sync trace in the Console before reproducing the edit:
+
+```js
+window.__TODO_SYNC_DEBUG__ = true;
+window.addEventListener('sync:trace', (event) => console.log('[sync:trace]', event.detail));
+```
+
+In the Network panel, compare the failed task request's `If-Match` header with the `latest.revision`
+field in its `409` response. A lower `If-Match` value confirms that the local edit used a stale task
+revision.
 
 ## Development
 

@@ -37,7 +37,13 @@ import {
   sanitizeConflictPayload,
 } from './syncPayload.js';
 import { isPayloadAlreadyAppliedOnLatest } from './conflictApplyCheck.js';
+import { getRejectedMutationTaskPatch } from './outboxFailure.js';
 import { pushSyncConflict } from '../state/syncConflictCenter';
+import {
+  clearSyncFailures,
+  pushSyncFailure,
+  removeSyncFailureForTask,
+} from '../state/syncFailureCenter';
 import { logTimeDebug } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 import {
@@ -412,6 +418,7 @@ async function applyOutboxMutationResult(op, res) {
   if (shouldRefreshViewsAfterOutboxMutation(op)) {
     await refreshOccurrenceScopedViews(op?.entity_id);
   }
+  removeSyncFailureForTask(op?.entity_id);
 }
 
 async function executeTaskMutationOperation(op, request) {
@@ -548,7 +555,12 @@ async function handleOutboxFailure(op, error) {
 
   if (status && status >= 400 && status < 500 && status !== 429) {
     await removeOutbox(op.op_id);
-    await patchTaskSyncState(op.entity_id, { sync_state: 'error', last_error: message });
+    await patchTaskSyncState(op.entity_id, getRejectedMutationTaskPatch(op, message));
+    pushSyncFailure({
+      task_id: op.entity_id,
+      task_title: op?.payload?.title || '',
+      message,
+    });
     emitSyncTrace('outbox_failed_non_retryable', {
       op_id: op.op_id,
       op_type: op.op_type,
@@ -1097,6 +1109,7 @@ export async function clearAuthenticatedLocalState(queryClient = queryClientRef)
   await waitForIdle().catch(() => {});
   await safeLocalCall(() => clearAllLocalData(), null, 'clearAllLocalData:logout');
   inFlightOutboxOpIDs.clear();
+  clearSyncFailures();
   useCalendarCacheStore.getState().clear();
   queryClient?.clear();
 }

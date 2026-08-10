@@ -45,6 +45,12 @@ import { formatDateTime, getUserTimezone } from '../utils/time';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 import { clearAuthenticatedLocalState } from '../data/syncEngine';
 import { clearSyncConflicts } from '../state/syncConflictCenter';
+import {
+  clearSyncFailures,
+  getSyncFailures,
+  removeSyncFailure,
+  subscribeSyncFailures,
+} from '../state/syncFailureCenter';
 
 const CalendarView = lazy(() => import('./CalendarView'));
 const TaskList = lazy(() => import('./TaskList'));
@@ -364,6 +370,7 @@ function MainLayout({ user, setUser }) {
   const [searchDialog, setSearchDialog] = useState({ open: false, query: '' });
   const [settingsOpen, setSettingsOpen] = useState(location.pathname === '/settings');
   const [syncConflicts, setSyncConflicts] = useState(() => getSyncConflicts());
+  const [syncFailures, setSyncFailures] = useState(() => getSyncFailures());
   const [resolveConflictID, setResolveConflictID] = useState(0);
   const [resolveSelections, setResolveSelections] = useState({});
   const [resolvingConflict, setResolvingConflict] = useState(false);
@@ -430,6 +437,10 @@ function MainLayout({ user, setUser }) {
     setSyncConflicts(next);
   }), []);
 
+  useEffect(() => subscribeSyncFailures((next) => {
+    setSyncFailures(next);
+  }), []);
+
   useEffect(() => {
     setMobileMenuOpen(false);
     if (location.pathname === '/settings') {
@@ -486,6 +497,7 @@ function MainLayout({ user, setUser }) {
     localStorage.removeItem('user');
     await clearAuthenticatedLocalState(queryClient);
     clearSyncConflicts();
+    clearSyncFailures();
     setUser(null);
   };
 
@@ -685,6 +697,7 @@ function MainLayout({ user, setUser }) {
   const focusMonthLabel = focusNow.toLocaleDateString(undefined, { month: 'short' });
   const focusWeekday = focusNow.toLocaleDateString(undefined, { weekday: 'long' });
   const activeSyncConflict = syncConflicts[0] || null;
+  const activeSyncFailure = syncFailures[0] || null;
   const syncConflictMoreCount = Math.max(0, syncConflicts.length - 1);
   const resolvingConflictItem = syncConflicts.find(
     (item) => Number(item?.id || 0) === Number(resolveConflictID || 0)
@@ -725,6 +738,18 @@ function MainLayout({ user, setUser }) {
       setResolveConflictError('');
     }
   }, [activeSyncConflict, resolveConflictID]);
+
+  const handleDismissSyncFailure = useCallback(() => {
+    if (!activeSyncFailure?.id) return;
+    removeSyncFailure(activeSyncFailure.id);
+  }, [activeSyncFailure]);
+
+  const handleEditSyncFailure = useCallback(() => {
+    if (!activeSyncFailure?.id) return;
+    const taskID = Number.parseInt(activeSyncFailure.task_id, 10) || 0;
+    removeSyncFailure(activeSyncFailure.id);
+    navigate(taskID > 0 ? `/tasks?view=all&task_id=${taskID}` : '/tasks?view=all');
+  }, [activeSyncFailure, navigate]);
 
   const handleEditSyncConflict = useCallback((conflict = activeSyncConflict) => {
     if (!conflict?.id) return;
@@ -902,6 +927,38 @@ function MainLayout({ user, setUser }) {
               className="inline-flex h-8 items-center justify-center rounded-md border border-[hsl(var(--accent-energy)/0.7)] bg-[hsl(var(--accent-energy))] px-2.5 text-xs font-medium text-white hover:bg-[hsl(var(--accent-energy)/0.8)]"
             >
               {syncConflictMoreCount > 0 ? t('task.syncConflictViewAll') : t('task.syncConflictResolve')}
+            </button>
+          </div>
+        </div>
+      )}
+      {activeSyncFailure && (
+        <div
+          role="alert"
+          className="fixed bottom-16 right-2 z-50 w-[min(24rem,calc(100vw-1rem))] rounded-lg border border-destructive/35 bg-card p-3 shadow-lg md:bottom-4 md:right-4"
+        >
+          <div className="text-xs font-semibold text-destructive">{t('task.syncFailureTitle')}</div>
+          <div className="mt-1 text-xs leading-relaxed text-foreground">
+            {activeSyncFailure.task_title
+              ? t('task.syncFailureHint', {
+                  title: activeSyncFailure.task_title,
+                  message: activeSyncFailure.message,
+                })
+              : activeSyncFailure.message}
+          </div>
+          <div className="mt-2 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleDismissSyncFailure}
+              className="inline-flex h-8 items-center justify-center rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground hover:bg-muted"
+            >
+              {t('task.syncConflictDismiss')}
+            </button>
+            <button
+              type="button"
+              onClick={handleEditSyncFailure}
+              className="inline-flex h-8 items-center justify-center rounded-md bg-destructive px-2.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+            >
+              {t('task.syncFailureEdit')}
             </button>
           </div>
         </div>

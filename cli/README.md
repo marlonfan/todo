@@ -181,10 +181,6 @@ todo-cli task pending 42
 todo-cli task skip 42
 todo-cli task cancel 42
 todo-cli task schedule 42 --start-time-local "2026-05-11T09:00:00" --timezone Asia/Shanghai
-todo-cli task remind 42 --notify-at "2026-05-11T20:25:00+08:00"
-todo-cli task notifications 42
-todo-cli task reminder-update 42 9 --notify-at "2026-05-11T20:20:00+08:00"
-todo-cli task reminder-delete 42 9 --yes
 todo-cli task next-occurrences --task-id 42
 todo-cli task delete 42 --yes
 ```
@@ -206,9 +202,6 @@ Useful task flags:
 - `--occurrence-date YYYY-MM-DD` for updating one recurring occurrence
 - `--if-match REVISION`
 - `--client-op-id ID`
-- `--remind-at-start`
-- `--reminder-policy inherit|none|offset`
-- `--reminder-minutes-before N`
 
 Workday recurrence example:
 
@@ -222,33 +215,18 @@ todo-cli task create \
   --recurrence-rule '{"freq":"weekly","interval":1,"byday":["MO","TU","WE","TH","FR"]}'
 ```
 
-Automatic reminders are created only when the user has default reminders enabled and a default notification setting.
-Check and verify with:
-
-```bash
-todo-cli auth me
-todo-cli notify settings
-todo-cli task notifications 42
-```
-
-Use a manual reminder when you need an exact notification time:
-
-```bash
-todo-cli task remind 42 --notify-at "2026-05-11T20:30:00+08:00"
-```
-
-For “20:37 提醒我打熊”, keep 20:37 as the visible task time and request one atomic at-start reminder:
+For “20:37 提醒我打熊”, create a task whose visible start time is 20:37:
 
 ```bash
 todo-cli task create \
   --title "打熊" \
   --start-time-local "2026-08-04T20:37:00" \
   --timezone Asia/Shanghai \
-  --remind-at-start \
   --client-op-id STABLE_UUID
 ```
 
-Default JSON/table/NDJSON output recursively redacts credentials, channel configs, chat IDs, webhook URLs, tokens, passwords, cookies, and avatar Data URLs. Notification read APIs also return safe projections rather than stored delivery configs.
+The CLI submits task time only. The server applies the user's account defaults without exposing scheduling details in normal CLI output.
+Default JSON/table/NDJSON output also recursively redacts credentials, channel configs, chat IDs, webhook URLs, tokens, passwords, cookies, and avatar Data URLs.
 
 For recurring tasks, `task get 42` reads the series task. If the UI detail was opened from a
 calendar/today occurrence, also verify that instance:
@@ -306,7 +284,7 @@ todo-cli calendar events \
   --format table
 ```
 
-### Notifications
+### Delivery Channels
 
 ```bash
 todo-cli notify settings
@@ -314,7 +292,6 @@ todo-cli notify channels
 todo-cli notify create-setting --channel ntfy --config '{"topic":"todo"}' --default=true
 todo-cli notify default 1
 todo-cli notify test --channel ntfy --config '{"topic":"todo"}'
-todo-cli notify reconcile
 ```
 
 ### Raw API
