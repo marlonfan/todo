@@ -84,6 +84,7 @@ import {
 } from './taskListOverdue';
 import { isTaskUnsyncedLocally } from './taskListRecurringVisibility';
 import { resolveTaskListSelection } from './taskListSelection';
+import { getTaskCompletionStageDelay } from './taskCompletionMotion.js';
 import {
   buildNextPendingFromProjectedTask,
   hasOptimisticOccurrenceStatusForTask,
@@ -123,7 +124,7 @@ import {
   OCCURRENCE_STATUS_OPTIMISTIC_TTL_MS,
   PINNED_NEXT_OCCURRENCE_TTL_MS,
   TASK_ROW_COMPLETE_FEEDBACK_MS,
-  TASK_ROW_COMPLETE_EXIT_MS,
+  TASK_ROW_COMPLETE_CLEANUP_BUFFER_MS,
   RECURRING_SEARCH_STATUSES,
   DELETE_DIALOG_KIND_RECURRING_CHOICE,
   DELETE_DIALOG_KIND_RECURRING_SERIES,
@@ -1711,12 +1712,17 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, []);
 
   const stageTaskCompletion = useCallback((rowRenderKey, commit) => {
-    scheduleTaskRowAnimation(rowRenderKey, 'complete-exit', TASK_ROW_COMPLETE_EXIT_MS + 80);
+    const stageDelay = getTaskCompletionStageDelay();
     const runCommit = () => {
       void Promise.resolve()
         .then(commit)
         .catch((error) => console.error('Failed to update task status:', error));
     };
+    if (stageDelay === 0) {
+      runCommit();
+      return;
+    }
+    scheduleTaskRowAnimation(rowRenderKey, 'complete-exit', stageDelay + TASK_ROW_COMPLETE_CLEANUP_BUFFER_MS);
     if (typeof window === 'undefined') {
       runCommit();
       return;
@@ -1724,7 +1730,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const timerID = window.setTimeout(() => {
       taskCompleteStageTimersRef.current.delete(timerID);
       runCommit();
-    }, TASK_ROW_COMPLETE_EXIT_MS);
+    }, stageDelay);
     taskCompleteStageTimersRef.current.add(timerID);
   }, [scheduleTaskRowAnimation]);
 

@@ -4650,6 +4650,8 @@ html.todo-electron.todo-authenticated-layout:has(:is(
 .task-row-animate-complete-exit {
   overflow: hidden;
   pointer-events: none;
+  transform-origin: center top;
+  will-change: opacity, transform;
   animation: task-row-complete-exit 0.14s ease-in both;
 }
 
@@ -4687,22 +4689,16 @@ html.todo-electron.todo-authenticated-layout:has(:is(
 
 @keyframes task-row-complete-exit {
   0% {
-    max-height: 4.75rem;
     opacity: 1;
-    background-color: hsl(var(--muted));
+    transform: translate3d(0, 0, 0);
   }
   45% {
-    max-height: 4.75rem;
     opacity: 0.58;
-    background-color: hsl(var(--muted));
+    transform: translate3d(0, -1px, 0);
   }
   100% {
-    max-height: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-    border-bottom-width: 0;
     opacity: 0;
-    background-color: hsl(var(--muted));
+    transform: translate3d(0, -5px, 0);
   }
 }
 
