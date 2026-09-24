@@ -116,7 +116,11 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    if (error.response?.status === 401 && !originalRequest._retried) {
+    if (error.response?.status === 401 && originalRequest?._retried) {
+      clearAuthAndRedirect();
+      return Promise.reject(error);
+    }
+    if (error.response?.status === 401 && originalRequest) {
       originalRequest._retried = true;
 
       if (isRefreshing) {
@@ -135,10 +139,12 @@ apiClient.interceptors.response.use(
         resolveRefreshQueue(newToken);
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
         return apiClient(originalRequest);
-      } catch {
-        rejectRefreshQueue(error);
-        clearAuthAndRedirect();
-        return Promise.reject(error);
+      } catch (refreshError) {
+        rejectRefreshQueue(refreshError);
+        if (refreshError.response?.status === 401) {
+          clearAuthAndRedirect();
+        }
+        return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
       }

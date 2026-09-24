@@ -44,6 +44,7 @@ function App() {
   const { t } = useTranslation();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authUnavailable, setAuthUnavailable] = useState(false);
 
   useLayoutEffect(() => {
     document.documentElement.classList.toggle('todo-authenticated-layout', Boolean(user));
@@ -52,10 +53,11 @@ function App() {
 
   useEffect(() => {
     tokenReady.then(() => {
+      let cachedUser = null;
       try {
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
-        if (user.timezone) {
-          setUserTimezone(user.timezone, false);
+        cachedUser = JSON.parse(localStorage.getItem('user') || 'null');
+        if (cachedUser?.timezone) {
+          setUserTimezone(cachedUser.timezone, false);
         }
       } catch {
         // ignore invalid cached user data
@@ -71,10 +73,13 @@ function App() {
               setUserTimezone(res.data.timezone, false);
             }
           })
-          .catch(async () => {
-            getTokenStore().remove();
-            localStorage.removeItem('user');
-            await clearAuthenticatedLocalState(queryClient);
+          .catch(() => {
+            if (!getToken()) return;
+            if (cachedUser?.id) {
+              setUser(cachedUser);
+            } else {
+              setAuthUnavailable(true);
+            }
           })
           .finally(() => setLoading(false));
       } else {
@@ -108,6 +113,17 @@ function App() {
 
   if (loading) {
     return <AppLoadingSkeleton />;
+  }
+
+  if (authUnavailable) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+        <p>{t('common.reloadPageHint')}</p>
+        <button className="btn-primary" onClick={() => window.location.reload()}>
+          {t('common.tryAgain')}
+        </button>
+      </div>
+    );
   }
 
   return (
