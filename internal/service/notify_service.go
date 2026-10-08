@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
+	"sync"
 	"time"
 	"todo-app/internal/models"
 	"todo-app/internal/notify"
@@ -18,6 +18,8 @@ const processingLockTTL = 15 * time.Minute
 const pendingBatchLimit = 200
 const dedupeWindow = 10 * time.Minute
 const maxRetryDelay = 30 * time.Minute
+const maxDeliveryAttempts = 12
+const notificationWorkers = 6
 
 type NotifyService struct {
 	notifyRepo *repository.NotificationRepository
@@ -47,6 +49,9 @@ func buildDedupeKey(taskID int64, source models.NotificationSource, notifyAt tim
 func nextRetryDelay(retryCount int) time.Duration {
 	if retryCount < 0 {
 		retryCount = 0
+	}
+	if retryCount >= 5 {
+		return maxRetryDelay
 	}
 	delay := time.Minute * time.Duration(1<<retryCount)
 	if delay > maxRetryDelay {
@@ -277,93 +282,153 @@ func (s *NotifyService) TestNotification(userID int64, req *models.TestNotificat
 	return notifier.Send(context.Background(), userID, req.Config, msg)
 }
 
-func (s *NotifyService) ProcessPendingNotifications() error {
+// ProcessPendingNotifications bounds both the batch and the number of active sends.
+// A worker claims a row only when it is ready to deliver it.
+func (s *NotifyService) ProcessPendingNotifications(ctx context.Context) error {
+	scoped := *s
+	scoped.notifyRepo = s.notifyRepo.WithContext(ctx)
 	now := time.Now().UTC()
-	processingStaleBefore := now.Add(-processingLockTTL)
-	notifications, err := s.notifyRepo.GetPendingNotifications(now, processingStaleBefore, pendingBatchLimit)
+	stale := now.Add(-processingLockTTL)
+	notifications, err := scoped.notifyRepo.GetPendingNotifications(now, stale, pendingBatchLimit)
 	if err != nil {
 		return err
 	}
-
+	// Serialize equal dedupe keys within this batch while unrelated reminders
+	// still use the worker pool.
+	groups := make([][]models.Notification, 0, len(notifications))
+	groupByKey := make(map[string]int)
 	for _, n := range notifications {
-		if n.Task == nil {
-			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
-			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, "task not found")
-			continue
-		}
-		claimed, err := s.notifyRepo.TryMarkProcessing(n.ID, processingStaleBefore)
-		if err != nil {
-			log.Printf("Failed to mark notification %d as processing: %v", n.ID, err)
-			continue
-		}
-		if !claimed {
-			continue
-		}
-
-		deliverChannel, deliverConfig, err := s.resolveDeliveryTarget(&n, n.Task.UserID)
-		if err != nil {
-			log.Printf("Failed to resolve delivery target for notification %d: %v", n.ID, err)
-			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
-			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
-			continue
-		}
-
-		notifier, ok := s.registry.Get(string(deliverChannel))
-		if !ok {
-			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
-			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, "unsupported channel")
-			continue
-		}
-		if err := notifier.ValidateConfig(deliverConfig); err != nil {
-			retryAt := time.Now().UTC().Add(nextRetryDelay(n.RetryCount))
-			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
-			continue
-		}
-
-		recentSent, err := s.notifyRepo.HasRecentSentByDedupeKey(n.DedupeKey, time.Now().UTC().Add(-dedupeWindow))
-		if err != nil {
-			log.Printf("Failed to check dedupe for notification %d: %v", n.ID, err)
-		}
-		if recentSent {
-			markAt := time.Now().UTC()
-			_ = s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusSent, &markAt, "dedupe_suppressed")
-			continue
-		}
-
-		msg := &notify.Message{
-			TaskID:      n.TaskID,
-			Title:       n.Task.Title,
-			Description: n.Task.Description,
-			NotifyAt:    &n.NotifyAt,
-			UserID:      n.Task.UserID,
-			Timezone:    s.resolveUserTimezone(n.Task.UserID, n.Task.User),
-		}
-
-		if n.Task.DueDate != nil {
-			msg.DueDate = n.Task.DueDate
-		} else if n.Task.StartTime != nil {
-			msg.DueDate = n.Task.StartTime
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if deliverConfig == nil {
-			deliverConfig = models.NotifyConfigMap{}
-		}
-		deliverConfig["idempotency_key"] = n.DedupeKey
-		err = notifier.Send(ctx, n.Task.UserID, deliverConfig, msg)
-		cancel()
-
-		now := time.Now().UTC()
-		if err != nil {
-			log.Printf("Failed to send notification %d: %v", n.ID, err)
-			retryAt := now.Add(nextRetryDelay(n.RetryCount))
-			_ = s.notifyRepo.MarkFailedRetry(n.ID, retryAt, err.Error())
+		if index, ok := groupByKey[n.DedupeKey]; n.DedupeKey != "" && ok {
+			groups[index] = append(groups[index], n)
 		} else {
-			_ = s.notifyRepo.UpdateStatus(n.ID, models.NotifyStatusSent, &now, "")
+			if n.DedupeKey != "" {
+				groupByKey[n.DedupeKey] = len(groups)
+			}
+			groups = append(groups, []models.Notification{n})
 		}
 	}
+	jobs := make(chan []models.Notification)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var failures []error
+	for i := 0; i < notificationWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for group := range jobs {
+				for _, n := range group {
+					if ctx.Err() != nil {
+						continue
+					}
+					if err := scoped.processNotification(ctx, n, stale); err != nil {
+						mu.Lock()
+						failures = append(failures, err)
+						mu.Unlock()
+					}
+				}
+			}
+		}()
+	}
+feed:
+	for _, group := range groups {
+		select {
+		case <-ctx.Done():
+			break feed
+		case jobs <- group:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return errors.Join(append(failures, ctx.Err())...)
+}
 
-	return nil
+func (s *NotifyService) markDeliveryFailure(n models.Notification, err error) error {
+	if n.RetryCount >= maxDeliveryAttempts-1 {
+		return s.notifyRepo.MarkAbandoned(n.ID, err.Error())
+	}
+	return s.notifyRepo.MarkFailedRetry(n.ID, time.Now().UTC().Add(nextRetryDelay(n.RetryCount)), err.Error())
+}
+
+func (s *NotifyService) processNotification(ctx context.Context, n models.Notification, stale time.Time) (result error) {
+	claimed, err := s.notifyRepo.TryMarkProcessing(n.ID, stale)
+	if err != nil || !claimed {
+		return err
+	}
+	// Cleanup remains possible after the parent deadline. Canceled sends do not
+	// consume the delivery retry budget; successful sends are persisted as sent.
+	persist := func(fn func(*repository.NotificationRepository) error) error {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancelCleanup()
+		return fn(s.notifyRepo.WithContext(cleanupCtx))
+	}
+	defer func() {
+		if ctx.Err() != nil && result != nil {
+			result = errors.Join(result, persist(func(r *repository.NotificationRepository) error { return r.ReleaseProcessing(n.ID) }))
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if n.RetryCount >= maxDeliveryAttempts {
+		return persist(func(r *repository.NotificationRepository) error {
+			return r.MarkAbandoned(n.ID, "delivery attempts exhausted")
+		})
+	}
+	fail := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return persist(func(r *repository.NotificationRepository) error {
+			scoped := *s
+			scoped.notifyRepo = r
+			return scoped.markDeliveryFailure(n, err)
+		})
+	}
+	if n.Task == nil {
+		return fail(errors.New("task not found"))
+	}
+	channel, config, err := s.resolveDeliveryTarget(&n, n.Task.UserID)
+	if err != nil {
+		return fail(err)
+	}
+	notifier, ok := s.registry.Get(string(channel))
+	if !ok {
+		return fail(errors.New("unsupported channel"))
+	}
+	if err := notifier.ValidateConfig(config); err != nil {
+		return fail(err)
+	}
+	recent, err := s.notifyRepo.HasRecentSentByDedupeKey(n.DedupeKey, time.Now().UTC().Add(-dedupeWindow))
+	if err != nil {
+		return fail(err)
+	}
+	now := time.Now().UTC()
+	if recent {
+		return persist(func(r *repository.NotificationRepository) error {
+			return r.UpdateStatus(n.ID, models.NotifyStatusSent, &now, "dedupe_suppressed")
+		})
+	}
+	msg := &notify.Message{TaskID: n.TaskID, Title: n.Task.Title, Description: n.Task.Description,
+		NotifyAt: &n.NotifyAt, UserID: n.Task.UserID, Timezone: s.resolveUserTimezone(n.Task.UserID, n.Task.User)}
+	if n.Task.DueDate != nil {
+		msg.DueDate = n.Task.DueDate
+	} else {
+		msg.DueDate = n.Task.StartTime
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	if config == nil {
+		config = models.NotifyConfigMap{}
+	}
+	config["idempotency_key"] = n.DedupeKey
+	err = notifier.Send(sendCtx, n.Task.UserID, config, msg)
+	cancel()
+	if err != nil {
+		return fail(err)
+	}
+	now = time.Now().UTC()
+	return persist(func(r *repository.NotificationRepository) error {
+		return r.UpdateStatus(n.ID, models.NotifyStatusSent, &now, "")
+	})
 }
 
 func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Task, from time.Time) (*time.Time, error) {
@@ -501,6 +566,19 @@ func (s *NotifyService) DeleteNotification(notificationID int64) error {
 }
 
 func (s *NotifyService) ReconcileUserReminders(userID int64) error {
+	return s.taskRepo.WithTransaction(func(tx *gorm.DB) error {
+		if err := repository.LockTaskUser(tx, userID); err != nil {
+			return err
+		}
+		scoped := *s
+		scoped.taskRepo = repository.NewTaskRepository(tx)
+		scoped.notifyRepo = repository.NewNotificationRepository(tx)
+		scoped.userRepo = repository.NewUserRepository(tx)
+		return scoped.reconcileUserRemindersInTransaction(userID)
+	})
+}
+
+func (s *NotifyService) reconcileUserRemindersInTransaction(userID int64) error {
 	if err := s.notifyRepo.DeleteActiveByUser(userID); err != nil {
 		return err
 	}
@@ -508,9 +586,6 @@ func (s *NotifyService) ReconcileUserReminders(userID int64) error {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
 		return err
-	}
-	if !user.DefaultReminderEnabled {
-		return nil
 	}
 
 	defaultSetting, err := s.notifyRepo.GetDefaultSetting(userID)
@@ -526,13 +601,12 @@ func (s *NotifyService) ReconcileUserReminders(userID int64) error {
 		return err
 	}
 
-	minutes := user.DefaultReminderMinutes
-	if minutes <= 0 {
-		minutes = 5
-	}
-
 	now := time.Now().UTC()
 	for _, task := range tasks {
+		minutes, enabled := resolveTaskReminderMinutes(&task, user)
+		if !enabled {
+			continue
+		}
 		var reminderStart *time.Time
 		if task.RecurrenceRule != nil {
 			nextStart, err := s.resolveNextPendingRecurringReminderStart(&task, now)

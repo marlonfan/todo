@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { authAPI, getToken, getTokenStore } from './api/client';
 import { tokenReady } from './platform/init';
+import { redirectToLogin } from './platform/runtime.js';
 import { setUserTimezone } from './utils/time';
 import { clearAuthenticatedLocalState, initializeSyncEngine, stopSyncEngine } from './data/syncEngine';
 import { queryClient } from './query/client';
@@ -101,11 +102,8 @@ function App() {
     const handleAuthInvalidated = async () => {
       await clearAuthenticatedLocalState(queryClient);
       setUser(null);
-      if (isDesktopRuntime) {
-        window.location.hash = '#/login';
-      } else {
-        window.location.assign('/login');
-      }
+      setAuthUnavailable(false);
+      redirectToLogin();
     };
     window.addEventListener('todo:auth-invalidated', handleAuthInvalidated);
     return () => window.removeEventListener('todo:auth-invalidated', handleAuthInvalidated);

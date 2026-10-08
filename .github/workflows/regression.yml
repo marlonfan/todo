@@ -1,0 +1,88 @@
+name: Regression checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: todo
+          POSTGRES_PASSWORD: regression
+          POSTGRES_DB: todo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U todo -d todo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CGO_ENABLED: '1'
+      TODO_TEST_POSTGRES_DSN: postgres://todo:regression@localhost:5432/todo_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go test -race ./internal/service ./internal/scheduler -run 'TestConcurrent|TestSyncJournal|TestMutationReceipt|TestNotification|TestRetryDelay|TestNotifyScheduler|TestMigrationNormalizes'
+
+  clients:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: node --test cli/todo-cli.test.mjs electron/menu.test.cjs
+
+  browser:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: ./build.sh
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Start isolated test server
+        run: |
+          ./bin/todo-app > /tmp/todo-e2e-server.log 2>&1 &
+          echo $! > /tmp/todo-e2e-server.pid
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8080/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/todo-e2e-server.log
+          exit 1
+      - run: npx playwright test --reporter=list
+        working-directory: web
+      - name: Stop test server
+        if: always()
+        run: |
+          if [ -f /tmp/todo-e2e-server.pid ]; then kill "$(cat /tmp/todo-e2e-server.pid)" || true; fi
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-evidence
+          path: |
+            web/test-results
+            /tmp/todo-e2e-server.log

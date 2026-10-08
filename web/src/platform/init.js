@@ -1,10 +1,9 @@
+import { isDesktopRuntime } from './runtime.js';
 function isElectron() {
   return typeof window !== 'undefined' && Boolean(window.todoElectron);
 }
 
-function isDesktopRuntime() {
-  return isElectron();
-}
+
 
 // App.jsx 可以 await 这个 Promise，等平台 token 初始化完成再检查 token
 let _resolveReady;

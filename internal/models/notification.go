@@ -15,6 +15,7 @@ const (
 	NotifyStatusProcessing NotifyStatus = "processing" // Fix 7: 新增处理中状态
 	NotifyStatusSent       NotifyStatus = "sent"
 	NotifyStatusFailed     NotifyStatus = "failed"
+	NotifyStatusAbandoned  NotifyStatus = "abandoned"
 )
 
 // NotifyChannel represents notification channel
@@ -57,8 +58,13 @@ func (c *NotifyConfigMap) Scan(value interface{}) error {
 		*c = nil
 		return nil
 	}
-	bytes, ok := value.([]byte)
-	if !ok {
+	var bytes []byte
+	switch v := value.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
 		return errors.New("invalid scan source for NotifyConfigMap")
 	}
 	return json.Unmarshal(bytes, c)

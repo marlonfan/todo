@@ -3,66 +3,79 @@ package scheduler
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
-	"todo-app/internal/service"
 )
 
+type notificationProcessor interface{ ProcessPendingNotifications(context.Context) error }
+
 type NotifyScheduler struct {
-	notifyService *service.NotifyService
+	notifyService notificationProcessor
 	interval      time.Duration
-	stopCh        chan struct{}
-	isRunning     bool // Fix 7: 防止重复执行
+	mu            sync.Mutex
+	cancel        context.CancelFunc
+	done          chan struct{}
 }
 
-func NewNotifyScheduler(notifyService *service.NotifyService, interval time.Duration) *NotifyScheduler {
-	return &NotifyScheduler{
-		notifyService: notifyService,
-		interval:      interval,
-		stopCh:        make(chan struct{}),
-		isRunning:     false,
+func NewNotifyScheduler(processor notificationProcessor, interval time.Duration) *NotifyScheduler {
+	if interval <= 0 {
+		interval = time.Minute
 	}
+	return &NotifyScheduler{notifyService: processor, interval: interval}
 }
 
 func (s *NotifyScheduler) Start() {
-	go s.run()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.done = make(chan struct{})
+	go s.run(ctx, s.done)
 }
 
 func (s *NotifyScheduler) Stop() {
-	close(s.stopCh)
+	s.mu.Lock()
+	done := s.done
+	if done == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.cancel()
+	s.mu.Unlock()
+	<-done
+	s.mu.Lock()
+	if s.done == done {
+		s.done = nil
+		s.cancel = nil
+	}
+	s.mu.Unlock()
 }
 
-func (s *NotifyScheduler) run() {
+func (s *NotifyScheduler) run(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
-
-	// Run immediately on start
-	s.process()
-
+	s.process(ctx)
 	for {
 		select {
-		case <-ticker.C:
-			s.process()
-		case <-s.stopCh:
+		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			s.process(ctx)
 		}
 	}
 }
 
-func (s *NotifyScheduler) process() {
-	// Fix 7: 简单锁防止重叠执行
-	if s.isRunning {
-		log.Println("Notification processing is already running, skipping...")
+func (s *NotifyScheduler) process(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+	defer cancel()
+	if ctx.Err() != nil {
 		return
 	}
-	s.isRunning = true
-	defer func() { s.isRunning = false }()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	if err := s.notifyService.ProcessPendingNotifications(); err != nil {
+	if err := s.notifyService.ProcessPendingNotifications(ctx); err != nil && parent.Err() == nil {
 		log.Printf("Error processing notifications: %v", err)
 	}
-
-	_ = ctx
 }

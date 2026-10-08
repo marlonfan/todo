@@ -1634,6 +1634,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const taskPullRefreshResetTimerRef = useRef(0);
   const listToolbarPanelRef = useRef(null);
   const lastSyncedSelectedIDRef = useRef(0);
+  const pendingDraftRemapRef = useRef(null);
   const draftSourceTaskIDRef = useRef(0);
   const draftTouchedRef = useRef(false);
   const draftEditVersionRef = useRef(0);
@@ -2835,7 +2836,35 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [filteredTaskIDsKey, selectedTaskID, setDraftWithSnapshot]);
 
   useEffect(() => {
-    return onTaskIDRemapped(({ fromID, toID }) => {
+    return onTaskIDRemapped(({ fromID, toID, task }) => {
+      // A server-assigned ID identifies the same draft, not a new selection.
+      const remapRef = (ref) => {
+        if (Number(ref.current) === Number(fromID)) ref.current = toID;
+      };
+      if (Number(lastSyncedSelectedIDRef.current) === Number(fromID)) {
+        pendingDraftRemapRef.current = { fromID, toID };
+      }
+      [draftSourceTaskIDRef, descriptionSessionTaskIDRef,
+        preservingSavedSelectionTaskIDRef].forEach(remapRef);
+      [pendingDraftSubmitRef, lastSubmittedDraftRef].forEach((ref) => {
+        if (Number(ref.current?.taskID) === Number(fromID)) ref.current = { ...ref.current, taskID: toID };
+      });
+      if (Number(selectedTaskSnapshotRef.current?.id) === Number(fromID)) {
+        selectedTaskSnapshotRef.current = task || { ...selectedTaskSnapshotRef.current, id: toID };
+      }
+      [latestDescriptionSessionByTaskRef, latestEditedDescriptionSessionByTaskRef].forEach((ref) => {
+        if (ref.current.has(fromID)) {
+          ref.current.set(toID, ref.current.get(fromID));
+          ref.current.delete(fromID);
+        }
+      });
+      setTaskDraftOverlays((prev) => {
+        if (!prev?.[String(fromID)]) return prev;
+        const next = { ...prev, [String(toID)]: prev[String(fromID)] };
+        delete next[String(fromID)];
+        taskDraftOverlaysRef.current = next;
+        return next;
+      });
       setSelectedTaskID((prev) => (Number(prev) === Number(fromID) ? toID : prev));
     });
   }, []);
@@ -3054,6 +3083,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
   useEffect(() => {
     if (!selectedTask) {
+      if (pendingDraftRemapRef.current) return;
       setDraftWithSnapshot(null);
       setDraftTimeRangeEnabled(false);
       detailPanelSnapshotRef.current = null;
@@ -3065,6 +3095,13 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
 
     const nextDraft = buildDraftFromTask(selectedTask);
+    const remap = pendingDraftRemapRef.current;
+    if (remap && Number(selectedTask.id) === Number(remap.toID)
+      && Number(lastSyncedSelectedIDRef.current) === Number(remap.fromID)) {
+      lastSyncedSelectedIDRef.current = selectedTask.id;
+      draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
+      pendingDraftRemapRef.current = null;
+    }
     if (lastSyncedSelectedIDRef.current !== selectedTask.id) {
       lastSyncedSelectedIDRef.current = selectedTask.id;
       draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
@@ -4803,7 +4840,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [detailPanel, draft, handleSaveDraft, isDetailPanelRequiringConfirm, isDraftDirty, savingDraft, selectedTask]);
 
   useEffect(() => {
-    if (!isDraftDirty) {
+    if (!isDraftDirty && !pendingDraftRemapRef.current) {
       draftTouchedRef.current = false;
     }
   }, [isDraftDirty]);

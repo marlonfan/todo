@@ -1,3 +1,4 @@
+import { resolveTaskReminderMinutes, resolveReminderStart } from './reminderPolicy.js';
 import { tasksAPI } from '../api/client';
 import { readTasks, getMeta, setMeta } from '../data/localStore';
 
@@ -19,6 +20,10 @@ let refreshTimer = null;
 let started = false;
 let reconcileRunning = false;
 let reconcileRequested = false;
+let sessionEpoch = 0;
+const delayedRefreshes = new Set();
+const activeReconciles = new Set();
+const inFlightIDs = new Set();
 let lastPermissionState = 'unknown';
 const statusListeners = new Set();
 
@@ -61,9 +66,10 @@ export function isLocalNotificationEnabled() {
 export function setLocalNotificationEnabled(enabled) {
   writeBooleanSetting(LOCAL_NOTIFICATION_ENABLED_KEY, !!enabled);
   if (enabled) {
+    if (!started) startLocalNotificationScheduler();
     scheduleLocalNotificationRefresh({ reason: 'setting-enabled', immediate: true });
   } else {
-    void cancelScheduledLocalNotifications()
+    void clearLocalNotificationsForLogout()
       .catch((error) => {
         console.error('Failed to cancel local notifications after disabling:', error);
       })
@@ -253,29 +259,6 @@ function getCachedUser() {
   }
 }
 
-function getDefaultReminderMinutes(user) {
-  const minutes = Number(user?.default_reminder_minutes || 0);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes : 5;
-}
-
-function parseClock(raw, fallback = '09:00') {
-  const value = String(raw || fallback).trim();
-  const match = value.match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return parseClock(fallback, '09:00');
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return parseClock(fallback, '09:00');
-  return { hour, minute };
-}
-
-function resolveReminderStart(baseDate, allDay, user) {
-  if (!allDay) return baseDate;
-  const { hour, minute } = parseClock(user?.default_morning_time || '09:00');
-  const local = new Date(baseDate);
-  local.setHours(hour, minute, 0, 0);
-  return local;
-}
-
 function buildNotificationID(key) {
   const text = String(key || '');
   let hash = 2166136261;
@@ -297,18 +280,20 @@ function stripMarkdown(text) {
     .trim();
 }
 
-function buildReminderCandidate(source, user, options = {}) {
+export function buildReminderCandidate(source, user, options = {}) {
   const taskID = Number(source?.id || source?.task_id || source?.taskID || 0);
   if (!taskID || taskID < 0) return null;
   const status = String(source?.status || 'pending');
   if (status !== 'pending') return null;
+  const minutes = resolveTaskReminderMinutes(source, user);
+  if (minutes === null) return null;
   const startValue = source?.start_time || source?.startTime || '';
   if (!startValue) return null;
   const start = parseDate(startValue);
   if (!start) return null;
   const allDay = Boolean(source?.all_day ?? source?.allDay);
   const resolvedStart = resolveReminderStart(start, allDay, user);
-  const notifyAt = new Date(resolvedStart.getTime() - getDefaultReminderMinutes(user) * 60 * 1000);
+  const notifyAt = new Date(resolvedStart.getTime() - minutes * 60 * 1000);
   const now = options.now || new Date();
   const horizon = options.horizon || addDays(now, DEFAULT_LOOKAHEAD_DAYS);
   if (!(notifyAt > now) || notifyAt > horizon) return null;
@@ -340,9 +325,7 @@ function buildReminderCandidate(source, user, options = {}) {
 
 async function fetchReminderSources() {
   const user = getCachedUser();
-  if (!user?.default_reminder_enabled) {
-    return [];
-  }
+  if (!user?.id) return [];
 
   const localTasks = await readTasks();
   let recurringOccurrences = [];
@@ -356,8 +339,11 @@ async function fetchReminderSources() {
   const now = new Date();
   const horizon = addDays(now, DEFAULT_LOOKAHEAD_DAYS);
   const candidates = [
-    ...(Array.isArray(localTasks) ? localTasks : []),
-    ...(Array.isArray(recurringOccurrences) ? recurringOccurrences : []),
+    ...(Array.isArray(localTasks) ? localTasks.filter((task) => !task.recurrence_rule) : []),
+    ...(Array.isArray(recurringOccurrences) ? recurringOccurrences.map((occurrence) => {
+      const base = localTasks.find((task) => Number(task.id) === Number(occurrence.task_id));
+      return { ...base, ...occurrence };
+    }) : []),
   ]
     .map((item) => buildReminderCandidate(item, user, { now, horizon }))
     .filter(Boolean)
@@ -415,7 +401,17 @@ export async function sendLocalNotificationTest() {
   });
 }
 
-export async function reconcileLocalNotifications(options = {}) {
+export function reconcileLocalNotifications(options = {}) {
+  const epoch = sessionEpoch;
+  const operation = reconcileForSession(options, epoch);
+  activeReconciles.add(operation);
+  operation.then(() => activeReconciles.delete(operation), () => activeReconciles.delete(operation));
+  return operation;
+}
+
+async function reconcileForSession(options, epoch) {
+  const isCurrent = () => epoch === sessionEpoch && isLocalNotificationEnabled();
+  const canceled = () => ({ scheduled: 0, canceled: true });
   if (!isLocalNotificationEnabled()) {
     await cancelScheduledLocalNotifications();
     lastPermissionState = isDesktopNotificationRuntime() ? lastPermissionState : 'unsupported';
@@ -439,8 +435,10 @@ export async function reconcileLocalNotifications(options = {}) {
     return { scheduled: 0, supported: true, enabled: true, permission: lastPermissionState };
   }
 
+  if (!isCurrent()) return canceled();
   const current = await readScheduleState();
   const candidates = await fetchReminderSources();
+  if (!isCurrent()) return canceled();
   const nextIDs = candidates.map((item) => item.id);
   const nextIDSet = new Set(nextIDs);
   const removedIDs = current.ids.filter((id) => !nextIDSet.has(Number(id)));
@@ -452,6 +450,7 @@ export async function reconcileLocalNotifications(options = {}) {
     current.items.map((item) => [Number(item?.id), String(item?.notify_at || '')]),
   );
   for (const candidate of candidates) {
+    if (!isCurrent()) return canceled();
     const previousNotifyAt = previousItemsByID.get(candidate.id);
     if (previousNotifyAt && previousNotifyAt !== candidate.notify_at) {
       await cancelIDs([candidate.id]);
@@ -459,7 +458,9 @@ export async function reconcileLocalNotifications(options = {}) {
       continue;
     }
 
-    plugin.sendNotification({
+    if (!isCurrent()) return canceled();
+    inFlightIDs.add(candidate.id);
+    await plugin.sendNotification({
       id: candidate.id,
       channelId: NOTIFICATION_CHANNEL_ID,
       title: candidate.title,
@@ -476,10 +477,13 @@ export async function reconcileLocalNotifications(options = {}) {
     });
   }
 
+  if (!isCurrent()) return canceled();
   await writeScheduleState({
     ids: nextIDs,
     items: candidates,
   });
+  if (!isCurrent()) return canceled();
+  nextIDs.forEach((id) => inFlightIDs.delete(id));
   emitStatus();
   return {
     scheduled: candidates.length,
@@ -503,19 +507,20 @@ async function runQueuedReconcile(options = {}) {
     reconcileRunning = false;
     if (reconcileRequested) {
       reconcileRequested = false;
-      setTimeout(() => {
-        void runQueuedReconcile({ reason: 'queued' });
-      }, 0);
+      scheduleLocalNotificationRefresh({ reason: 'queued', immediate: true });
     }
   }
 }
 
 export function scheduleLocalNotificationRefresh(options = {}) {
-  if (!isDesktopNotificationRuntime()) return;
+  if (!started || !isDesktopNotificationRuntime()) return;
+  const epoch = sessionEpoch;
   const delay = options.immediate ? 0 : 300;
-  setTimeout(() => {
-    void runQueuedReconcile(options);
+  const timer = setTimeout(() => {
+    delayedRefreshes.delete(timer);
+    if (started && epoch === sessionEpoch) void runQueuedReconcile(options);
   }, delay);
+  delayedRefreshes.add(timer);
 }
 
 export function resetLocalNotificationRefreshTimer() {
@@ -541,11 +546,24 @@ export function startLocalNotificationScheduler() {
 }
 
 export function stopLocalNotificationScheduler() {
+  sessionEpoch += 1;
+  delayedRefreshes.forEach((timer) => clearTimeout(timer));
+  delayedRefreshes.clear();
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
   started = false;
-  reconcileRunning = false;
   reconcileRequested = false;
+}
+
+// Wait for old-session sends and state writes before clearing their IDs. This
+// also covers a send which completed after logout invalidated its reconciliation.
+export async function clearLocalNotificationsForLogout() {
+  stopLocalNotificationScheduler();
+  await Promise.allSettled([...activeReconciles]);
+  const current = await readScheduleState();
+  await cancelIDs([...new Set([...current.ids, ...inFlightIDs])]);
+  inFlightIDs.clear();
+  await writeScheduleState({ ids: [], items: [] });
 }

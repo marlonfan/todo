@@ -36,3 +36,11 @@ func (r *TaskMutationReceiptRepository) CreateOrIgnore(receipt *models.TaskMutat
 		DoNothing: true,
 	}).Create(receipt).Error
 }
+
+func (r *TaskMutationReceiptRepository) Create(receipt *models.TaskMutationReceipt) error {
+	return r.db.Create(receipt).Error
+}
+
+func (r *TaskRepository) MutationReceipts() *TaskMutationReceiptRepository {
+	return NewTaskMutationReceiptRepository(r.db)
+}

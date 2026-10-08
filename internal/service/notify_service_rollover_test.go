@@ -178,7 +178,7 @@ func TestProcessPendingNotificationsDoesNotAdvanceRecurringReminderBeforeOccurre
 	notifySvc, taskSvc, taskRepo, notifyRepo, userID, notifier := newNotifyRolloverTestServices(t)
 	task, start := seedRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
 
-	if err := notifySvc.ProcessPendingNotifications(); err != nil {
+	if err := notifySvc.ProcessPendingNotifications(context.Background()); err != nil {
 		t.Fatalf("process pending notifications: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestRecurringReminderAdvancesAfterCurrentOccurrenceIsSkipped(t *testing.T) 
 	notifySvc, taskSvc, taskRepo, notifyRepo, userID, _ := newNotifyRolloverTestServices(t)
 	task, start := seedRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
 
-	if err := notifySvc.ProcessPendingNotifications(); err != nil {
+	if err := notifySvc.ProcessPendingNotifications(context.Background()); err != nil {
 		t.Fatalf("process pending notifications: %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestProcessPendingNotificationsSchedulesNextAllDayRecurringReminderAtMornin
 	notifySvc, _, taskRepo, notifyRepo, userID, notifier := newNotifyRolloverTestServices(t)
 	task, _ := seedAllDayRecurringTaskAndDueReminder(t, taskRepo, notifyRepo, userID)
 
-	if err := notifySvc.ProcessPendingNotifications(); err != nil {
+	if err := notifySvc.ProcessPendingNotifications(context.Background()); err != nil {
 		t.Fatalf("process pending notifications: %v", err)
 	}
 

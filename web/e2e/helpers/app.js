@@ -70,7 +70,7 @@ export async function createTaskInUI(page, title) {
 
 export async function clickManualSync(page) {
   await page.goto('/settings');
-  await page.getByTestId('settings-sync-tab').click();
+  await page.getByRole('button', { name: /^(同步设置|Sync Settings)$/i }).filter({ visible: true }).click();
   await page.getByTestId('settings-sync-now-button').click();
 }
 

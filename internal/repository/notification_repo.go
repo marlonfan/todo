@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 	"todo-app/internal/models"
 
@@ -13,6 +14,22 @@ type NotificationRepository struct {
 
 func NewNotificationRepository(db *gorm.DB) *NotificationRepository {
 	return &NotificationRepository{db: db}
+}
+
+func (r *NotificationRepository) WithContext(ctx context.Context) *NotificationRepository {
+	return NewNotificationRepository(r.db.WithContext(ctx))
+}
+
+func (r *NotificationRepository) ReleaseProcessing(id int64) error {
+	return r.db.Model(&models.Notification{}).Where("id = ? AND status = ?", id, models.NotifyStatusProcessing).
+		Updates(map[string]interface{}{"status": models.NotifyStatusPending}).Error
+}
+
+func (r *NotificationRepository) MarkAbandoned(id int64, errorMsg string) error {
+	return r.db.Model(&models.Notification{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status": models.NotifyStatusAbandoned, "next_retry_at": nil, "error_msg": errorMsg,
+		"retry_count": gorm.Expr("COALESCE(retry_count, 0) + 1"),
+	}).Error
 }
 
 func (r *NotificationRepository) Create(notification *models.Notification) error {

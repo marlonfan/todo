@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -108,6 +110,14 @@ func parseOccurrenceStatuses(raw string) ([]models.TaskStatus, error) {
 }
 
 func respondTaskError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrMutationPersistence) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist task operation"})
+		return
+	}
+	if errors.Is(err, service.ErrOperationMismatch) {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 	var conflict *service.RevisionConflictError
 	if errors.As(err, &conflict) {
 		c.JSON(http.StatusConflict, gin.H{
@@ -135,31 +145,13 @@ func NewTaskHandler(
 	}
 }
 
-func (h *TaskHandler) findMutationReplayTask(userID int64, clientOpID string) (*models.Task, bool) {
-	if h.mutationReceiptRepo == nil || strings.TrimSpace(clientOpID) == "" {
-		return nil, false
-	}
-	receipt, err := h.mutationReceiptRepo.GetByUserAndOpID(userID, clientOpID)
-	if err != nil || receipt == nil || receipt.TaskID <= 0 {
-		return nil, false
-	}
-	task, getErr := h.taskService.GetByID(userID, receipt.TaskID)
-	if getErr != nil || task == nil {
-		return nil, false
-	}
-	return task, true
-}
-
-func (h *TaskHandler) rememberMutation(userID int64, clientOpID string, taskID int64, opType string) {
-	if h.mutationReceiptRepo == nil || strings.TrimSpace(clientOpID) == "" || taskID <= 0 {
-		return
-	}
-	_ = h.mutationReceiptRepo.CreateOrIgnore(&models.TaskMutationReceipt{
-		UserID: userID,
-		OpID:   strings.TrimSpace(clientOpID),
-		TaskID: taskID,
-		OpType: strings.TrimSpace(opType),
-	})
+func mutationFingerprint(c *gin.Context, payload interface{}, fields map[string]bool) string {
+	raw, _ := json.Marshal(struct {
+		Payload interface{}
+		Fields  map[string]bool
+	}{payload, fields})
+	sum := sha256.Sum256(append([]byte(c.Request.Method+"\n"+c.Request.URL.Path+"\n"), raw...))
+	return hex.EncodeToString(sum[:])
 }
 
 func (h *TaskHandler) respondTaskWithReminders(c *gin.Context, status int, task *models.Task) {
@@ -188,19 +180,18 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
-		h.respondTaskWithReminders(c, http.StatusOK, replayTask)
-		return
-	}
-
-	task, err := h.taskService.Create(userID, &req)
+	task, replayed, err := h.taskService.ExecuteMutation(userID, clientOpID, "create", 0, mutationFingerprint(c, req, nil), func(scoped *service.TaskService) (*models.Task, error) {
+		return scoped.Create(userID, &req)
+	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondTaskError(c, err)
 		return
 	}
-	h.rememberMutation(userID, clientOpID, task.ID, "create")
-
-	h.respondTaskWithReminders(c, http.StatusCreated, task)
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	h.respondTaskWithReminders(c, status, task)
 }
 
 func (h *TaskHandler) Get(c *gin.Context) {
@@ -477,10 +468,24 @@ func (h *TaskHandler) Sync(c *gin.Context) {
 		return
 	}
 
+	sequenceMode := c.Query("cursor") != ""
+	cursor := int64(0)
+	if sequenceMode {
+		cursor, err = strconv.ParseInt(strings.TrimPrefix(c.Query("cursor"), "v1:"), 10, 64)
+		if err != nil || cursor < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid sync cursor"})
+			return
+		}
+	}
+	nextCursor := cursor
+	sequenceHasMore := false
 	queryChanges := func() ([]models.Task, []models.TaskDeleteLog, time.Time, error) {
-		cursorUpperBound := time.Now().UTC()
-		changed, deleted, err := h.taskService.ListChangedSince(userID, since, limit)
-		return changed, deleted, cursorUpperBound, err
+		if sequenceMode {
+			changed, deleted, next, more, err := h.taskService.ListChangesAfter(userID, cursor, limit)
+			nextCursor, sequenceHasMore = next, more
+			return changed, deleted, time.Now().UTC(), err
+		}
+		return h.taskService.ListChangedSinceSnapshot(userID, since, limit)
 	}
 
 	changed, deleted, cursorUpperBound, err := queryChanges()
@@ -523,15 +528,19 @@ func (h *TaskHandler) Sync(c *gin.Context) {
 
 	nextSince, hasMore := resolveTaskSyncCursor(since, changed, deleted, limit, cursorUpperBound)
 	serverAt := time.Now().UTC()
+	if sequenceMode {
+		hasMore = sequenceHasMore
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"tasks":      changed,
-		"deleted":    deleted,
-		"next_since": nextSince.Format(time.RFC3339Nano),
-		"has_more":   hasMore,
-		"server_at":  serverAt.Format(time.RFC3339Nano),
-		"waited":     waited,
-		"woke":       woke,
+		"next_cursor": "v1:" + strconv.FormatInt(nextCursor, 10),
+		"tasks":       changed,
+		"deleted":     deleted,
+		"next_since":  nextSince.Format(time.RFC3339Nano),
+		"has_more":    hasMore,
+		"server_at":   serverAt.Format(time.RFC3339Nano),
+		"waited":      waited,
+		"woke":        woke,
 	})
 }
 
@@ -574,18 +583,13 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
-		c.JSON(http.StatusOK, replayTask)
-		return
-	}
-
-	task, err := h.taskService.Update(userID, taskID, &req, fieldMask, expectedRevision, parseTaskActivityMeta(c))
+	task, _, err := h.taskService.ExecuteMutation(userID, clientOpID, "update", taskID, mutationFingerprint(c, req, fieldMask), func(scoped *service.TaskService) (*models.Task, error) {
+		return scoped.Update(userID, taskID, &req, fieldMask, expectedRevision, parseTaskActivityMeta(c))
+	})
 	if err != nil {
 		respondTaskError(c, err)
 		return
 	}
-	h.rememberMutation(userID, clientOpID, task.ID, "update")
-
 	c.JSON(http.StatusOK, task)
 }
 
@@ -611,26 +615,13 @@ func (h *TaskHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
-	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
-		c.JSON(http.StatusOK, replayTask)
-		return
-	}
-
-	task, err := h.taskService.UpdateStatus(
-		userID,
-		taskID,
-		req.Status,
-		req.InstanceID,
-		req.OccurrenceDate,
-		expectedRevision,
-		parseTaskActivityMeta(c),
-	)
+	task, _, err := h.taskService.ExecuteMutation(userID, clientOpID, "status", taskID, mutationFingerprint(c, req, nil), func(scoped *service.TaskService) (*models.Task, error) {
+		return scoped.UpdateStatus(userID, taskID, req.Status, req.InstanceID, req.OccurrenceDate, expectedRevision, parseTaskActivityMeta(c))
+	})
 	if err != nil {
 		respondTaskError(c, err)
 		return
 	}
-	h.rememberMutation(userID, clientOpID, task.ID, "status")
-
 	c.JSON(http.StatusOK, task)
 }
 
@@ -656,18 +647,13 @@ func (h *TaskHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
-	if replayTask, replayed := h.findMutationReplayTask(userID, clientOpID); replayed {
-		c.JSON(http.StatusOK, replayTask)
-		return
-	}
-
-	task, err := h.taskService.UpdateSchedule(userID, taskID, &req, expectedRevision, parseTaskActivityMeta(c))
+	task, _, err := h.taskService.ExecuteMutation(userID, clientOpID, "schedule", taskID, mutationFingerprint(c, req, nil), func(scoped *service.TaskService) (*models.Task, error) {
+		return scoped.UpdateSchedule(userID, taskID, &req, expectedRevision, parseTaskActivityMeta(c))
+	})
 	if err != nil {
 		respondTaskError(c, err)
 		return
 	}
-	h.rememberMutation(userID, clientOpID, task.ID, "schedule")
-
 	c.JSON(http.StatusOK, task)
 }
 
@@ -687,20 +673,14 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if h.mutationReceiptRepo != nil && strings.TrimSpace(clientOpID) != "" {
-		if receipt, receiptErr := h.mutationReceiptRepo.GetByUserAndOpID(userID, clientOpID); receiptErr == nil && receipt != nil {
-			c.JSON(http.StatusNoContent, nil)
-			return
-		}
-	}
-
-	if err := h.taskService.Delete(userID, taskID, expectedRevision); err != nil {
+	_, _, err = h.taskService.ExecuteMutation(userID, clientOpID, "delete", taskID, mutationFingerprint(c, nil, nil), func(scoped *service.TaskService) (*models.Task, error) {
+		return nil, scoped.Delete(userID, taskID, expectedRevision)
+	})
+	if err != nil {
 		respondTaskError(c, err)
 		return
 	}
-	h.rememberMutation(userID, clientOpID, taskID, "delete")
-
-	c.JSON(http.StatusNoContent, nil)
+	c.Status(http.StatusNoContent)
 }
 
 func (h *TaskHandler) CreateNotification(c *gin.Context) {

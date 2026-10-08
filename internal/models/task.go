@@ -58,10 +58,16 @@ func (r RecurrenceRule) Value() (driver.Value, error) {
 // Scan implements sql.Scanner
 func (r *RecurrenceRule) Scan(value interface{}) error {
 	if value == nil {
+		*r = RecurrenceRule{}
 		return nil
 	}
-	bytes, ok := value.([]byte)
-	if !ok {
+	var bytes []byte
+	switch v := value.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
 		return errors.New("invalid scan source for RecurrenceRule")
 	}
 	return json.Unmarshal(bytes, r)
@@ -148,21 +154,23 @@ type TaskDeleteLog struct {
 }
 
 type TaskInstance struct {
-	InstanceID   string     `json:"instance_id"` // virtual ID: taskID_date
-	TaskID       int64      `json:"task_id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	Status       TaskStatus `json:"status"`
-	Priority     Priority   `json:"priority"`
-	StartTime    time.Time  `json:"start_time"`
-	EndTime      *time.Time `json:"end_time"`
-	AllDay       bool       `json:"all_day"`
-	IsRecurring  bool       `json:"is_recurring"`
-	OriginalDate time.Time  `json:"original_date"`
-	CreatedAt    time.Time  `json:"created_at"`
-	CompletedAt  *time.Time `json:"completed_at"`
-	DeletedAt    *time.Time `json:"deleted_at"`
-	Categories   []Category `json:"categories,omitempty"`
+	ReminderPolicy        TaskReminderPolicy `json:"reminder_policy"`
+	ReminderMinutesBefore *int               `json:"reminder_minutes_before,omitempty"`
+	InstanceID            string             `json:"instance_id"` // virtual ID: taskID_date
+	TaskID                int64              `json:"task_id"`
+	Title                 string             `json:"title"`
+	Description           string             `json:"description"`
+	Status                TaskStatus         `json:"status"`
+	Priority              Priority           `json:"priority"`
+	StartTime             time.Time          `json:"start_time"`
+	EndTime               *time.Time         `json:"end_time"`
+	AllDay                bool               `json:"all_day"`
+	IsRecurring           bool               `json:"is_recurring"`
+	OriginalDate          time.Time          `json:"original_date"`
+	CreatedAt             time.Time          `json:"created_at"`
+	CompletedAt           *time.Time         `json:"completed_at"`
+	DeletedAt             *time.Time         `json:"deleted_at"`
+	Categories            []Category         `json:"categories,omitempty"`
 }
 
 // API Request/Response types

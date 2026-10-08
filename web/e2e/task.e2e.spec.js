@@ -156,3 +156,36 @@ test('task: completed/deleted view sorting supports status time and created time
   await page.getByTestId('task-sort-option-created_desc').first().click();
   await expect(deletedRows.first()).toContainText(secondTitle);
 });
+
+
+test('task: editing while creation is pending survives the server ID assignment', async ({ page, request }) => {
+  const account = createE2EAccount();
+  await registerAndLogin(page, account);
+  let releaseCreate;
+  const gate = new Promise((resolve) => { releaseCreate = resolve; });
+  let createStarted;
+  const started = new Promise((resolve) => { createStarted = resolve; });
+  await page.route('**/api/tasks', async (route) => {
+    if (route.request().method() === 'POST') { createStarted(); await gate; }
+    await route.continue();
+  });
+  const title = 'Pending create ' + Date.now();
+  const edited = title + ' edited before server response';
+  await page.goto('/tasks?view=all');
+  await page.getByTestId('task-new-button').click();
+  await page.getByTestId('task-modal-title-input').fill(title);
+  await page.getByTestId('task-modal-save-button').click();
+  await started;
+  const row = page.locator('[data-testid="task-row"]').filter({ hasText: title }).first();
+  await row.click();
+  await page.getByTestId('task-detail-title-input').fill(edited);
+  releaseCreate();
+  const api = await getAuthedRequestContext(request, page);
+  await expect.poll(async () => {
+    const response = await api.get('/api/tasks');
+    const rows = await response.json();
+    return rows.some((task) => task.title === edited);
+  }).toBe(true);
+  await expect(page.getByTestId('task-detail-title-input')).toHaveValue(edited);
+  await expect(page.locator('[data-testid="task-row"]').filter({ hasText: edited })).toBeVisible();
+});

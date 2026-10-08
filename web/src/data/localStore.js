@@ -9,7 +9,6 @@ const STORE_CALENDAR_RANGES = 'calendar_ranges';
 const STORE_TASK_ACTIVITIES = 'task_activities';
 
 let dbPromise = null;
-let recoveryTried = false;
 
 function toPromise(request) {
   return new Promise((resolve, reject) => {
@@ -69,46 +68,24 @@ async function getDB() {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    let blocked = false;
+    request.onblocked = () => {
+      blocked = true;
+      reject(new Error('本地数据库升级被其他窗口占用，请关闭其他 Todo 窗口后重试。'));
+    };
+    request.onsuccess = () => {
+      if (blocked) { request.result.close(); return; }
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error || new Error('Failed to open IndexedDB'));
   });
 
-  const deleteDB = () => new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(DB_NAME);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error || new Error('Failed to delete IndexedDB'));
-    request.onblocked = () => resolve();
+  // Opening errors must never erase offline edits. A later caller can retry.
+  dbPromise = openOnce().then((db) => {
+    db.onversionchange = () => { db.close(); dbPromise = null; };
+    db.onclose = () => { dbPromise = null; };
+    return db;
   });
-
-  dbPromise = (async () => {
-    try {
-      const db = await openOnce();
-      db.onversionchange = () => {
-        db.close();
-        if (dbPromise) dbPromise = null;
-      };
-      return db;
-    } catch (error) {
-      if (recoveryTried) {
-        throw error;
-      }
-      recoveryTried = true;
-      dbPromise = null;
-      console.error('IndexedDB open failed, attempting recovery by resetting local cache:', error);
-      try {
-        await deleteDB();
-      } catch (deleteError) {
-        console.error('IndexedDB recovery delete failed:', deleteError);
-        throw error;
-      }
-      const db = await openOnce();
-      db.onversionchange = () => {
-        db.close();
-        if (dbPromise) dbPromise = null;
-      };
-      return db;
-    }
-  })();
 
   try {
     return await dbPromise;

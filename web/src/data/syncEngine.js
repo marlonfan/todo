@@ -50,6 +50,7 @@ import {
   scheduleLocalNotificationRefresh,
   startLocalNotificationScheduler,
   stopLocalNotificationScheduler,
+  clearLocalNotificationsForLogout,
 } from '../platform/localNotifications';
 
 // --- Platform abstraction layer ---
@@ -93,7 +94,7 @@ const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
 const MAX_SYNC_INTERVAL_SECONDS = 1800;
 const SYNC_INTERVAL_STORAGE_KEY = 'sync_interval_seconds';
-const TASK_SYNC_CURSOR_KEY = 'tasks_sync_cursor';
+const TASK_SYNC_CURSOR_KEY = 'tasks_sync_sequence_v1';
 const TASK_FULL_RECONCILE_AT_KEY = 'tasks_last_full_reconcile_at';
 const TASK_FORCE_RECONCILE_KEY = 'tasks_force_reconcile';
 const FULL_RECONCILE_INTERVAL_MS = 12 * 60 * 60 * 1000;
@@ -267,7 +268,7 @@ async function applyServerTask(task, replaceTempID = null, options = {}) {
   });
 
   if (replaceTempID !== null) {
-    taskIDRemappedListeners.forEach((listener) => listener({ fromID: replaceTempID, toID: taskToPersist.id }));
+    taskIDRemappedListeners.forEach((listener) => listener({ fromID: replaceTempID, toID: taskToPersist.id, task: taskToPersist }));
     await replaceTaskID(replaceTempID, taskToPersist);
     await remapOutboxEntityID(replaceTempID, taskToPersist.id);
     return;
@@ -325,7 +326,7 @@ async function runTaskReconcileIfNeeded(outboxOps = [], options = {}) {
   const [lastReconcileAt, forceReconcileRaw, localTasks] = await Promise.all([
     safeLocalCall(() => getMeta(TASK_FULL_RECONCILE_AT_KEY, ''), '', `getMeta:${TASK_FULL_RECONCILE_AT_KEY}`),
     safeLocalCall(() => getMeta(TASK_FORCE_RECONCILE_KEY, ''), '', `getMeta:${TASK_FORCE_RECONCILE_KEY}`),
-    safeLocalCall(() => readTasks(), [], 'readTasks:reconcile'),
+    readTasks(),
   ]);
   const forceReconcile = !!options?.force || String(forceReconcileRaw || '').trim() === '1';
   if (!shouldRunTaskReconcile(lastReconcileAt, forceReconcile)) return;
@@ -595,8 +596,8 @@ async function processOutbox(options = {}) {
   while (loopCount < 200) {
     loopCount += 1;
     const dueOps = force
-      ? await safeLocalCall(() => getOutboxBatch(30), [], 'getOutboxBatch')
-      : await safeLocalCall(() => getDueOutbox(Date.now(), 30), [], 'getDueOutbox');
+      ? await getOutboxBatch(30)
+      : await getDueOutbox(Date.now(), 30);
     if (!dueOps.length) break;
 
     for (const op of dueOps) {
@@ -638,7 +639,7 @@ async function pullServerData() {
 
   const [categoriesRes, outboxOps, lastCursor] = await Promise.all([
     categoriesAPI.list(),
-    safeLocalCall(() => readOutbox(), [], 'readOutbox'),
+    readOutbox(),
     safeLocalCall(() => getMeta(TASK_SYNC_CURSOR_KEY, ''), '', `getMeta:${TASK_SYNC_CURSOR_KEY}`),
   ]);
   let nextCursor = String(lastCursor || '');
@@ -652,12 +653,12 @@ async function pullServerData() {
   let hasMore = true;
   let mergedTasks = queryClientRef.getQueryData(queryKeys.tasks.all);
   if (!Array.isArray(mergedTasks)) {
-    mergedTasks = await safeLocalCall(() => readTasks(), [], 'readTasks');
+    mergedTasks = await readTasks();
   }
   while (hasMore && rounds < 6) {
     rounds += 1;
     const syncRes = await tasksAPI.sync({
-      since: nextCursor || undefined,
+      cursor: nextCursor || 'v1:0',
       limit: syncLimit,
     });
     const payload = syncRes?.data || {};
@@ -687,7 +688,7 @@ async function pullServerData() {
     // Keep list order stable to avoid UI flicker while background sync updates sync_state.
     mergedTasks = Array.from(byID.values());
     deletedIDs.forEach((id) => deletedTaskIDs.add(id));
-    nextCursor = String(payload.next_since || nextCursor || '');
+    nextCursor = String(payload.next_cursor || nextCursor || '');
     hasMore = Boolean(payload.has_more);
   }
 
@@ -713,7 +714,7 @@ async function pullServerData() {
   await clearTasksAndSet(mergedTasks);
   await replaceCategories(categories);
   await setMeta('last_pull_at', nowISO());
-  await setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || nowISO());
+  await setMeta(TASK_SYNC_CURSOR_KEY, nextCursor || 'v1:0');
 
   if (taskIDsForCalendarInvalidate.size > 0) {
     await safeLocalCall(
@@ -799,7 +800,7 @@ async function runLongPollOnce() {
   try {
     const syncRes = await tasksAPI.sync(
       {
-        since,
+        cursor: since,
         limit: 1,
         wait: LONG_POLL_WAIT_SECONDS,
       },
@@ -928,7 +929,7 @@ async function runSyncCycle(options = {}) {
   let syncError = null;
   try {
     await processOutbox({ force: forceOutbox });
-    const outboxOps = await safeLocalCall(() => readOutbox(), [], 'readOutbox:reconcile');
+    const outboxOps = await readOutbox();
     await runTaskReconcileIfNeeded(outboxOps, { force: forceReconcile });
     await pullServerData();
     if (queryClientRef) {
@@ -1041,7 +1042,11 @@ export async function rebuildLocalDataAndSync() {
     await waitForIdle();
   }
 
-  await safeLocalCall(() => clearAllLocalData(), null, 'clearAllLocalData');
+  const pending = await readOutbox();
+  if (pending.length) {
+    throw new Error('仍有未同步的离线修改，请先同步成功后再重建本地数据。');
+  }
+  await clearAllLocalData();
 
   if (queryClientRef) {
     queryClientRef.setQueryData(queryKeys.tasks.all, []);
@@ -1106,6 +1111,7 @@ export function stopSyncEngine() {
 export async function clearAuthenticatedLocalState(queryClient = queryClientRef) {
   cancelPendingAPIRequests();
   stopSyncEngine();
+  await clearLocalNotificationsForLogout();
   await waitForIdle().catch(() => {});
   await safeLocalCall(() => clearAllLocalData(), null, 'clearAllLocalData:logout');
   inFlightOutboxOpIDs.clear();

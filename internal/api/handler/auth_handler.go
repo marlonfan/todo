@@ -105,7 +105,7 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	if h.notifyService != nil && (req.DefaultReminderEnabled != nil || req.DefaultReminderMinutes != nil) {
+	if h.notifyService != nil && (req.DefaultReminderEnabled != nil || req.DefaultReminderMinutes != nil || req.Timezone != "" || req.DefaultMorningTime != "") {
 		if err := h.notifyService.ReconcileUserReminders(userID); err != nil {
 			log.Printf("Warning: failed to reconcile reminders after profile update for user %d: %v", userID, err)
 		}

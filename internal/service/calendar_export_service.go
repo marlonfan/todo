@@ -1020,14 +1020,15 @@ func calendarDataETag(data string) string {
 }
 
 func defaultCalendarAlarmTrigger(task *models.Task, user *models.User) (string, bool) {
-	if task == nil || user == nil || !user.DefaultReminderEnabled || task.Status != models.TaskStatusPending {
+	minutes, enabled := resolveTaskReminderMinutes(task, user)
+	if !enabled {
 		return "", false
 	}
 	if task.StartTime == nil && task.DueDate == nil {
 		return "", false
 	}
 
-	offsetMinutes := -normalizeCalendarReminderMinutes(user.DefaultReminderMinutes)
+	offsetMinutes := -minutes
 	if task.AllDay {
 		hour, minute := parseReminderClock(user.DefaultMorningTime)
 		offsetMinutes += hour*60 + minute

@@ -17,6 +17,7 @@ export default defineConfig({
   outputDir: 'test-results/ui',
   use: {
     baseURL,
+    launchOptions: process.env.E2E_CHROME_EXECUTABLE ? { executablePath: process.env.E2E_CHROME_EXECUTABLE } : {},
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

@@ -17,7 +17,7 @@ func openTaskRepoTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Category{}, &models.Task{}, &models.TaskDeleteLog{}, &models.TaskCategory{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Category{}, &models.Task{}, &models.TaskDeleteLog{}, &models.TaskChangeLog{}, &models.TaskCategory{}); err != nil {
 		t.Fatalf("migrate task repo tables: %v", err)
 	}
 	return db

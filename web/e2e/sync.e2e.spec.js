@@ -8,12 +8,12 @@ import {
   getAuthedRequestContext,
 } from './helpers/app';
 
-test('sync: two sessions propagate create and complete via manual sync', async ({ browser, request }) => {
+test('sync: two sessions propagate create and complete via manual sync', async ({ browser, request, baseURL }) => {
   const account = createE2EAccount();
   const title = `Sync Task ${Date.now()}`;
 
-  const contextA = await browser.newContext();
-  const contextB = await browser.newContext();
+  const contextA = await browser.newContext({ baseURL });
+  const contextB = await browser.newContext({ baseURL });
   const pageA = await contextA.newPage();
   const pageB = await contextB.newPage();
 

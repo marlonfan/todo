@@ -1,3 +1,4 @@
+import { isDesktopRuntime } from '../platform/runtime.js';
 import axios from 'axios';
 
 // --- Platform-agnostic token storage ---
@@ -20,10 +21,7 @@ export function getToken() {
   return getTokenStore().get();
 }
 
-function isDesktopRuntime() {
-  if (typeof window === 'undefined') return false;
-  return Boolean(window.todoElectron);
-}
+
 
 function getDefaultAPIBaseURL() {
   if (import.meta.env.VITE_API_BASE_URL) return import.meta.env.VITE_API_BASE_URL;

@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm test && vite build",
-    "build:desktop": "npm test && vite build --base=./",
+    "build": "npm run lint && npm test && vite build",
+    "build:desktop": "npm run lint && npm test && vite build --base=./",
     "preview": "vite preview",
     "test": "node --test",
     "test:ui": "node ./scripts/runPlaywrightWithCleanup.mjs",
     "test:ui:headed": "node ./scripts/runPlaywrightWithCleanup.mjs --headed",
-    "test:ui:report": "playwright show-report"
+    "test:ui:report": "playwright show-report",
+    "lint": "eslint src"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
@@ -53,6 +54,10 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "fake-indexeddb": "^6.2.5",
+    "globals": "^17.13.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "vite": "^6.0.5"

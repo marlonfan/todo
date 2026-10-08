@@ -116,8 +116,11 @@ func NewTaskService(
 	}
 }
 
-func (s *TaskService) withTaskTransaction(fn func(*TaskService) error) error {
+func (s *TaskService) withTaskTransaction(userID int64, fn func(*TaskService) error) error {
 	return s.taskRepo.WithTransaction(func(tx *gorm.DB) error {
+		if err := repository.LockTaskUser(tx, userID); err != nil {
+			return err
+		}
 		scoped := *s
 		scoped.taskRepo = repository.NewTaskRepository(tx)
 		scoped.catRepo = repository.NewCategoryRepository(tx)
@@ -148,7 +151,27 @@ func (s *TaskService) touchTaskForSync(task *models.Task) error {
 		task.Revision = 1
 	}
 	task.Revision += 1
-	return s.taskRepo.Update(task)
+	return s.saveTaskRevision(task)
+}
+
+func (s *TaskService) saveTaskRevision(task *models.Task) error {
+	err := s.taskRepo.UpdateIfRevision(task, task.Revision-1)
+	if errors.Is(err, repository.ErrTaskRevisionConflict) {
+		latest, getErr := s.taskRepo.GetByIDAndUser(task.ID, task.UserID)
+		if getErr != nil {
+			return getErr
+		}
+		return &RevisionConflictError{Latest: latest}
+	}
+	return err
+}
+
+func (s *TaskService) ListChangesAfter(userID, cursor int64, limit int) ([]models.Task, []models.TaskDeleteLog, int64, bool, error) {
+	return s.taskRepo.ListChangesAfter(userID, cursor, limit)
+}
+
+func (s *TaskService) ListChangedSinceSnapshot(userID int64, since time.Time, limit int) ([]models.Task, []models.TaskDeleteLog, time.Time, error) {
+	return s.taskRepo.ListChangedSinceSnapshot(userID, since, limit)
 }
 
 func normalizeTaskReminderPolicy(
@@ -184,7 +207,7 @@ func normalizeTaskReminderPolicy(
 
 func (s *TaskService) Create(userID int64, req *models.CreateTaskRequest) (*models.Task, error) {
 	var task *models.Task
-	err := s.withTaskTransaction(func(scoped *TaskService) error {
+	err := s.withTaskTransaction(userID, func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.createInTransaction(userID, req)
 		if err != nil {
@@ -416,17 +439,19 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 			}
 
 			instance := models.TaskInstance{
-				InstanceID:   buildOccurrenceInstanceID(task.ID, dateOnly),
-				TaskID:       task.ID,
-				Title:        task.Title,
-				Description:  "",
-				Status:       status,
-				Priority:     task.Priority,
-				StartTime:    occurrenceStart.UTC(),
-				AllDay:       task.AllDay,
-				IsRecurring:  true,
-				OriginalDate: dateOnly,
-				Categories:   task.Categories,
+				InstanceID:            buildOccurrenceInstanceID(task.ID, dateOnly),
+				TaskID:                task.ID,
+				ReminderPolicy:        task.ReminderPolicy,
+				ReminderMinutesBefore: cloneIntPointer(task.ReminderMinutesBefore),
+				Title:                 task.Title,
+				Description:           "",
+				Status:                status,
+				Priority:              task.Priority,
+				StartTime:             occurrenceStart.UTC(),
+				AllDay:                task.AllDay,
+				IsRecurring:           true,
+				OriginalDate:          dateOnly,
+				Categories:            task.Categories,
 			}
 			if task.EndTime != nil && task.StartTime != nil {
 				duration := task.EndTime.Sub(*task.StartTime)
@@ -518,7 +543,7 @@ func (s *TaskService) Update(
 	activityMeta *TaskActivityMeta,
 ) (*models.Task, error) {
 	var task *models.Task
-	err := s.withTaskTransaction(func(scoped *TaskService) error {
+	err := s.withTaskTransaction(userID, func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.updateInTransaction(userID, taskID, req, fieldMask, expectedRevision, activityMeta)
 		if err != nil {
@@ -710,7 +735,7 @@ func (s *TaskService) updateInTransaction(
 		}
 		task.Revision += 1
 
-		if err := s.taskRepo.Update(task); err != nil {
+		if err := s.saveTaskRevision(task); err != nil {
 			return nil, err
 		}
 	}
@@ -802,7 +827,7 @@ func (s *TaskService) UpdateStatus(
 	activityMeta *TaskActivityMeta,
 ) (*models.Task, error) {
 	var task *models.Task
-	err := s.withTaskTransaction(func(scoped *TaskService) error {
+	err := s.withTaskTransaction(userID, func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.updateStatusInTransaction(userID, taskID, status, instanceID, occurrenceDate, expectedRevision, activityMeta)
 		if err != nil {
@@ -874,7 +899,7 @@ func (s *TaskService) updateStatusInTransaction(
 			task.Revision = 1
 		}
 		task.Revision += 1
-		if err := s.taskRepo.Update(task); err != nil {
+		if err := s.saveTaskRevision(task); err != nil {
 			return nil, err
 		}
 	}
@@ -946,7 +971,7 @@ func (s *TaskService) UpdateSchedule(
 	activityMeta *TaskActivityMeta,
 ) (*models.Task, error) {
 	var task *models.Task
-	err := s.withTaskTransaction(func(scoped *TaskService) error {
+	err := s.withTaskTransaction(userID, func(scoped *TaskService) error {
 		var err error
 		task, err = scoped.updateScheduleInTransaction(userID, taskID, req, expectedRevision, activityMeta)
 		if err != nil {
@@ -990,7 +1015,7 @@ func (s *TaskService) updateScheduleInTransaction(
 	}
 	task.Revision += 1
 
-	if err := s.taskRepo.Update(task); err != nil {
+	if err := s.saveTaskRevision(task); err != nil {
 		return nil, err
 	}
 	updatedTask, err := s.taskRepo.GetByID(task.ID)
@@ -1005,7 +1030,7 @@ func (s *TaskService) updateScheduleInTransaction(
 }
 
 func (s *TaskService) Delete(userID, taskID int64, expectedRevision *int64) error {
-	err := s.withTaskTransaction(func(scoped *TaskService) error {
+	err := s.withTaskTransaction(userID, func(scoped *TaskService) error {
 		return scoped.deleteInTransaction(userID, taskID, expectedRevision)
 	})
 	if err != nil {
@@ -1117,20 +1142,11 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 	if err != nil {
 		return err
 	}
-	if task.ReminderPolicy == models.TaskReminderNone {
+	minutes, enabled := resolveTaskReminderMinutes(task, user)
+	if !enabled {
 		return nil
 	}
 	explicitReminder := task.ReminderPolicy == models.TaskReminderOffset
-	if !explicitReminder && !user.DefaultReminderEnabled {
-		return nil
-	}
-
-	minutes := user.DefaultReminderMinutes
-	if explicitReminder && task.ReminderMinutesBefore != nil {
-		minutes = *task.ReminderMinutesBefore
-	} else if minutes <= 0 {
-		minutes = 5
-	}
 
 	resolvedStart := resolveReminderStartForTask(
 		reminderStart.UTC(),
@@ -1486,17 +1502,19 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 			dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
 			instanceID := buildOccurrenceInstanceID(task.ID, dateOnly)
 			instance := models.TaskInstance{
-				InstanceID:   instanceID,
-				TaskID:       task.ID,
-				Title:        task.Title,
-				Description:  "",
-				Status:       task.Status,
-				Priority:     task.Priority,
-				StartTime:    occurrenceStart.UTC(),
-				AllDay:       task.AllDay,
-				IsRecurring:  true,
-				OriginalDate: dateOnly,
-				Categories:   task.Categories,
+				InstanceID:            instanceID,
+				TaskID:                task.ID,
+				ReminderPolicy:        task.ReminderPolicy,
+				ReminderMinutesBefore: cloneIntPointer(task.ReminderMinutesBefore),
+				Title:                 task.Title,
+				Description:           "",
+				Status:                task.Status,
+				Priority:              task.Priority,
+				StartTime:             occurrenceStart.UTC(),
+				AllDay:                task.AllDay,
+				IsRecurring:           true,
+				OriginalDate:          dateOnly,
+				Categories:            task.Categories,
 			}
 
 			// Calculate end time
@@ -1680,20 +1698,22 @@ func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence
 	}
 
 	instance := models.TaskInstance{
-		InstanceID:   instanceID,
-		TaskID:       task.ID,
-		Title:        task.Title,
-		Description:  row.Description,
-		Status:       row.Status,
-		Priority:     task.Priority,
-		StartTime:    start.UTC(),
-		AllDay:       allDay,
-		IsRecurring:  true,
-		OriginalDate: row.OccurrenceDate.UTC().Truncate(24 * time.Hour),
-		CreatedAt:    row.CreatedAt.UTC(),
-		CompletedAt:  cloneTimePointer(row.CompletedAt),
-		DeletedAt:    cloneTimePointer(row.DeletedAt),
-		Categories:   task.Categories,
+		InstanceID:            instanceID,
+		TaskID:                task.ID,
+		ReminderPolicy:        task.ReminderPolicy,
+		ReminderMinutesBefore: cloneIntPointer(task.ReminderMinutesBefore),
+		Title:                 task.Title,
+		Description:           row.Description,
+		Status:                row.Status,
+		Priority:              task.Priority,
+		StartTime:             start.UTC(),
+		AllDay:                allDay,
+		IsRecurring:           true,
+		OriginalDate:          row.OccurrenceDate.UTC().Truncate(24 * time.Hour),
+		CreatedAt:             row.CreatedAt.UTC(),
+		CompletedAt:           cloneTimePointer(row.CompletedAt),
+		DeletedAt:             cloneTimePointer(row.DeletedAt),
+		Categories:            task.Categories,
 	}
 	if instance.Status == "" {
 		instance.Status = task.Status

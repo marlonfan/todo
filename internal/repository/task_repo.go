@@ -30,7 +30,15 @@ func (r *TaskRepository) WithTransaction(fn func(*gorm.DB) error) error {
 }
 
 func (r *TaskRepository) Create(task *models.Task) error {
-	return r.db.Create(task).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := LockTaskUser(tx, task.UserID); err != nil {
+			return err
+		}
+		if err := tx.Omit(clause.Associations).Create(task).Error; err != nil {
+			return err
+		}
+		return recordTaskChange(tx, task.UserID, task.ID, false)
+	})
 }
 
 func (r *TaskRepository) GetByID(id int64) (*models.Task, error) {
@@ -158,37 +166,44 @@ func (r *TaskRepository) List(userID int64, filters map[string]interface{}) ([]m
 }
 
 func (r *TaskRepository) Update(task *models.Task) error {
-	return r.db.Save(task).Error
+	return r.UpdateIfRevision(task, task.Revision)
+}
+
+// UpdateIfRevision never falls back to INSERT when the version is stale.
+func (r *TaskRepository) UpdateIfRevision(task *models.Task, expected int64) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := LockTaskUser(tx, task.UserID); err != nil {
+			return err
+		}
+		result := tx.Model(&models.Task{}).
+			Where("id = ? AND user_id = ? AND revision = ?", task.ID, task.UserID, expected).
+			Select("*").Omit("id", "created_at", clause.Associations).Updates(task)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrTaskRevisionConflict
+		}
+		return recordTaskChange(tx, task.UserID, task.ID, false)
+	})
 }
 
 func (r *TaskRepository) Delete(id int64) error {
-	// Fix 3: 使用事务清理关联表
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 1. 删除 task_categories 关联
-		if err := tx.Exec("DELETE FROM task_categories WHERE task_id = ?", id).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("task_id = ?", id).Delete(&models.TaskOccurrenceStatus{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("task_id = ?", id).Delete(&models.TaskOccurrenceOverride{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("task_id = ?", id).Delete(&models.TaskOccurrence{}).Error; err != nil {
-			return err
-		}
-
-		// 2. 删除任务
-		if err := tx.Delete(&models.Task{}, id).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
+	task, err := r.GetByID(id)
+	if err != nil {
+		return err
+	}
+	return r.DeleteWithDeleteLog(task.UserID, id, time.Now().UTC())
 }
 
 func (r *TaskRepository) DeleteWithDeleteLog(userID, taskID int64, deletedAt time.Time) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := LockTaskUser(tx, userID); err != nil {
+			return err
+		}
+		if err := recordTaskChange(tx, userID, taskID, true); err != nil {
+			return err
+		}
 		if err := tx.Create(&models.TaskDeleteLog{
 			UserID:    userID,
 			TaskID:    taskID,
