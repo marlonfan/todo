@@ -178,7 +178,9 @@ test('task: editing while creation is pending survives the server ID assignment'
   await started;
   const row = page.locator('[data-testid="task-row"]').filter({ hasText: title }).first();
   await row.click();
-  await page.getByTestId('task-detail-title-input').fill(edited);
+  const titleInput = page.getByTestId('task-detail-title-input');
+  const titleNode = await titleInput.elementHandle();
+  await titleInput.fill(edited);
   releaseCreate();
   const api = await getAuthedRequestContext(request, page);
   await expect.poll(async () => {
@@ -186,6 +188,9 @@ test('task: editing while creation is pending survives the server ID assignment'
     const rows = await response.json();
     return rows.some((task) => task.title === edited);
   }).toBe(true);
+  // ID assignment must keep the input mounted so in-flight typing reaches React.
+  expect(await titleNode.evaluate((node) => node.isConnected)).toBe(true);
+  await expect(titleInput).toBeFocused();
   await expect(page.getByTestId('task-detail-title-input')).toHaveValue(edited);
   await expect(page.locator('[data-testid="task-row"]').filter({ hasText: edited })).toBeVisible();
 });

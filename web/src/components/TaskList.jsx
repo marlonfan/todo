@@ -2769,6 +2769,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const currentFilteredIDs = filteredTaskIDsRef.current;
     const currentFilteredTasks = Array.isArray(filteredTasksRef.current) ? filteredTasksRef.current : [];
     const currentTasks = tasksRef.current;
+    const remap = pendingDraftRemapRef.current;
+    if (remap && [Number(remap.fromID), Number(remap.toID)].includes(Number(selectedTaskID))
+      && currentTasks.some((task) => [Number(remap.fromID), Number(remap.toID)].includes(Number(task?.id)))) {
+      // React Query and selection updates may render separately during ID assignment.
+      return;
+    }
     const allTaskIDs = currentTasks.map((task) => task?.id);
     const selectedNumericTaskID = Number(selectedTaskID || 0);
     const selectedSourceTaskID = getEffectiveTaskID(selectedTaskSnapshotRef.current)
@@ -2890,6 +2896,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     if (fromFiltered) return fromFiltered;
     const fromAllTasks = tasks.find((task) => String(task?.id) === String(selectedTaskID || ''));
     if (fromAllTasks) return fromAllTasks;
+    const remap = pendingDraftRemapRef.current;
+    if (remap && [Number(remap.fromID), Number(remap.toID)].includes(Number(selectedTaskID))
+      && Number(selectedTaskSnapshotRef.current?.id) === Number(remap.toID)) {
+      // Keep the detail DOM mounted until the task cache observes the new ID.
+      return selectedTaskSnapshotRef.current;
+    }
     const selectedNumericTaskID = Number(selectedTaskID || 0);
     if (selectedNumericTaskID > 0) {
       const equivalentFiltered = filteredTasks.find((task) => getEffectiveTaskID(task) === selectedNumericTaskID);
@@ -3096,11 +3108,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
 
     const nextDraft = buildDraftFromTask(selectedTask);
     const remap = pendingDraftRemapRef.current;
-    if (remap && Number(selectedTask.id) === Number(remap.toID)
-      && Number(lastSyncedSelectedIDRef.current) === Number(remap.fromID)) {
-      lastSyncedSelectedIDRef.current = selectedTask.id;
-      draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
-      pendingDraftRemapRef.current = null;
+    if (remap && Number(selectedTask.id) === Number(remap.toID)) {
+      if (Number(lastSyncedSelectedIDRef.current) === Number(remap.fromID)) {
+        lastSyncedSelectedIDRef.current = selectedTask.id;
+        draftSourceTaskIDRef.current = getEffectiveTaskID(selectedTask);
+      }
+      if (Number(selectedTaskID) === Number(remap.toID)
+        && tasksRaw.some((task) => Number(task?.id) === Number(remap.toID))) {
+        pendingDraftRemapRef.current = null;
+      }
     }
     if (lastSyncedSelectedIDRef.current !== selectedTask.id) {
       lastSyncedSelectedIDRef.current = selectedTask.id;
@@ -3155,7 +3171,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         setDraftTimeRangeEnabled(!!nextDraft?.end_time);
       }
     }
-  }, [beginDescriptionSession, selectedTask, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot, tasksRaw, timezone]);
+  }, [beginDescriptionSession, selectedTask, selectedTaskID, draft, detailPanel, isDetailPanelRequiringConfirm, setDraftWithSnapshot, tasksRaw, timezone]);
 
   useEffect(() => {
     if (!draft) return;
