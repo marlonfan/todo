@@ -27,6 +27,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend and embedded server assets
+        run: ./build.sh
       - run: go test ./...
       - run: go vet ./...
       - run: go test -race ./internal/service ./internal/scheduler -run 'TestConcurrent|TestSyncJournal|TestMutationReceipt|TestNotification|TestRetryDelay|TestNotifyScheduler|TestMigrationNormalizes'
