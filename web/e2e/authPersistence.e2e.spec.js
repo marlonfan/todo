@@ -28,32 +28,40 @@ async function startWithCachedSession(page, meStatus, refreshStatus, user = cach
   await page.goto('/login');
 }
 
+async function expectSessionToken(page, expected) {
+  // Auth invalidation can reload /login while its fields are already visible.
+  // Retry the read across navigation, but still require the actual stored value.
+  await expect(async () => {
+    expect(await page.evaluate(() => localStorage.getItem('token'))).toBe(expected);
+  }).toPass({ timeout: 12_000 });
+}
+
 test('keeps cached login when the initial account check is offline', async ({ page }) => {
   await startWithCachedSession(page, 'offline');
   await expect.poll(() => page.url().endsWith('/login')).toBe(false);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBe('test-session-token');
+  await expectSessionToken(page, 'test-session-token');
 });
 
 test('keeps cached login when refreshing a rejected request fails temporarily', async ({ page }) => {
   await startWithCachedSession(page, 401, 503);
   await expect.poll(() => page.url().endsWith('/login')).toBe(false);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBe('test-session-token');
+  await expectSessionToken(page, 'test-session-token');
 });
 
 test('clears login when the server rejects the refresh token', async ({ page }) => {
   await startWithCachedSession(page, 401, 401);
   await expect(page.getByTestId('login-username-input')).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem('token'))).toBeNull();
+  await expectSessionToken(page, null);
 });
 
 test('shows retry instead of login when offline without a cached user', async ({ page }) => {
   await startWithCachedSession(page, 'offline', null, null);
   await expect(page.getByRole('button', { name: /^(再试一次|Try Again|Retry)$/i })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('token'))).toBe('test-session-token');
+  await expectSessionToken(page, 'test-session-token');
 });
 
 test('clears login when the retried account check is also rejected', async ({ page }) => {
   await startWithCachedSession(page, 401, 200);
   await expect(page.getByTestId('login-username-input')).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem('token'))).toBeNull();
+  await expectSessionToken(page, null);
 });
