@@ -12,7 +12,7 @@ const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
 const DEFAULT_TIMEOUT_MS = 30000;
 const BUNDLED_SKILL_PATH = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'todo-cli', 'SKILL.md');
 const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes']);
-const TASK_INSTANCE_ID_PATTERN = /^\d+_\d{8}$/;
+const TASK_INSTANCE_ID_PATTERN = /^\d+_(\d{4})(\d{2})(\d{2})$/;
 const RETIRED_TASK_REMINDER_FLAGS = [
   'remind-at-start',
   'notify-at-start',
@@ -516,6 +516,12 @@ function occurrenceDateOnly(item) {
 function localDateString(offsetDays = 0) {
   const date = new Date();
   date.setDate(date.getDate() + offsetDays);
+  return localDateOnly(date);
+}
+
+function localDateOnly(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -539,15 +545,17 @@ function isTaskCalendarInstance(event) {
 function calendarEventToInstance(event) {
   const props = event?.extendedProps || {};
   const eventID = String(event?.id || '');
+  const instanceID = String(props.instanceId || (TASK_INSTANCE_ID_PATTERN.test(eventID) ? eventID : ''));
+  const originalDateParts = instanceID.match(TASK_INSTANCE_ID_PATTERN);
   return {
-    instance_id: props.instanceId || (TASK_INSTANCE_ID_PATTERN.test(eventID) ? eventID : undefined),
+    instance_id: instanceID || undefined,
     task_id: Number(props.taskId),
     title: event?.title,
     status: props.status,
     priority: props.priority,
     start_time: event?.start,
     end_time: event?.end,
-    original_date: normalizeDateOnly(event?.start),
+    original_date: originalDateParts ? originalDateParts.slice(1).join('-') : localDateOnly(event?.start),
     is_recurring: Boolean(props.isRecurring),
   };
 }
@@ -567,17 +575,21 @@ async function listDayTasks(ctx, offsetDays = 0) {
     query: localDayRange(date, offsetDays),
   }) || [];
   const seenInstances = new Set();
+  const recurringIDs = new Set();
   const recurringInstances = [];
   for (const event of events) {
     if (!isTaskCalendarInstance(event)) continue;
+    if (localDateOnly(event?.start) !== date) continue;
     const item = calendarEventToInstance(event);
-    if (item.original_date !== date) continue;
+    // Tombstones still suppress the series row, just as they suppress frontend
+    // projections, but skipped/cancelled occurrences are not visible tasks.
+    recurringIDs.add(item.task_id);
+    if (['skipped', 'cancelled'].includes(item.status)) continue;
     const dedupeKey = item.instance_id || String(item.task_id);
     if (seenInstances.has(dedupeKey)) continue;
     seenInstances.add(dedupeKey);
     recurringInstances.push({ ...summarizeInstance(item), source: 'occurrence' });
   }
-  const recurringIDs = new Set(recurringInstances.map((item) => Number(item.task_id)));
   const baseTasks = tasks
     .filter((task) => !task?.recurrence_rule || !recurringIDs.has(Number(task.id)))
     .map((task) => ({ ...summarizeTask(task), source: 'series' }));

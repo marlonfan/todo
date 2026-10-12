@@ -255,6 +255,9 @@ included by default; add `--no-occurrences` to exclude them):
 todo-cli task today
 ```
 
+Day membership uses the CLI's local timezone. Skipped/cancelled recurring instances
+are hidden, while completed instances remain visible.
+
 ### Shortcuts
 
 ```bash

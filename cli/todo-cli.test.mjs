@@ -25,7 +25,7 @@ async function withFixtureServer(handler, run) {
   }
 }
 
-async function runCLI(baseUrl, args) {
+async function runCLI(baseUrl, args, { timezone } = {}) {
   const configDir = await mkdtemp(join(tmpdir(), 'todo-cli-test-'));
   try {
     return await execFileAsync(process.execPath, [
@@ -34,7 +34,7 @@ async function runCLI(baseUrl, args) {
       '--token', 'test-token',
       '--config', join(configDir, 'config.json'),
       ...args,
-    ]);
+    ], { env: { ...process.env, ...(timezone ? { TZ: timezone } : {}) } });
   } finally {
     await rm(configDir, { recursive: true, force: true });
   }
@@ -247,6 +247,73 @@ test('task today includes today\'s recurring instance from the calendar and drop
     assert.ok(aliasOptOut.every((row) => row.task_id === undefined));
 
     assert.ok(handler.requested.includes('/api/calendar'), 'task today must read /calendar');
+  });
+});
+
+test('day tasks use local dates for UTC events and hide tombstones without restoring series', async (t) => {
+  for (const sample of [
+    {
+      timezone: 'Asia/Shanghai', date: '2026-10-12',
+      start: '2026-10-11T17:00:00Z',
+      range: { start: '2026-10-11T16:00:00.000Z', end: '2026-10-12T16:00:00.000Z' },
+    },
+    {
+      timezone: 'America/Los_Angeles', date: '2026-11-01',
+      start: '2026-11-02T07:30:00Z',
+      range: { start: '2026-11-01T07:00:00.000Z', end: '2026-11-02T08:00:00.000Z' },
+    },
+  ]) {
+    await t.test(sample.timezone, async () => {
+      const dayToken = sample.date.replaceAll('-', '');
+      const event = (taskId, status, start = sample.start) => ({
+        id: taskId + '_' + dayToken, title: status, start,
+        extendedProps: { taskId, instanceId: taskId + '_' + dayToken, isRecurring: true, status, priority: 1 },
+      });
+      await withFixtureServer((req, res) => {
+        const url = new URL(req.url, 'http://127.0.0.1');
+        res.setHeader('Content-Type', 'application/json');
+        if (url.pathname === '/api/tasks') {
+          res.end(JSON.stringify([3, 4].map((id) => ({
+            id, title: 'series fallback', status: 'pending', recurrence_rule: { freq: 'daily' },
+          }))));
+          return;
+        }
+        assert.equal(url.pathname, '/api/calendar');
+        assert.deepEqual(Object.fromEntries(url.searchParams), sample.range);
+        res.end(JSON.stringify([
+          event(1, 'pending'), event(1, 'pending'), event(2, 'completed'),
+          event(3, 'skipped'), event(4, 'cancelled'),
+          event(5, 'pending', sample.range.end),
+        ]));
+      }, async (baseUrl) => {
+        const rows = JSON.parse((await runCLI(baseUrl, ['task', 'today', '--date', sample.date], sample)).stdout);
+        assert.deepEqual(rows.map((row) => row.task_id), [1, 2]);
+        assert.deepEqual(rows.map((row) => row.status), ['pending', 'completed']);
+        for (const row of rows) {
+          assert.equal(row.original_date, sample.date);
+          assert.equal(row.instance_id, row.task_id + '_' + dayToken);
+          assert.equal(row.start_time, sample.start);
+          assert.equal(row.priority, 1);
+          assert.equal(row.source, 'occurrence');
+        }
+      });
+    });
+  }
+});
+
+test('rescheduled instances retain their original date independently of the displayed local day', async () => {
+  await withFixtureServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(url.pathname === '/api/calendar' ? [{
+      id: '43_20261011', title: 'Rescheduled', start: '2026-10-12T12:30:00Z',
+      extendedProps: { taskId: 43, instanceId: '43_20261011', isRecurring: true, status: 'pending' },
+    }] : []));
+  }, async (baseUrl) => {
+    const rows = JSON.parse((await runCLI(baseUrl, ['+today', '--date', '2026-10-12'], { timezone: 'Asia/Shanghai' })).stdout);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].instance_id, '43_20261011');
+    assert.equal(rows[0].original_date, '2026-10-11');
   });
 });
 

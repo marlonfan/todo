@@ -99,6 +99,7 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - For recurring tasks, `task detail ID` returns the effective visible record under `effective`; `task get ID` reads the series body only. Use `task get ID` when the user asks about the recurring template, series defaults, revision, recurrence rule, or future default behavior.
 - `task list --status pending` returns pending recurring series templates. For recurring rows, do not treat the series `start_time` as an unfinished historical occurrence. Confirm the visible pending instance with `task today`, `task next-occurrences --task-id ID`, or `task detail ID --date YYYY-MM-DD` before calling a recurring task overdue or listing a past date as pending.
 - If the user asks about today's tasks without an ID, start with `task today`; recurring instances are included by default (pass `--no-occurrences` to exclude them).
+- Day membership uses the CLI's local timezone; skipped/cancelled recurring instances are hidden, while completed instances remain visible.
 - If the user is looking at a specific calendar/today occurrence, prefer `task detail ID --date YYYY-MM-DD`; update the displayed instance with `task update ID --occurrence-date YYYY-MM-DD` when needed.
 - Pass only the task fields documented below when creating or verifying a task.
 - When uncertain about flags, run focused help first: `todo_cli task --help`, `todo_cli task create --help`, `todo_cli calendar --help`, `todo_cli category --help`, `todo_cli auth --help`, or `todo_cli api --help`.
