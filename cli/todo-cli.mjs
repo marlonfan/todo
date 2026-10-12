@@ -6,12 +6,13 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const CLI_VERSION = '0.3.0';
+const CLI_VERSION = '0.3.1';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
 const DEFAULT_TIMEOUT_MS = 30000;
 const BUNDLED_SKILL_PATH = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'todo-cli', 'SKILL.md');
 const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes']);
+const TASK_INSTANCE_ID_PATTERN = /^\d+_\d{8}$/;
 const RETIRED_TASK_REMINDER_FLAGS = [
   'remind-at-start',
   'notify-at-start',
@@ -459,6 +460,18 @@ function localRange(days = 1, offsetDays = 0) {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+function localDayRange(dateOnly, offsetDays = 0) {
+  let start = dateOnly ? new Date(`${dateOnly}T00:00:00`) : null;
+  if (!start || Number.isNaN(start.getTime())) {
+    start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() + offsetDays);
+  }
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 function selectFields(item, fields) {
   const out = {};
   for (const field of fields) out[field] = item?.[field];
@@ -515,19 +528,55 @@ function findOccurrenceForTask(items, taskID, date) {
   return matches.find((item) => occurrenceDateOnly(item) === date) || null;
 }
 
+function isTaskCalendarInstance(event) {
+  const props = event?.extendedProps || {};
+  if (props.source === 'caldav') return false;
+  const taskID = Number(props.taskId);
+  if (!Number.isFinite(taskID) || taskID <= 0) return false;
+  return Boolean(props.isRecurring) || TASK_INSTANCE_ID_PATTERN.test(String(event?.id || ''));
+}
+
+function calendarEventToInstance(event) {
+  const props = event?.extendedProps || {};
+  const eventID = String(event?.id || '');
+  return {
+    instance_id: props.instanceId || (TASK_INSTANCE_ID_PATTERN.test(eventID) ? eventID : undefined),
+    task_id: Number(props.taskId),
+    title: event?.title,
+    status: props.status,
+    priority: props.priority,
+    start_time: event?.start,
+    end_time: event?.end,
+    original_date: normalizeDateOnly(event?.start),
+    is_recurring: Boolean(props.isRecurring),
+  };
+}
+
 async function listDayTasks(ctx, offsetDays = 0) {
   const tasks = await apiRequest(ctx, 'GET', '/tasks', { query: localRange(1, offsetDays) }) || [];
-  if (!flagEnabled(ctx.flags, ['include-occurrences', 'occurrences'], false)) {
+  // Recurring instances are included by default so `task today`/`+today`/`tomorrow`
+  // match `calendar +agenda` and the UI. `--no-occurrences` opts back out.
+  if (!flagEnabled(ctx.flags, ['include-occurrences', 'occurrences'], true)) {
     return tasks.map(summarizeTask);
   }
 
   const date = normalizeDateOnly(optionalString(ctx.flags, ['date'])) || localDateString(offsetDays);
-  const occurrences = await apiRequest(ctx, 'GET', '/tasks/next-occurrences', {
-    query: buildQuery(ctx.flags, { from: ['from'] }),
+  // `/tasks/next-occurrences` only returns the earliest unfinished instance per series,
+  // so it misses later dates. `/calendar` expands the requested range and matches the UI.
+  const events = await apiRequest(ctx, 'GET', '/calendar', {
+    query: localDayRange(date, offsetDays),
   }) || [];
-  const recurringInstances = occurrences
-    .filter((item) => occurrenceDateOnly(item) === date)
-    .map((item) => ({ ...summarizeInstance(item), source: 'occurrence' }));
+  const seenInstances = new Set();
+  const recurringInstances = [];
+  for (const event of events) {
+    if (!isTaskCalendarInstance(event)) continue;
+    const item = calendarEventToInstance(event);
+    if (item.original_date !== date) continue;
+    const dedupeKey = item.instance_id || String(item.task_id);
+    if (seenInstances.has(dedupeKey)) continue;
+    seenInstances.add(dedupeKey);
+    recurringInstances.push({ ...summarizeInstance(item), source: 'occurrence' });
+  }
   const recurringIDs = new Set(recurringInstances.map((item) => Number(item.task_id)));
   const baseTasks = tasks
     .filter((task) => !task?.recurrence_rule || !recurringIDs.has(Number(task.id)))
@@ -1229,7 +1278,7 @@ Tasks:
   todo-cli task list --status pending --format table
   todo-cli task get <id>
   todo-cli task detail <id>
-  todo-cli task today --include-occurrences
+  todo-cli task today
   todo-cli task create --title "Ship CLI" --description "notes" --priority high
   todo-cli task update <id> --title "New title" --if-match <revision>
   todo-cli task update <id> --description-file ./notes.md --if-match <revision>
@@ -1292,7 +1341,7 @@ Examples:
   todo-cli task list --category-id 3
   todo-cli task list --start 2026-05-11T00:00:00+08:00 --end 2026-05-12T00:00:00+08:00
   todo-cli task list --summary=false
-  todo-cli task today --include-occurrences
+  todo-cli task today
 
 Filters:
   --status pending|completed|cancelled|skipped
@@ -1300,7 +1349,8 @@ Filters:
   --start RFC3339
   --end RFC3339
   --summary=false     Return full task records instead of compact rows
-  --include-occurrences Include recurring instances for today/tomorrow shortcuts
+  --no-occurrences    Exclude recurring instances for today/tomorrow shortcuts
+                      (recurring instances are included by default)
 `;
   }
 
@@ -1318,7 +1368,8 @@ How to choose:
   task detail is the default for "today/current/calendar/task detail" questions.
   For recurring tasks, task detail returns the next visible occurrence when one exists.
   task get reads the series task body only.
-  Use task today --include-occurrences before detail when the user has not provided an id.
+  Use task today before detail when the user has not provided an id; it includes
+  recurring instances by default (add --no-occurrences to exclude them).
 
 Options:
   --scope auto|series|occurrence       Default auto

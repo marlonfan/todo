@@ -148,15 +148,117 @@ test('retired task reminder flags fail instead of being silently ignored', async
   });
 });
 
+function localDateOnly(offsetDays = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function occurrenceFixtureHandler() {
+  const today = localDateOnly();
+  const staleDate = localDateOnly(-49);
+  const requested = [];
+  const handler = (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    requested.push(url.pathname);
+    res.setHeader('Content-Type', 'application/json');
+    if (url.pathname === '/api/tasks') {
+      res.end(JSON.stringify([
+        { id: 89, title: '普通任务', status: 'pending' },
+        { id: 43, title: 'Obsidian 日报复盘', status: 'pending', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR' },
+      ]));
+      return;
+    }
+    // Faithful to the server: next-occurrences only returns the earliest unfinished
+    // instance of each series, so it never carries today's instance for a stale series.
+    if (url.pathname === '/api/tasks/next-occurrences') {
+      res.end(JSON.stringify([{
+        instance_id: `43_${staleDate.replaceAll('-', '')}`,
+        task_id: 43,
+        title: 'Obsidian 日报复盘',
+        original_date: staleDate,
+        start_time: `${staleDate}T20:30:00+08:00`,
+        is_recurring: true,
+      }]));
+      return;
+    }
+    if (url.pathname === '/api/calendar') {
+      res.end(JSON.stringify([
+        {
+          id: `43_${today.replaceAll('-', '')}`,
+          title: 'Obsidian 日报复盘',
+          start: `${today}T20:30:00+08:00`,
+          end: `${today}T21:00:00+08:00`,
+          allDay: false,
+          editable: true,
+          extendedProps: {
+            taskId: 43,
+            priority: 0,
+            status: 'pending',
+            isRecurring: true,
+            instanceId: `43_${today.replaceAll('-', '')}`,
+          },
+        },
+        {
+          id: 'caldav-7',
+          title: '外部日历事件',
+          start: `${today}T09:00:00+08:00`,
+          allDay: false,
+          editable: false,
+          extendedProps: { taskId: 7, priority: 0, status: 'pending', isRecurring: false, source: 'caldav' },
+        },
+      ]));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: `unexpected ${url.pathname}` }));
+  };
+  handler.requested = requested;
+  return handler;
+}
+
+test('task today includes today\'s recurring instance from the calendar and drops them with --no-occurrences', async () => {
+  const handler = occurrenceFixtureHandler();
+  await withFixtureServer(handler, async (baseUrl) => {
+    const today = localDateOnly().replaceAll('-', '');
+    const { stdout } = await runCLI(baseUrl, ['task', 'today']);
+    const rows = JSON.parse(stdout);
+    assert.deepEqual(
+      rows.map((row) => row.title).sort(),
+      ['Obsidian 日报复盘', '普通任务'],
+    );
+    const occurrence = rows.find((row) => row.task_id === 43);
+    assert.ok(occurrence, 'expected the recurring occurrence in task today output');
+    assert.equal(occurrence.instance_id, `43_${today}`);
+    assert.equal(occurrence.original_date, localDateOnly());
+    assert.equal(occurrence.start_time, `${localDateOnly()}T20:30:00+08:00`);
+    assert.equal(occurrence.source, 'occurrence');
+    assert.ok(rows.every((row) => row.title !== '外部日历事件'), 'caldav events must not leak into task today');
+
+    const optOut = JSON.parse((await runCLI(baseUrl, ['task', 'today', '--no-occurrences'])).stdout);
+    assert.deepEqual(optOut.map((row) => row.id).sort((a, b) => a - b), [43, 89]);
+    assert.ok(optOut.every((row) => row.task_id === undefined));
+
+    const aliasOptOut = JSON.parse((await runCLI(baseUrl, ['task', 'today', '--no-include-occurrences'])).stdout);
+    assert.deepEqual(aliasOptOut.map((row) => row.id).sort((a, b) => a - b), [43, 89]);
+    assert.ok(aliasOptOut.every((row) => row.task_id === undefined));
+
+    assert.ok(handler.requested.includes('/api/calendar'), 'task today must read /calendar');
+  });
+});
+
 test('version and skill doctor report matching bundled versions', async () => {
   const versionResult = await runLocalCLI(['--version']);
-  assert.equal(versionResult.stdout.trim(), '0.3.0');
+  assert.equal(versionResult.stdout.trim(), '0.3.1');
 
   const doctorResult = await runLocalCLI(['skill', 'doctor']);
   const report = JSON.parse(doctorResult.stdout);
   assert.equal(report.ok, true);
-  assert.equal(report.cli_version, '0.3.0');
-  assert.equal(report.skill_version, '0.3.0');
+  assert.equal(report.cli_version, '0.3.1');
+  assert.equal(report.skill_version, '0.3.1');
   assert.equal(report.version_match, true);
 });
 

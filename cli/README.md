@@ -172,7 +172,7 @@ todo-cli task list --status pending --format table
 todo-cli task get 42
 todo-cli task detail 42
 todo-cli task detail 42 --date 2026-05-11
-todo-cli task today --include-occurrences
+todo-cli task today
 todo-cli task create --title "Ship CLI" --description "Markdown notes" --priority high
 todo-cli task update 42 --title "Ship CLI v2" --if-match 3
 todo-cli task update 42 --description-file ./daily-review.md --if-match 3
@@ -245,13 +245,14 @@ revision, or recurrence rule.
 
 When summarizing unfinished work, do not treat the `start_time` on a recurring series returned by
 `task list --status pending` as an overdue unfinished instance. For recurring tasks, use
-`task next-occurrences --task-id ID`, `task today --include-occurrences`, or `task detail ID --date YYYY-MM-DD`
+`task next-occurrences --task-id ID`, `task today`, or `task detail ID --date YYYY-MM-DD`
 to identify the actual visible pending occurrence.
 
-If the user did not provide an ID, list today's visible records first:
+If the user did not provide an ID, list today's visible records first (recurring instances are
+included by default; add `--no-occurrences` to exclude them):
 
 ```bash
-todo-cli task today --include-occurrences
+todo-cli task today
 ```
 
 ### Shortcuts

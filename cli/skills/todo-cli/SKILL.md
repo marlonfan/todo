@@ -2,7 +2,7 @@
 name: todo-cli
 description: "Todo 任务管理：通过已安装的 todo-cli 创建、查看、更新、完成、取消和删除任务，并管理分类与日历。当用户说‘提醒我’‘创建待办’‘记个任务’‘今天有什么任务’，或提到 Todo CLI、Todo、task 时使用；所有含时间的请求都只设置任务时间。"
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
   requires:
     bins: ["todo-cli"]
   cliHelp: "todo-cli --help;todo-cli task --help;todo-cli calendar --help;todo-cli skill doctor"
@@ -97,8 +97,8 @@ Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 - For large raw API payloads, write JSON to a temporary file and pass `--data-file PATH`.
 - For user-facing detail questions such as "今天的任务详情", "当日任务", "当前页面这个任务", "日历里这个任务", or "看看详情", use `task detail ID` instead of `task get ID`.
 - For recurring tasks, `task detail ID` returns the effective visible record under `effective`; `task get ID` reads the series body only. Use `task get ID` when the user asks about the recurring template, series defaults, revision, recurrence rule, or future default behavior.
-- `task list --status pending` returns pending recurring series templates. For recurring rows, do not treat the series `start_time` as an unfinished historical occurrence. Confirm the visible pending instance with `task today --include-occurrences`, `task next-occurrences --task-id ID`, or `task detail ID --date YYYY-MM-DD` before calling a recurring task overdue or listing a past date as pending.
-- If the user asks about today's tasks without an ID, start with `task today --include-occurrences` so recurring instances are included in the candidate list.
+- `task list --status pending` returns pending recurring series templates. For recurring rows, do not treat the series `start_time` as an unfinished historical occurrence. Confirm the visible pending instance with `task today`, `task next-occurrences --task-id ID`, or `task detail ID --date YYYY-MM-DD` before calling a recurring task overdue or listing a past date as pending.
+- If the user asks about today's tasks without an ID, start with `task today`; recurring instances are included by default (pass `--no-occurrences` to exclude them).
 - If the user is looking at a specific calendar/today occurrence, prefer `task detail ID --date YYYY-MM-DD`; update the displayed instance with `task update ID --occurrence-date YYYY-MM-DD` when needed.
 - Pass only the task fields documented below when creating or verifying a task.
 - When uncertain about flags, run focused help first: `todo_cli task --help`, `todo_cli task create --help`, `todo_cli calendar --help`, `todo_cli category --help`, `todo_cli auth --help`, or `todo_cli api --help`.
@@ -146,7 +146,7 @@ todo_cli task list --status pending
 todo_cli task list --category-id 3
 todo_cli task get 42
 todo_cli task detail 42
-todo_cli task today --include-occurrences
+todo_cli task today
 todo_cli task next-occurrences --task-id 42
 todo_cli +today
 todo_cli +inbox
