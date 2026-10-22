@@ -22,6 +22,42 @@ test.beforeEach(() => {
   useCalendarCacheStore.getState().clear();
 });
 
+test('uncached dates return a stable empty snapshot across reads and unrelated updates', () => {
+  const store = useCalendarCacheStore.getState();
+  const first = store.getEventsForDate('2026-03-01', 'UTC');
+  assert.deepEqual(first, []);
+  assert.equal(store.getEventsForDate('2026-03-01', 'UTC'), first);
+  store.mergeEvents({ '2026-04-01': [makeEvent('other', 'Other', '2026-04-01T08:00:00Z')] });
+  assert.equal(store.getEventsForDate('2026-03-01', 'UTC'), first);
+  store.clear();
+  assert.equal(store.getEventsForDate('2026-03-01', 'UTC'), first);
+});
+
+test('calendar cache updates details even when identity, schedule and title stay unchanged', () => {
+  const store = useCalendarCacheStore.getState();
+  const original = makeEvent('meeting', 'Meeting', '2026-10-22T08:00:00Z');
+  original.extendedProps.description = 'Before';
+  original.extendedProps.location = 'Room A';
+  const replacements = [
+    (events) => store.mergeEvents({ '2026-10-22': events }),
+    (events) => store.replaceRangeEvents('2026-10-22T00:00:00Z', '2026-10-23T00:00:00Z', 'UTC', { '2026-10-22': events }),
+    (events) => store.replaceFetchedSegments([{ start: '2026-10-22T00:00:00Z', end: '2026-10-23T00:00:00Z', timezone: 'UTC', eventsByDate: { '2026-10-22': events } }]),
+  ];
+  for (const replace of replacements) {
+    store.clear();
+    replace([original]);
+    const before = store.getEventsForDate('2026-10-22');
+    const updated = { ...original, extendedProps: { ...original.extendedProps, description: 'After', location: 'Room B' } };
+    replace([updated]);
+    const after = store.getEventsForDate('2026-10-22');
+    assert.notEqual(after, before);
+    assert.equal(after[0].extendedProps.description, 'After');
+    assert.equal(after[0].extendedProps.location, 'Room B');
+    replace([{ ...updated, extendedProps: { ...updated.extendedProps } }]);
+    assert.equal(store.getEventsForDate('2026-10-22'), after);
+  }
+});
+
 test('replaceRangeEvents clears stale events inside fetched range and keeps empty-day marker', () => {
   const store = useCalendarCacheStore.getState();
 

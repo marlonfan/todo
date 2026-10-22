@@ -194,3 +194,42 @@ test('task: editing while creation is pending survives the server ID assignment'
   await expect(page.getByTestId('task-detail-title-input')).toHaveValue(edited);
   await expect(page.locator('[data-testid="task-row"]').filter({ hasText: edited })).toBeVisible();
 });
+
+test('task: keyboard opens details and completion does not open a different task', async ({ page, request }) => {
+  await registerAndLogin(page, createE2EAccount());
+  const api = await getAuthedRequestContext(request, page);
+  const firstTitle = `Keyboard open ${Date.now()}`;
+  const secondTitle = `Keyboard complete ${Date.now()}`;
+  for (const title of [firstTitle, secondTitle]) {
+    const result = await api.post('/api/tasks', { data: { title, priority: 0 } });
+    expect(result.ok()).toBe(true);
+  }
+  await page.goto('/tasks?view=all');
+  const first = page.getByTestId('task-row').filter({ hasText: firstTitle });
+  const openFirst = first.getByRole('button', { name: firstTitle, exact: true });
+  await expect(openFirst).toBeVisible();
+  await first.getByTestId('task-row-status-checkbox').focus();
+  await page.keyboard.press('Tab');
+  await expect(openFirst).toBeFocused();
+  await expect(openFirst).not.toHaveCSS('box-shadow', 'none');
+  await expect(openFirst.locator('..')).toHaveCSS('overflow', 'visible');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('task-detail-title-input')).toHaveValue(firstTitle);
+
+  const second = page.getByTestId('task-row').filter({ hasText: secondTitle });
+  const complete = second.getByRole('button', { name: new RegExp(`(标记完成|Mark Complete).*${secondTitle}`, 'i') });
+  await complete.focus();
+  await page.keyboard.press('Space');
+  await expect.poll(async () => {
+    const response = await api.get('/api/tasks');
+    const tasks = await response.json();
+    return tasks.find((task) => task.title === secondTitle)?.status;
+  }).toBe('completed');
+  await expect(page.getByTestId('task-detail-title-input')).toHaveValue(firstTitle);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.locator('.task-split-resizer')).toBeHidden();
+  await openFirst.focus();
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('task-modal-title-input')).toHaveValue(firstTitle);
+});

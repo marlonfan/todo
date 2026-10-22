@@ -3,6 +3,7 @@ import { immer } from 'zustand/middleware/immer';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
+import { buildEventsSignature } from '../utils/calendarEvents.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -248,7 +249,7 @@ const useCalendarCacheStore = create(
     getEventsForDate: (dateString, timezone = 'UTC') => {
       const timezoneName = normalizeTimezoneName(timezone);
       const bucket = getTimezoneBucket(get(), timezoneName);
-      return bucket[dateString] || [];
+      return bucket[dateString] || EMPTY_EVENTS;
     },
 
     /**
@@ -469,33 +470,13 @@ const useCalendarCacheStore = create(
  * 用于判断是否需要更新引用
  */
 function eventsAreEqual(eventsA, eventsB) {
+  if (eventsA === eventsB) return true;
   if ((!eventsA && eventsB) || (eventsA && !eventsB)) return false;
   if (!eventsA && !eventsB) return true;
 
   if (eventsA.length !== eventsB.length) return false;
 
-  const sortedA = [...eventsA].sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
-  const sortedB = [...eventsB].sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
-
-  for (let i = 0; i < sortedA.length; i += 1) {
-    const eventA = sortedA[i];
-    const eventB = sortedB[i];
-
-    if (eventA?.id !== eventB?.id) return false;
-    if (eventA?.start !== eventB?.start) return false;
-    if (eventA?.end !== eventB?.end) return false;
-    if (eventA?.title !== eventB?.title) return false;
-    if (!!eventA?.allDay !== !!eventB?.allDay) return false;
-
-    const propsA = eventA?.extendedProps || {};
-    const propsB = eventB?.extendedProps || {};
-    if (propsA?.status !== propsB?.status) return false;
-    if (propsA?.taskId !== propsB?.taskId) return false;
-    if (!!propsA?.readOnly !== !!propsB?.readOnly) return false;
-    if (String(propsA?.source || '') !== String(propsB?.source || '')) return false;
-  }
-
-  return true;
+  return buildEventsSignature(eventsA) === buildEventsSignature(eventsB);
 }
 
 export default useCalendarCacheStore;

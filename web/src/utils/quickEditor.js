@@ -1,7 +1,6 @@
 // 任务快速编辑器共享工具（阶段 3）：recurrence / category 相关纯函数，
 // 从 TaskList.jsx / TaskModal.jsx 两份重复定义中去重。供 TaskQuickEditor 及调用方共用。
-// 已逐字核对两份实现完全一致；buildRecurrenceSummaryLabel / getRecurrenceIntervalForType
-// 因数据模型差异（单 interval 字段 vs 双 weekly/monthly 字段）暂留在各自组件。
+// 规则解析与摘要见 taskRecurrence.js；此处只保留选择控件共用的基础值处理。
 
 export const RECURRENCE_INTERVAL_MAX = 99;
 

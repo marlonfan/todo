@@ -37,6 +37,7 @@ import { useCalendarFetch, useEventsForRange } from '../hooks/useCalendarFetch';
 import useCalendarCacheStore from '../stores/calendarCacheStore';
 import { formatCalendarViewTitle, getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
 import { isReadOnlyCalendarEvent } from '../utils/calendarEvents';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 function normalizeCalendarDefaultView(value) {
   if (value === 'dayGridMonth' || value === 'timeGridWeek' || value === 'timeGridDay') {
@@ -241,6 +242,7 @@ function CalendarView() {
   const readonlyModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const moreEventsModalHistoryRef = useRef({ hasEntry: false, ignoreNextPop: false });
   const readonlyModalOpenedAtRef = useRef(0);
+  const readonlyDialogRef = useRef(null);
   const moreEventsModalOpenedAtRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -253,6 +255,7 @@ function CalendarView() {
   const [todayJumpToken, setTodayJumpToken] = useState(0);
   const [readonlyEventOpen, setReadonlyEventOpen] = useState(false);
   const [readonlyEventDetail, setReadonlyEventDetail] = useState(null);
+  useFocusTrap(readonlyEventOpen, readonlyDialogRef);
   const [dateRange, setDateRange] = useState(() => {
     const view = readCalendarDefaultView();
     const now = dayjs();
@@ -1707,13 +1710,17 @@ function CalendarView() {
       {readonlyEventOpen && readonlyEventDetail && typeof document !== 'undefined' && createPortal(
         <div className="calendar-readonly-event-overlay fixed inset-0 z-[100] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[1px]" onClick={handleReadonlyBackdropClick}>
           <div
+            ref={readonlyDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="calendar-readonly-title"
             className="readonly-event-card mobile-scrollbar-hidden w-full max-w-[42rem] overflow-hidden"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="readonly-event-header">
               <div className="min-w-0 flex-1">
                 <div className="readonly-event-source-pill">{readonlyEventDetail.sourceLabel}</div>
-                <h3 className="readonly-event-title">
+                <h3 id="calendar-readonly-title" className="readonly-event-title">
                   {readonlyEventDetail.title || t('calendar.untitledEvent')}
                 </h3>
               </div>

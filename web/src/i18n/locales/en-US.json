@@ -219,7 +219,10 @@
     "pullRefreshRelease": "Release to sync",
     "pullRefreshRefreshing": "Syncing",
     "pullRefreshDone": "Synced",
-    "pullRefreshFailed": "Sync failed"
+    "pullRefreshFailed": "Sync failed",
+    "draftRecoveryTitle": "{{count}} task drafts have not been saved",
+    "draftRecoveryBackedUp": "A recovery copy is available. Retry saving to continue syncing.",
+    "draftRecoveryMemoryOnly": "Drafts are only held in this window. Keep it open and retry when storage is available."
   },
   "category": {
     "name": "Name",

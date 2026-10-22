@@ -6,6 +6,9 @@ import {
   TASK_SPLIT_DEFAULT_RATIO,
   TASK_COMPACT_MOBILE_BREAKPOINT,
   TASK_DETAIL_SPLIT_MIN_WIDTH,
+  TASK_SPLIT_MIN_LIST_WIDTH,
+  TASK_SPLIT_MIN_DETAIL_WIDTH,
+  TASK_SPLIT_DIVIDER_WIDTH,
 } from './taskListConstants.js';
 
 export function clampNumber(value, min, max) {
@@ -18,13 +21,34 @@ export function clampNumber(value, min, max) {
 
 export function readTaskSplitRatio() {
   if (typeof window === 'undefined') return TASK_SPLIT_DEFAULT_RATIO;
-  const stored = window.localStorage?.getItem(TASK_SPLIT_STORAGE_KEY);
-  return clampNumber(stored, 0.25, 0.75) || TASK_SPLIT_DEFAULT_RATIO;
+  try {
+    const stored = window.localStorage?.getItem(TASK_SPLIT_STORAGE_KEY);
+    const ratio = Number.parseFloat(stored);
+    return Number.isFinite(ratio) ? clampNumber(ratio, 0.25, 0.75) : TASK_SPLIT_DEFAULT_RATIO;
+  } catch {
+    return TASK_SPLIT_DEFAULT_RATIO;
+  }
 }
 
 export function writeTaskSplitRatio(ratio) {
   if (typeof window === 'undefined') return;
-  window.localStorage?.setItem(TASK_SPLIT_STORAGE_KEY, String(clampNumber(ratio, 0.25, 0.75).toFixed(4)));
+  try {
+    window.localStorage?.setItem(TASK_SPLIT_STORAGE_KEY, String(clampNumber(ratio, 0.25, 0.75).toFixed(4)));
+  } catch {
+    // Resizing should still work when storage is disabled or full.
+  }
+}
+
+export function getTaskSplitBounds(workspaceWidth) {
+  const width = Number(workspaceWidth);
+  if (!Number.isFinite(width) || width < TASK_DETAIL_SPLIT_MIN_WIDTH) {
+    return { min: 0.25, max: 0.75 };
+  }
+  const availableWidth = width - TASK_SPLIT_DIVIDER_WIDTH;
+  return {
+    min: Math.max(0.25, TASK_SPLIT_MIN_LIST_WIDTH / availableWidth),
+    max: Math.min(0.75, 1 - TASK_SPLIT_MIN_DETAIL_WIDTH / availableWidth),
+  };
 }
 
 export function isTaskCompactMobileLayout() {

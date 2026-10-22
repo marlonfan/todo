@@ -15,7 +15,6 @@ import {
 } from '../utils/time';
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import {
-  buildLunarYearlyRuleFromSelection,
   coerceLunarSelection,
   lunarSelectionFromLocalInput,
   LUNAR_TIMEZONE,
@@ -23,6 +22,7 @@ import {
   parseLunarYearlyRule,
 } from '../utils/lunar';
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
+import { parseRecurrenceRule, parseRecurrenceSelection, buildRecurrenceSummaryLabel, getRecurrenceIntervalForType, buildRecurrenceRule } from '../utils/taskRecurrence';
 import { getLunarInfo } from '../utils/holidays';
 import {
   buildCategorySummaryLabel,
@@ -94,7 +94,7 @@ import { queryKeys } from '../query/keys';
 import { tasksAPI } from '../api/client';
 import {
   cancelTaskLocal,
-  createTaskLocal,
+  createTempTaskID,
   deleteTaskLocal,
   setTasksCache,
   updateTaskLocal,
@@ -135,24 +135,12 @@ import {
   TASK_PULL_REFRESH_MAX_PX,
   TASK_PULL_REFRESH_HOLD_PX,
   TASK_PULL_REFRESH_RESISTANCE,
-  TASK_COMPACT_MOBILE_BREAKPOINT,
-  TASK_DETAIL_SPLIT_MIN_WIDTH,
-  TASK_SPLIT_STORAGE_KEY,
-  TASK_SPLIT_DEFAULT_RATIO,
-  TASK_SPLIT_MIN_LIST_WIDTH,
-  TASK_SPLIT_MIN_DETAIL_WIDTH,
-  TASK_SPLIT_DIVIDER_WIDTH,
-  TASK_SPLIT_KEYBOARD_STEP,
   TIME_PANEL_DRAFT_FIELDS,
   RECURRENCE_PANEL_DRAFT_FIELDS,
 } from './taskListConstants';
-import {
-  clampNumber,
-  readTaskSplitRatio,
-  writeTaskSplitRatio,
-  isTaskCompactMobileLayout,
-  shouldUseTaskModalLayout,
-} from './taskListSplit';
+import { useTaskSplitLayout } from '../hooks/useTaskSplitLayout';
+import { useTaskDraftPersistence } from '../hooks/useTaskDraftPersistence';
+import TaskDraftRecoveryNotice from './task/TaskDraftRecoveryNotice';
 
 const LiveMarkdownEditor = lazy(() => import('./LiveMarkdownEditor'));
 
@@ -182,17 +170,6 @@ function logDraftSwitchDebug(scope, payload = {}) {
     ...payload,
   };
   console.info('[todo-draft-debug]', JSON.stringify(entry));
-}
-
-function parseRecurrenceRule(rawRule) {
-  if (!rawRule) return null;
-  if (typeof rawRule === 'object') return rawRule;
-  if (typeof rawRule !== 'string') return null;
-  try {
-    return JSON.parse(rawRule);
-  } catch {
-    return null;
-  }
 }
 
 function resolveRecurringSourceTask(task, allTasks) {
@@ -519,152 +496,6 @@ function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, luna
   if (!start && end) return dateFmt(end);
   if (start && !end) return dateFmt(start);
   return `${dateFmt(start)}-${dateFmt(end)}`;
-}
-
-function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, recurrenceMeta = null) {
-  if (!enabled) return t('task.repeatOff');
-  if (recurrenceType === 'lunar') {
-    const month = Number.parseInt(recurrenceMeta?.month, 10) || 1;
-    const day = Number.parseInt(recurrenceMeta?.day, 10) || 1;
-    const leap = !!recurrenceMeta?.isLeapMonth;
-    return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
-  }
-  const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
-  if (recurrenceType === 'custom_weekly') {
-    const label = t('task.customWeeklySummary', {
-      count: clampCustomRecurrenceInterval(recurrenceMeta?.interval),
-    });
-    return dayCount > 0 ? `${label}(${dayCount})` : label;
-  }
-  if (recurrenceType === 'custom_monthly') {
-    return t('task.customMonthlySummary', {
-      count: clampCustomRecurrenceInterval(recurrenceMeta?.interval),
-      date: clampMonthlyDate(recurrenceMeta?.monthDate, 1),
-    });
-  }
-  if (recurrenceType === 'biweekly') {
-    const biweeklyLabel = t('task.biweekly');
-    return dayCount > 0 ? `${biweeklyLabel}(${dayCount})` : biweeklyLabel;
-  }
-  if (recurrenceType === 'weekly') {
-    const weeklyLabel = t('task.weekly');
-    return dayCount > 0 ? `${weeklyLabel}(${dayCount})` : weeklyLabel;
-  }
-  if (recurrenceType === 'monthly') return t('task.monthly');
-  if (recurrenceType === 'yearly') return t('task.yearly');
-  return t('task.daily');
-}
-
-function getRecurrenceIntervalForType(recurrenceType, interval = 1) {
-  const type = String(recurrenceType || 'daily');
-  if (type === 'biweekly') return 2;
-  if (type === 'custom_weekly' || type === 'custom_monthly') {
-    return clampCustomRecurrenceInterval(interval);
-  }
-  return 1;
-}
-
-function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
-  const rawByDate = Array.isArray(rule?.bydate)
-    ? rule.bydate
-    : Array.isArray(rule?.byDate)
-      ? rule.byDate
-      : Array.isArray(rule?.bymonthday)
-        ? rule.bymonthday
-        : [];
-  for (const raw of rawByDate) {
-    const value = Number.parseInt(raw, 10);
-    if (Number.isFinite(value) && value >= 1 && value <= 31) {
-      return value;
-    }
-  }
-  const start = parseLocalInput(fallbackStartInput);
-  if (start) return start.date();
-  return 1;
-}
-
-function parseRecurrenceSelection(rule, fallbackStartInput = '') {
-  const fallbackLunar = parseLunarYearlyRule({ freq: 'lunar_yearly' }, fallbackStartInput) || {
-    year: dayjs().tz(LUNAR_TIMEZONE).year(),
-    month: 1,
-    day: 1,
-    isLeapMonth: false,
-  };
-  if (!rule) {
-    return {
-      type: 'daily',
-      days: [],
-      monthDate: 1,
-      interval: 1,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  const freq = String(rule.freq || 'daily').trim().toLowerCase();
-  const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
-  const byDay = normalizeByDayList(rule.byday || rule.byDay);
-  const monthDate = resolveMonthlyDateFromRule(rule, fallbackStartInput);
-  if (freq === 'lunar_yearly' || freq === 'lunar') {
-    const lunar = parseLunarYearlyRule(rule, fallbackStartInput) || fallbackLunar;
-    return {
-      type: 'lunar',
-      days: [],
-      monthDate,
-      interval: 1,
-      lunarYear: lunar.year,
-      lunarMonth: lunar.month,
-      lunarDay: lunar.day,
-      lunarIsLeapMonth: lunar.isLeapMonth,
-    };
-  }
-  if (freq === 'weekly' && interval === 2) {
-    return {
-      type: 'biweekly',
-      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-      monthDate,
-      interval: 2,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  if (freq === 'weekly' && interval > 2) {
-    return {
-      type: 'custom_weekly',
-      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-      monthDate,
-      interval,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  if (freq === 'monthly' && interval > 1) {
-    return {
-      type: 'custom_monthly',
-      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-      monthDate,
-      interval,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  return {
-    type: freq || 'daily',
-    days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-    monthDate,
-    interval,
-    lunarYear: fallbackLunar.year,
-    lunarMonth: fallbackLunar.month,
-    lunarDay: fallbackLunar.day,
-    lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-  };
 }
 
 function getTaskCompletedTime(task) {
@@ -1146,6 +977,7 @@ const TaskRow = React.memo(function TaskRow({
           type="button"
           data-testid="task-row-status-checkbox"
           aria-pressed={isCompleted}
+          aria-label={`${isCompleted ? labels.markPending : labels.markComplete}: ${task.title}`}
           disabled={isDeleted || isReadOnly}
           onClick={(e) => {
             e.stopPropagation();
@@ -1159,8 +991,18 @@ const TaskRow = React.memo(function TaskRow({
         >
           <span className="text-[10px] leading-none">✓</span>
         </button>
-	        <h3 className={`min-w-0 flex-1 truncate text-[0.94rem] font-medium leading-5 ${titleStateClass}`}>
-          {task.title}
+        <h3 className={`min-w-0 flex-1 text-[0.94rem] font-medium leading-5 ${titleStateClass}`}>
+          <button
+            type="button"
+            className="block w-full truncate rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+            onClick={(event) => {
+              event.stopPropagation();
+              onBeforeSelectTask?.(task);
+              onSelectTask(task);
+            }}
+          >
+            {task.title}
+          </button>
         </h3>
         <div className="hidden shrink-0 items-center gap-2 text-xs sm:flex">
           {isReadOnly && (
@@ -1304,6 +1146,7 @@ function TaskListEmptyState({ view, searchKeyword, canCreateTask, onCreateTask, 
 export const TaskListView = React.memo(function TaskListView({ forcedView = '', routeLocation }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
+  const { persistDraft, retryDrafts, recoveryEntries, failedDrafts } = useTaskDraftPersistence(queryClient);
   const navigate = useNavigate();
   const location = routeLocation;
   const timezone = getUserTimezone();
@@ -1610,18 +1453,18 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const [deleteDialog, setDeleteDialog] = useState({ open: false, kind: '', context: null });
   const [deleteDialogSubmitting, setDeleteDialogSubmitting] = useState(false);
   const [showCategoryEmoji, setShowCategoryEmoji] = useState(getShowCategoryEmoji());
-  const [isMobileViewport, setIsMobileViewport] = useState(() => shouldUseTaskModalLayout());
-  const [isCompactMobile, setIsCompactMobile] = useState(isTaskCompactMobileLayout);
-  const [taskSplitRatio, setTaskSplitRatio] = useState(readTaskSplitRatio);
-  const [isTaskSplitDragging, setIsTaskSplitDragging] = useState(false);
+  const {
+    taskWorkspaceRef,
+    isMobileViewport,
+    isCompactMobile,
+    taskSplitGridStyle,
+    taskSplitSeparatorProps,
+  } = useTaskSplitLayout();
   const [taskRowAnimations, setTaskRowAnimations] = useState({});
   const [taskDraftOverlays, setTaskDraftOverlays] = useState({});
   const detailPanelRef = useRef(null);
   const detailPanelTriggerRefs = useRef({});
-  const taskWorkspaceRef = useRef(null);
   const taskListScrollRef = useRef(null);
-  const taskSplitDragRef = useRef({ startX: 0, startRatio: TASK_SPLIT_DEFAULT_RATIO, workspaceWidth: 0 });
-  const taskSplitRatioRef = useRef(taskSplitRatio);
   const taskPullRefreshRef = useRef({
     active: false,
     pulling: false,
@@ -1655,6 +1498,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const isSavingDraftRef = useRef(false);
   const isSubmittingDraftRef = useRef(false);
   const flushDraftQueueRef = useRef(Promise.resolve());
+  const draftSaveFailureRef = useRef(null);
+  const quickCreateSessionRef = useRef({ id: 0, busy: false, title: '' });
   const flushDraftOnLeaveRef = useRef(null);
   const detailPanelSnapshotRef = useRef(null);
   const switchTaskRequestRef = useRef(0);
@@ -2316,107 +2161,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   }, [groupBy, view, viewPrefKey]);
 
   useEffect(() => {
-    const handleResize = () => {
-      const compactMobile = isTaskCompactMobileLayout();
-      const workspaceWidth = taskWorkspaceRef.current?.getBoundingClientRect().width || 0;
-      setIsCompactMobile(compactMobile);
-      setIsMobileViewport(shouldUseTaskModalLayout(workspaceWidth));
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    taskSplitRatioRef.current = taskSplitRatio;
-  }, [taskSplitRatio]);
-
-  useEffect(() => {
-    const element = taskWorkspaceRef.current;
-    if (!element || typeof ResizeObserver === 'undefined') return undefined;
-    const applyWorkspaceWidth = (width) => {
-      if (!width) return;
-      const shouldUseModal = shouldUseTaskModalLayout(width);
-      setIsMobileViewport((prev) => (prev === shouldUseModal ? prev : shouldUseModal));
-    };
-    applyWorkspaceWidth(element.getBoundingClientRect().width || 0);
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect?.width || 0;
-      applyWorkspaceWidth(width);
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  const clampTaskSplitRatio = useCallback((nextRatio, workspaceWidth = 0) => {
-    const width = workspaceWidth || taskWorkspaceRef.current?.getBoundingClientRect().width || 0;
-    if (!width) return clampNumber(nextRatio, 0.25, 0.75);
-    const availableWidth = Math.max(1, width - TASK_SPLIT_DIVIDER_WIDTH);
-    const minListRatio = TASK_SPLIT_MIN_LIST_WIDTH / availableWidth;
-    const maxListRatio = 1 - (TASK_SPLIT_MIN_DETAIL_WIDTH / availableWidth);
-    return clampNumber(nextRatio, minListRatio, maxListRatio);
-  }, []);
-
-  const commitTaskSplitRatio = useCallback((nextRatio, workspaceWidth = 0) => {
-    const clampedRatio = clampTaskSplitRatio(nextRatio, workspaceWidth);
-    taskSplitRatioRef.current = clampedRatio;
-    setTaskSplitRatio(clampedRatio);
-    writeTaskSplitRatio(clampedRatio);
-  }, [clampTaskSplitRatio]);
-
-  const handleTaskSplitPointerDown = useCallback((event) => {
-    if (isMobileViewport || event.button !== 0) return;
-    const rect = taskWorkspaceRef.current?.getBoundingClientRect();
-    if (!rect?.width) return;
-    event.preventDefault();
-    taskSplitDragRef.current = {
-      startX: event.clientX,
-      startRatio: clampTaskSplitRatio(taskSplitRatioRef.current, rect.width),
-      workspaceWidth: rect.width,
-    };
-    setIsTaskSplitDragging(true);
-  }, [clampTaskSplitRatio, isMobileViewport]);
-
-  const handleTaskSplitKeyDown = useCallback((event) => {
-    if (isMobileViewport) return;
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home') return;
-    event.preventDefault();
-    if (event.key === 'Home') {
-      commitTaskSplitRatio(TASK_SPLIT_DEFAULT_RATIO);
-      return;
-    }
-    const direction = event.key === 'ArrowLeft' ? -1 : 1;
-    commitTaskSplitRatio(taskSplitRatio + direction * TASK_SPLIT_KEYBOARD_STEP);
-  }, [commitTaskSplitRatio, isMobileViewport, taskSplitRatio]);
-
-  useEffect(() => {
-    if (!isTaskSplitDragging) return undefined;
-    const handlePointerMove = (event) => {
-      const dragState = taskSplitDragRef.current;
-      if (!dragState.workspaceWidth) return;
-      const nextRatio = dragState.startRatio + ((event.clientX - dragState.startX) / dragState.workspaceWidth);
-      const clampedRatio = clampTaskSplitRatio(nextRatio, dragState.workspaceWidth);
-      taskSplitRatioRef.current = clampedRatio;
-      setTaskSplitRatio(clampedRatio);
-    };
-    const handlePointerUp = () => {
-      const dragState = taskSplitDragRef.current;
-      setIsTaskSplitDragging(false);
-      writeTaskSplitRatio(clampTaskSplitRatio(taskSplitRatioRef.current, dragState.workspaceWidth));
-    };
-    document.body.classList.add('task-split-resizing');
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    window.addEventListener('pointercancel', handlePointerUp);
-    return () => {
-      document.body.classList.remove('task-split-resizing');
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-      window.removeEventListener('pointercancel', handlePointerUp);
-    };
-  }, [clampTaskSplitRatio, isTaskSplitDragging]);
-
-  useEffect(() => {
     if (!detailPanel && !showActivityPanel) return undefined;
     const handlePointerDown = (event) => {
       if (isDetailPanelFloatingLayerTarget(event.target)) return;
@@ -2669,6 +2413,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       const next = { ...(prev || {}) };
       overlayEntries.forEach(([taskID, overlay]) => {
         const numericTaskID = Number(taskID);
+        if (recoveryEntries.some((entry) => entry.taskID === numericTaskID)) return;
         const currentTask = currentTasks.find((task) => getTaskOverlayKey(task) === String(taskID));
         if (!currentTask || isTaskUnsyncedLocally(currentTask)) return;
         const pendingTaskID = Number(pendingDraftSubmitRef.current?.taskID || 0);
@@ -2694,7 +2439,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       });
       return changed ? next : prev;
     });
-  }, [taskDraftOverlays, tasks]);
+  }, [recoveryEntries, taskDraftOverlays, tasks]);
 
   const getTaskWithDraftOverlay = useCallback((task) => {
     const key = getTaskOverlayKey(task);
@@ -3261,7 +3006,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           const categoryIDs = Array.isArray(task?.categories)
             ? task.categories.map((cat) => Number(cat?.id || 0)).filter((id) => id > 0)
             : [];
-          const detachedTask = await createTaskLocal(queryClient, {
+          const detachedTask = await persistDraft(createTempTaskID(), {
             title: String(task?.title || '').trim(),
             description: String(task?.description || ''),
             priority: Number.parseInt(task?.priority, 10) || 0,
@@ -3274,6 +3019,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             recurrence_rule: null,
             recurrence_end_date: null,
           }, {
+            taskCreation: true,
             submitMeta: {
               submittedAt: new Date().toISOString(),
               submitSource: 'manual',
@@ -3382,6 +3128,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
   }, [
     commitRecurringOccurrenceStatus,
+    persistDraft,
     queryClient,
     recurringServerStatusMap,
     scheduleTaskRowAnimation,
@@ -3393,6 +3140,11 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const handleQuickCreate = async () => {
     const title = quickTitle.trim();
     if (!title) return;
+    const session = quickCreateSessionRef.current;
+    if (session.busy) return;
+    session.busy = true;
+    session.title = title;
+    if (!session.id) session.id = createTempTaskID();
 
     try {
       let storedUser = {};
@@ -3421,21 +3173,34 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         payload.category_ids = [activeCategoryID];
       }
 
-      const createdTask = await createTaskLocal(queryClient, payload);
+      const createdTask = await persistDraft(session.id, payload, { taskCreation: true });
       logTimeDebug('taskList.quickCreate.payload', {
         task_id: createdTask?.id || 0,
         start_time_local: payload.start_time_local,
         start_time: payload.start_time,
         client_timezone: payload.client_timezone,
       });
-      setQuickTitle('');
+      session.id = 0;
+      setQuickTitle((current) => current.trim() === title ? '' : current);
       if (createdTask?.id) {
         setSelectedTaskID(createdTask.id);
       }
     } catch (err) {
       console.error('Failed to create task:', err);
+    } finally {
+      session.busy = false;
     }
   };
+
+  useEffect(() => {
+    const session = quickCreateSessionRef.current;
+    if (!session.id || session.busy || recoveryEntries.some((entry) => entry.taskID === session.id)) return;
+    // A successful retry from the recovery notice also finishes quick creation.
+    // Preserve anything the user has typed for their next task in the meantime.
+    const recoveredTitle = session.title;
+    session.id = 0;
+    setQuickTitle((current) => current.trim() === recoveredTitle ? '' : current);
+  }, [recoveryEntries]);
 
   const handleDraftFieldChange = (field, value, options = {}) => {
     const closureTaskID = getEffectiveTaskID(selectedTask);
@@ -3887,43 +3652,16 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       });
     }
 
-    if (draftValue.recurrence_enabled) {
-      const normalizedDays = (draftValue.recurrence_days || [])
-        .map((day) => String(day || '').toUpperCase())
-        .filter((day) => WEEKDAY_ONLY_RE.test(day));
-      let rule = {
-        freq: draftValue.recurrence_type || 'daily',
-        interval: 1,
-      };
-      if (draftValue.recurrence_type === 'lunar') {
-        const normalizedSelection = coerceLunarSelection({
-          year: draftRecurrenceLunarYear,
-          month: Number.parseInt(draftValue.recurrence_lunar_month, 10) || 1,
-          day: Number.parseInt(draftValue.recurrence_lunar_day, 10) || 1,
-          isLeapMonth: !!draftValue.recurrence_lunar_is_leap_month,
-        });
-        rule = buildLunarYearlyRuleFromSelection(normalizedSelection);
-      } else if (draftValue.recurrence_type === 'biweekly') {
-        rule.freq = 'weekly';
-        rule.interval = 2;
-        rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
-      } else if (draftValue.recurrence_type === 'custom_weekly') {
-        rule.freq = 'weekly';
-        rule.interval = clampCustomRecurrenceInterval(draftValue.recurrence_interval);
-        rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
-      } else if (draftValue.recurrence_type === 'custom_monthly') {
-        rule.freq = 'monthly';
-        rule.interval = clampCustomRecurrenceInterval(draftValue.recurrence_interval);
-        rule.bydate = [clampMonthlyDate(draftValue.recurrence_date, 1)];
-      } else if (draftValue.recurrence_type === 'monthly') {
-        rule.bydate = [clampMonthlyDate(draftValue.recurrence_date, 1)];
-      } else if (rule.freq === 'weekly' && normalizedDays.length > 0) {
-        rule.byday = normalizedDays;
-      }
-      payload.recurrence_rule = rule;
-    } else {
-      payload.recurrence_rule = null;
-    }
+    payload.recurrence_rule = buildRecurrenceRule({
+      type: draftValue.recurrence_type,
+      days: draftValue.recurrence_days,
+      interval: draftValue.recurrence_interval,
+      monthDate: draftValue.recurrence_date,
+      lunarYear: draftRecurrenceLunarYear,
+      lunarMonth: draftValue.recurrence_lunar_month,
+      lunarDay: draftValue.recurrence_lunar_day,
+      lunarIsLeapMonth: draftValue.recurrence_lunar_is_leap_month,
+    }, { enabled: !!draftValue.recurrence_enabled, workDayKeys });
 
     return {
       payload,
@@ -4204,7 +3942,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }
 
     rememberTaskDraftOverlay(taskID, built.payload, draftValue);
-    void updateTaskLocal(queryClient, taskID, built.payload, {
+    void persistDraft(taskID, built.payload, {
       scheduleSync: false,
       localOnly: true,
       awaitPersist: true,
@@ -4212,7 +3950,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         submittedAt: new Date().toISOString(),
         submitSource,
       },
-    });
+    }).catch((error) => console.error('Failed to stage task draft:', error));
     pendingDraftSubmitRef.current = { taskID, payload: built.payload };
     setPendingSubmitTaskID(taskID);
     logDraftSwitchDebug('draft.stage.localOnlyQueued', {
@@ -4223,7 +3961,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       payload_keys: Object.keys(built.payload || {}),
     });
     return true;
-  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, queryClient, rememberTaskDraftOverlay]);
+  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, persistDraft, rememberTaskDraftOverlay]);
 
   const submitPendingDraft = useCallback(async (taskIDOverride = 0, submitSource = 'idle') => {
     const pending = pendingDraftSubmitRef.current;
@@ -4282,7 +4020,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         payload: pending.payload,
       });
       rememberTaskDraftOverlay(taskID, pending.payload, draftSnapshotRef.current);
-      await updateTaskLocal(queryClient, taskID, pending.payload, {
+      await persistDraft(taskID, pending.payload, {
         scheduleSync: true,
         localOnly: false,
         submitMeta: {
@@ -4291,8 +4029,10 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         },
       });
       lastSubmittedDraftRef.current = { taskID, payloadKey };
-      pendingDraftSubmitRef.current = { taskID: 0, payload: null };
-      setPendingSubmitTaskID(0);
+      if (pendingDraftSubmitRef.current === pending) {
+        pendingDraftSubmitRef.current = { taskID: 0, payload: null };
+        setPendingSubmitTaskID(0);
+      }
       logDraftSwitchDebug('draft.submit.done', {
         task_id: taskID,
         submit_source: submitSource,
@@ -4313,7 +4053,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         preservingSavedSelectionTaskIDRef.current = 0;
       }
     }
-  }, [queryClient, rememberTaskDraftOverlay, submittingDraft]);
+  }, [persistDraft, rememberTaskDraftOverlay, submittingDraft]);
 
   const scheduleIdleDraftSubmit = useCallback((taskID) => {
     if (draftSyncTimerRef.current) {
@@ -4392,7 +4132,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       }
 
       rememberTaskDraftOverlay(targetTaskID, built.payload, draftValue);
-      const savedTask = await updateTaskLocal(queryClient, targetTaskID, built.payload, {
+      const savedTask = await persistDraft(targetTaskID, built.payload, {
         scheduleSync: false,
         localOnly: true,
         awaitPersist: true,
@@ -4438,6 +4178,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
       });
       return true;
     } catch (err) {
+      draftSaveFailureRef.current = { taskID: targetTaskID, version: editVersionAtStart };
       console.error('Failed to save task details:', err);
       logDraftSwitchDebug('draft.save.error', {
         task_id: targetTaskID,
@@ -4529,12 +4270,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           if (built?.payload) {
             const targetTaskID = getEffectiveTaskID(taskValue);
             rememberTaskDraftOverlay(targetTaskID, built.payload, draftValue);
-            await updateTaskLocal(queryClient, targetTaskID, built.payload, {
+            await persistDraft(targetTaskID, built.payload, {
               scheduleSync: false,
               localOnly: true,
               awaitPersist: true,
             });
-            await updateTaskLocal(queryClient, targetTaskID, built.payload, {
+            await persistDraft(targetTaskID, built.payload, {
               scheduleSync: true,
               localOnly: false,
               submitMeta: {
@@ -4558,12 +4299,12 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
           }
         } else if (hasPendingSubmit) {
           rememberTaskDraftOverlay(pendingTaskID, pendingPayload);
-          await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
+          await persistDraft(pendingTaskID, pendingPayload, {
             scheduleSync: false,
             localOnly: true,
             awaitPersist: true,
           });
-          await updateTaskLocal(queryClient, pendingTaskID, pendingPayload, {
+          await persistDraft(pendingTaskID, pendingPayload, {
             scheduleSync: true,
             localOnly: false,
             submitMeta: {
@@ -4598,7 +4339,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     const queued = flushDraftQueueRef.current.then(runFlush, runFlush);
     flushDraftQueueRef.current = queued.catch(() => {});
     return queued;
-  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, queryClient, rememberTaskDraftOverlay]);
+  }, [buildDraftFromTask, buildDraftPayload, getEffectiveTaskID, persistDraft, rememberTaskDraftOverlay]);
 
   useEffect(() => {
     flushDraftOnLeaveRef.current = flushDraftOnLeave;
@@ -4845,6 +4586,8 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   useEffect(() => {
     if (!selectedTask || !draft || !isDraftDirty || savingDraft) return;
     if (!draftTouchedRef.current) return;
+    const failed = draftSaveFailureRef.current;
+    if (failed?.taskID === getEffectiveTaskID(selectedTask) && failed.version === draftEditVersionRef.current) return;
     if (!(draft.title || '').trim()) return;
     if (isDetailPanelRequiringConfirm(detailPanel)) return;
 
@@ -4853,7 +4596,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     }, DRAFT_TEXT_AUTOSAVE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [detailPanel, draft, handleSaveDraft, isDetailPanelRequiringConfirm, isDraftDirty, savingDraft, selectedTask]);
+  }, [detailPanel, draft, getEffectiveTaskID, handleSaveDraft, isDetailPanelRequiringConfirm, isDraftDirty, savingDraft, selectedTask]);
 
   useEffect(() => {
     if (!isDraftDirty && !pendingDraftRemapRef.current) {
@@ -4923,6 +4666,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
     statusCancelled: t('task.statusCancelled'),
     statusSkipped: t('task.statusSkipped'),
     markPending: t('task.markPending'),
+    markComplete: t('task.markComplete'),
   }), [i18n.language, t]);
 
   const handleSelectTask = useCallback(async (task) => {
@@ -5071,12 +4815,6 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
   const showMobileSearchBar = isCompactMobile && view === 'search';
   const showListHeader = !isCompactMobile || showMobileSearchBar;
   const rowTimeMode = view === 'completed' ? 'completed' : view === 'deleted' ? 'deleted' : 'primary';
-  const taskSplitListPercent = clampNumber(taskSplitRatio, 0.25, 0.75) * 100;
-  const taskSplitGridStyle = isMobileViewport
-    ? undefined
-    : {
-        gridTemplateColumns: `clamp(${TASK_SPLIT_MIN_LIST_WIDTH}px, calc((100% - ${TASK_SPLIT_DIVIDER_WIDTH}px) * ${taskSplitRatio.toFixed(4)}), calc(100% - ${TASK_SPLIT_MIN_DETAIL_WIDTH + TASK_SPLIT_DIVIDER_WIDTH}px)) ${TASK_SPLIT_DIVIDER_WIDTH}px minmax(${TASK_SPLIT_MIN_DETAIL_WIDTH}px, 1fr)`,
-      };
 
   return (
     <div className="md-page h-full">
@@ -5086,6 +4824,15 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
         style={taskSplitGridStyle}
       >
         <section className="md-pane flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+          <TaskDraftRecoveryNotice
+            entries={failedDrafts}
+            busy={recoveryEntries.some((entry) => entry.status === 'saving')}
+            onRetry={async () => {
+              captureCurrentDescriptionDraft();
+              if (isDraftDirtyRef.current) await handleSaveDraft({ submitAfter: false, submitSource: 'retry' });
+              await retryDrafts();
+            }}
+          />
           {showListHeader && (
             <div className="bg-card px-5 pb-4 pt-5">
               <div className="flex min-h-[40px] items-center justify-between gap-3">
@@ -5395,14 +5142,7 @@ export const TaskListView = React.memo(function TaskListView({ forcedView = '', 
             type="button"
             aria-label={t('task.resizeTaskDetailSplit')}
             title={t('task.resizeTaskDetailSplit')}
-            aria-valuemin={Math.round((TASK_SPLIT_MIN_LIST_WIDTH / Math.max(TASK_DETAIL_SPLIT_MIN_WIDTH, 1)) * 100)}
-            aria-valuemax={Math.round((1 - TASK_SPLIT_MIN_DETAIL_WIDTH / Math.max(TASK_DETAIL_SPLIT_MIN_WIDTH, 1)) * 100)}
-            aria-valuenow={Math.round(taskSplitListPercent)}
-            className={`task-split-resizer${isTaskSplitDragging ? ' task-split-resizer--dragging' : ''}`}
-            role="separator"
-            onDoubleClick={() => commitTaskSplitRatio(TASK_SPLIT_DEFAULT_RATIO)}
-            onKeyDown={handleTaskSplitKeyDown}
-            onPointerDown={handleTaskSplitPointerDown}
+            {...taskSplitSeparatorProps}
           >
             <span className="task-split-resizer-line" />
           </button>

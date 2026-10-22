@@ -8,16 +8,15 @@ import {
   shouldOpenEventFromPointerRelease,
   shouldCommitWheelSession,
 } from './canvasMotionMath';
-import { getDayDisplayInfo, clearHolidayCache } from '../utils/holidays';
-import { getShowChineseHolidays, onUIPrefsChanged } from '../utils/uiPrefs';
+import { clearHolidayCache } from '../utils/holidays';
 import { getCalendarDisplayEnd, parseCalendarDate } from '../utils/calendarDate';
 import { isReadOnlyCalendarEvent } from '../utils/calendarEvents';
+import CalendarEventButton from './calendar/CalendarEventButton';
+import CalendarMonthGrid, { MONTH_WEEK_HEIGHT, MONTH_HEADER_HEIGHT } from './calendar/CalendarMonthGrid';
 
 const HOUR_HEIGHT = 56;
-const MONTH_WEEK_HEIGHT = 164;
 const MONTH_NATIVE_WEEKS_BEFORE = 24;
 const MONTH_NATIVE_WEEKS_AFTER = 36;
-const MONTH_HEADER_HEIGHT = 36;
 const TIMEGRID_HEADER_HEIGHT = 60;
 const TIMEGRID_BODY_GAP = 8;
 const ALL_DAY_VISIBLE_ROWS_DESKTOP = 4;
@@ -225,7 +224,6 @@ export default function InfiniteCalendarCanvas({
   const [eventGestureLocked, setEventGestureLocked] = useState(false);
   const [todayDateKey, setTodayDateKey] = useState(() => getTodayDateKey(timezone));
   const [nowLineTick, setNowLineTick] = useState(() => Date.now());
-  const [showChineseHolidays, setShowChineseHolidays] = useState(() => getShowChineseHolidays());
   const dayColumns = view === 'timeGridWeek' ? 7 : (view === 'timeGridThreeDay' ? 3 : 1);
   const monthDayCellWidth = useMemo(
     () => Math.max(1, (viewportSize.width || 700) / 7),
@@ -451,15 +449,6 @@ export default function InfiniteCalendarCanvas({
       mask.style.opacity = '0';
     }
   }, [clearLongPressTimer, clearWheelCommitTimer, unlockTextSelection]);
-
-  useEffect(() => {
-    const unsubscribe = onUIPrefsChanged((event) => {
-      if (event?.detail?.showChineseHolidays !== undefined) {
-        setShowChineseHolidays(event.detail.showChineseHolidays);
-      }
-    });
-    return unsubscribe;
-  }, []);
 
   const refreshTodayDateKey = useCallback(() => {
     setTodayDateKey((prev) => {
@@ -1712,12 +1701,15 @@ export default function InfiniteCalendarCanvas({
           {blocks.map(({ blockKey, eventKey, event, resizable, style, className, titleStyle }) => {
             const readonly = isReadonlyEvent(event);
             return (
-            <div
+            <CalendarEventButton
               key={blockKey}
+              calendarEvent={event}
+              onOpen={onOpenEvent}
+              tabIndex={style.left + style.width > TIME_AXIS_WIDTH && style.left < viewportSize.width ? 0 : -1}
               data-event-key={eventKey}
               data-event-node-key={blockKey}
               data-event-id={event.id}
-              className={`${className} ${readonly ? '' : 'cursor-grab active:cursor-grabbing'}`}
+              className={`${className} text-left ${readonly ? '' : 'cursor-grab active:cursor-grabbing'}`}
               style={{
                 ...style,
                 touchAction: isMonthView ? 'none' : (readonly ? 'pan-y' : 'none'),
@@ -1731,7 +1723,7 @@ export default function InfiniteCalendarCanvas({
                   style={{ touchAction: 'none' }}
                 />
               )}
-            </div>
+            </CalendarEventButton>
             );
           })}
         </div>
@@ -1826,12 +1818,15 @@ export default function InfiniteCalendarCanvas({
         };
         const nodeKey = `${item.eventKey}::${dayKey}`;
         allDayEvents.push(
-          <div
+          <CalendarEventButton
             key={nodeKey}
+            calendarEvent={item.event}
+            onOpen={onOpenEvent}
+            tabIndex={style.left + style.width > TIME_AXIS_WIDTH && style.left < viewportSize.width ? 0 : -1}
             data-event-key={item.eventKey}
             data-event-node-key={nodeKey}
             data-event-id={item.event.id}
-            className={`canvas-event absolute z-30 overflow-hidden px-1 text-[10px] leading-tight ${
+            className={`canvas-event absolute z-30 overflow-hidden px-1 text-left text-[10px] leading-tight ${
               readonly
                 ? 'calendar-event-readonly'
                 : 'calendar-event-task'
@@ -1843,7 +1838,7 @@ export default function InfiniteCalendarCanvas({
             }}
           >
             <span className="block truncate leading-[1.25]">{item.event.title || 'Untitled'}</span>
-          </div>
+          </CalendarEventButton>
         );
       });
 
@@ -1912,217 +1907,6 @@ export default function InfiniteCalendarCanvas({
     );
   };
 
-  const renderMonthGrid = () => {
-    const dayCellWidth = monthDayCellWidth;
-    const dayCellPercent = 100 / 7;
-    const rows = [];
-
-    for (let w = 0; w < monthNativeWeeksCount; w += 1) {
-      const weekStart = monthNativeStartWeek.add(w, 'week');
-      const y = w * MONTH_WEEK_HEIGHT;
-      rows.push(
-        <div key={`w-${w}`} className="absolute left-0 right-0 border-t border-[var(--calendar-grid-line)]" style={{ top: y, height: MONTH_WEEK_HEIGHT }}>
-          {Array.from({ length: 7 }).map((_, d) => {
-            const day = weekStart.add(d, 'day');
-            const dayKey = day.format('YYYY-MM-DD');
-            const isToday = dayKey === todayDateKey;
-            return (
-              <button
-                key={`${w}-${d}`}
-                type="button"
-                className={`absolute flex items-start justify-start border-0 border-l border-[var(--calendar-grid-line-soft)] p-0 text-left transition-colors hover:bg-muted/70 focus:outline-none focus-visible:outline-none ${
-                  isToday ? 'bg-muted/80' : 'bg-transparent'
-                }`}
-                style={{
-                  top: 0,
-                  left: `${d * dayCellPercent}%`,
-                  width: `${dayCellPercent}%`,
-                  height: MONTH_WEEK_HEIGHT,
-                  outline: 'none',
-                  WebkitTapHighlightColor: 'transparent',
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  event.currentTarget.blur();
-                  onCreateRange?.({
-                    allDay: true,
-                    start: day.startOf('day').toISOString(),
-                    end: day.endOf('day').toISOString(),
-                  });
-                }}
-              >
-                {(() => {
-                  const displayInfo = getDayDisplayInfo(day.toDate(), showChineseHolidays);
-                  return (
-                    <div className="pointer-events-none absolute left-1.5 right-1.5 top-1 flex items-start justify-between">
-                      <div className="flex items-center gap-1">
-                        <span
-                          className={`inline-flex items-center rounded-full text-xs font-semibold ${
-                            isToday
-                              ? 'bg-primary px-2 py-0.5 text-white shadow-sm'
-                              : 'px-0 text-foreground-strong'
-                          }`}
-                        >
-                          {day.format('M/D')}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {displayInfo.lunarDisplay}
-                        </span>
-                      </div>
-                      {showChineseHolidays && displayInfo.primaryHoliday && (
-                        <span
-                          className={`text-[10px] font-medium leading-tight truncate max-w-[50%] ${
-                            displayInfo.isHoliday ? 'text-[hsl(var(--accent-danger))]' : 'text-primary'
-                          }`}
-                        >
-                          {displayInfo.primaryHoliday}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })()}
-                {isToday && (
-                  <span
-                    className="pointer-events-none absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary/80"
-                    aria-hidden="true"
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      );
-    }
-
-    const byCell = new Map();
-    eventEntries.forEach(({ key: eventKey, event, start, allDayDates }) => {
-      if (!start.isValid()) return;
-      if (event?.allDay) {
-        allDayDates.forEach((date) => {
-          const weekIndex = date.startOf('week').diff(monthNativeStartWeek, 'week');
-          if (weekIndex < 0 || weekIndex >= monthNativeWeeksCount) return;
-          const day = date.day();
-          const key = `${weekIndex}|${day}`;
-          const list = byCell.get(key) || [];
-          list.push({ eventKey, event, start: date });
-          byCell.set(key, list);
-        });
-        return;
-      }
-      const weekIndex = start.startOf('week').diff(monthNativeStartWeek, 'week');
-      if (weekIndex < 0 || weekIndex >= monthNativeWeeksCount) return;
-      const day = start.day();
-      const key = `${weekIndex}|${day}`;
-      const list = byCell.get(key) || [];
-      list.push({ eventKey, event, start });
-      byCell.set(key, list);
-    });
-
-    const monthEvents = [];
-    const moreIndicators = [];
-    byCell.forEach((list, key) => {
-      const [weekPart, dayPart] = key.split('|');
-      const weekIndex = Number.parseInt(weekPart, 10);
-      const day = Number.parseInt(dayPart, 10);
-      if (!Number.isFinite(weekIndex) || !Number.isFinite(day)) return;
-      const sorted = [...list].sort((a, b) => a.start.valueOf() - b.start.valueOf());
-      const visible = sorted.slice(0, 6);
-      const hidden = sorted.slice(6);
-
-      visible.forEach((item, slotIndex) => {
-        const y = (weekIndex * MONTH_WEEK_HEIGHT) + 28 + slotIndex * 19;
-        const x = `calc(${day * dayCellPercent}% + 2px)`;
-        const readonly = isReadonlyEvent(item.event);
-        monthEvents.push(
-          <button
-            key={`${item.eventKey}::${weekIndex}|${day}`}
-            type="button"
-            data-event-key={item.eventKey}
-            data-event-id={item.event.id}
-            className={`canvas-event absolute h-5 overflow-hidden px-1 text-left text-[10px] focus:outline-none focus-visible:outline-none ${
-              readonly ? 'calendar-event-readonly' : 'calendar-event-task'
-            }`}
-            style={{
-              left: x,
-              top: y,
-              width: `calc(${dayCellPercent}% - 5px)`,
-              outline: 'none',
-              WebkitTapHighlightColor: 'transparent',
-            }}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              event.currentTarget.blur();
-              onOpenEvent?.(item.event);
-            }}
-          >
-            {item.event.title || 'Untitled'}
-          </button>
-        );
-      });
-
-      if (hidden.length > 0) {
-        const dayDate = monthNativeStartWeek.add(weekIndex, 'week').add(day, 'day');
-        const y = (weekIndex * MONTH_WEEK_HEIGHT) + 28 + 6 * 19;
-        const x = `calc(${day * dayCellPercent}% + 2px)`;
-        moreIndicators.push(
-          <button
-            key={`more-${key}`}
-            type="button"
-            className="canvas-ui-action absolute inline-flex h-5 items-center whitespace-nowrap px-1 text-left text-[10px] font-semibold leading-5 focus:outline-none focus-visible:outline-none"
-            style={{
-              left: x,
-              top: y,
-              width: `calc(${dayCellPercent}% - 5px)`,
-              outline: 'none',
-              WebkitTapHighlightColor: 'transparent',
-            }}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-            }}
-            onPointerUp={(event) => {
-              event.stopPropagation();
-            }}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              event.currentTarget.blur();
-              onOpenMore?.({
-                date: dayDate.toISOString(),
-                events: sorted.map((item) => item.event),
-              });
-            }}
-          >
-            +{hidden.length}
-          </button>
-        );
-      }
-    });
-
-    return (
-      <>
-        <div
-          className="pointer-events-none sticky top-0 z-20 grid grid-cols-7 border-b border-[var(--calendar-grid-line)] bg-[var(--calendar-header-bg)]/95 text-xs font-semibold text-muted-foreground backdrop-blur"
-          style={{ height: MONTH_HEADER_HEIGHT }}
-        >
-          {weekDayLabels.map((label) => (
-            <div key={label} className="pointer-events-none flex items-center justify-center border-l border-[var(--calendar-grid-line-soft)]">
-              周{label}
-            </div>
-          ))}
-        </div>
-        <div
-          className="relative"
-          style={{ height: monthNativeWeeksCount * MONTH_WEEK_HEIGHT }}
-        >
-          {rows}
-          {monthEvents}
-          {moreIndicators}
-        </div>
-      </>
-    );
-  };
 
   return (
     <div
@@ -2146,7 +1930,16 @@ export default function InfiniteCalendarCanvas({
           style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
           onScroll={handleMonthScroll}
         >
-          {renderMonthGrid()}
+          <CalendarMonthGrid
+            scrollerRef={monthScrollRef}
+            startWeek={monthNativeStartWeek}
+            weeksCount={monthNativeWeeksCount}
+            eventEntries={eventEntries}
+            todayDateKey={todayDateKey}
+            onCreateRange={onCreateRange}
+            onOpenEvent={onOpenEvent}
+            onOpenMore={onOpenMore}
+          />
         </div>
       ) : (
         <>

@@ -68,7 +68,7 @@ function createOpID() {
   return `op_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function createTempTaskID() {
+export function createTempTaskID() {
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
     const buf = new Uint32Array(1);
     crypto.getRandomValues(buf);
@@ -319,7 +319,7 @@ function applyTaskPatch(currentTask, payload, queryClient, options = {}) {
 
 export async function createTaskLocal(queryClient, payload, options = {}) {
   const submitMeta = normalizeSubmitMeta(options?.submitMeta);
-  const tempTaskID = createTempTaskID();
+  const tempTaskID = Number(options.tempTaskID) < 0 ? Number(options.tempTaskID) : createTempTaskID();
   const nowValue = nowISO();
   const nextStatus = payload?.status || 'pending';
   const timestamps = deriveStatusTimestamps('pending', nextStatus, null, null, nowValue);
@@ -347,10 +347,9 @@ export async function createTaskLocal(queryClient, payload, options = {}) {
     client_updated_at: nowValue,
   };
 
-  const snapshot = queryClient.getQueryData(queryKeys.tasks.all);
-  setTasksCache(queryClient, (prev) => [optimisticTask, ...prev]);
+  setTasksCache(queryClient, (prev) => [optimisticTask, ...prev.filter((task) => Number(task.id) !== tempTaskID)]);
   scheduleLocalReminderRefresh('task-created-local');
-  runMutationSideEffects('createTaskLocal', async () => {
+  const persistWork = async () => {
     await upsertTask(optimisticTask);
     await enqueueTaskOperation({
       op_id: createOpID(),
@@ -361,7 +360,13 @@ export async function createTaskLocal(queryClient, payload, options = {}) {
       ...submitMeta,
     });
     await invalidateCalendarCaches(queryClient, null, { revalidateQuery: true });
-  }, () => setTasksCache(queryClient, Array.isArray(snapshot) ? snapshot : []));
+  };
+  const rollback = () => setTasksCache(queryClient, (prev) => prev.filter((task) => Number(task.id) !== tempTaskID));
+  if (options.awaitPersist) {
+    await runMutationSideEffects('createTaskLocal', persistWork, rollback, { rethrow: true });
+  } else {
+    void runMutationSideEffects('createTaskLocal', persistWork, rollback);
+  }
 
   return optimisticTask;
 }

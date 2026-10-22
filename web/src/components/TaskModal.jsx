@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTaskDraftPersistence } from '../hooks/useTaskDraftPersistence';
 import dayjs from 'dayjs';
 import {
   getUserTimeGranularity,
@@ -14,7 +15,6 @@ import {
 import { getNaturalTimeOptionsFromUser, parseNaturalTimeFromTitle, parsePriorityFromTitle } from '../utils/naturalTime';
 import { getShowCategoryEmoji, onUIPrefsChanged } from '../utils/uiPrefs';
 import {
-  buildLunarYearlyRuleFromSelection,
   coerceLunarSelection,
   lunarSelectionFromLocalInput,
   nextLocalInputFromLunarSelection,
@@ -22,6 +22,7 @@ import {
   parseLunarYearlyRule,
 } from '../utils/lunar';
 import { alignStartInputToNearestRecurrence } from '../utils/recurrenceAlign';
+import { parseRecurrenceRule, parseRecurrenceSelection, buildRecurrenceSummaryLabel, getRecurrenceIntervalForType, resolveMonthlyDateFromRule, buildRecurrenceRule } from '../utils/taskRecurrence';
 import { getLunarInfo } from '../utils/holidays';
 import {
   buildCategorySummaryLabel,
@@ -55,7 +56,7 @@ import { RecurrencePanel } from './task/RecurrencePanel';
 import { getTaskInstanceID, getTaskModalSessionKey, getTaskMutationID } from './taskModalSession';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCategoriesQuery, useTasksQuery } from '../query/hooks';
-import { cancelTaskLocal, createTaskLocal, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
+import { cancelTaskLocal, createTempTaskID, deleteTaskLocal, updateTaskLocal, updateTaskStatusLocal } from '../data/taskMutations';
 
 const DEFAULT_TASK_START_TIME = '09:00';
 const WEEKDAY_ONLY_RE = /^(MO|TU|WE|TH|FR|SA|SU)$/;
@@ -89,17 +90,6 @@ function getDefaultStartInputValue(timezoneName) {
   const startTime = normalizeTaskStartTime(user.default_task_start_time);
   const [hour, minute] = startTime.split(':').map((part) => Number.parseInt(part, 10));
   return dayjs().tz(timezoneName).hour(hour).minute(minute).second(0).format('YYYY-MM-DDTHH:mm');
-}
-
-function parseRecurrenceRule(rawRule) {
-  if (!rawRule) return null;
-  if (typeof rawRule === 'object') return rawRule;
-  if (typeof rawRule !== 'string') return null;
-  try {
-    return JSON.parse(rawRule);
-  } catch {
-    return null;
-  }
 }
 
 function isBasicPanelFloatingLayerTarget(target) {
@@ -323,151 +313,6 @@ function buildTimeSummaryLabel(startInput, endInput, isAllDay, noDateLabel, luna
   return `${dateFmt(start)}-${dateFmt(end)}`;
 }
 
-function buildRecurrenceSummaryLabel(enabled, recurrenceType, selectedDays, t, recurrenceMeta = null) {
-  if (!enabled) return t('task.repeatOff');
-  if (recurrenceType === 'lunar') {
-    const month = Number.parseInt(recurrenceMeta?.month, 10) || 1;
-    const day = Number.parseInt(recurrenceMeta?.day, 10) || 1;
-    const leap = !!recurrenceMeta?.isLeapMonth;
-    return `${t('task.lunarYearly')} ${leap ? t('task.lunarLeapPrefix') : ''}${month}/${day}`;
-  }
-  const dayCount = Array.isArray(selectedDays) ? selectedDays.length : 0;
-  if (recurrenceType === 'custom_weekly') {
-    const label = t('task.customWeeklySummary', {
-      count: clampCustomRecurrenceInterval(recurrenceMeta?.weeklyInterval),
-    });
-    return dayCount > 0 ? `${label}(${dayCount})` : label;
-  }
-  if (recurrenceType === 'custom_monthly') {
-    return t('task.customMonthlySummary', {
-      count: clampCustomRecurrenceInterval(recurrenceMeta?.monthlyInterval),
-      date: clampMonthlyDate(recurrenceMeta?.monthDate, 1),
-    });
-  }
-  if (recurrenceType === 'biweekly') {
-    const label = t('task.biweekly');
-    return dayCount > 0 ? `${label}(${dayCount})` : label;
-  }
-  if (recurrenceType === 'weekly') {
-    const weeklyLabel = t('task.weekly');
-    return dayCount > 0 ? `${weeklyLabel}(${dayCount})` : weeklyLabel;
-  }
-  if (recurrenceType === 'monthly') return t('task.monthly');
-  if (recurrenceType === 'yearly') return t('task.yearly');
-  return t('task.daily');
-}
-
-function getRecurrenceIntervalForType(recurrenceType, weeklyInterval = 1, monthlyInterval = 1) {
-  const type = String(recurrenceType || 'daily');
-  if (type === 'biweekly') return 2;
-  if (type === 'custom_weekly') return clampCustomRecurrenceInterval(weeklyInterval);
-  if (type === 'custom_monthly') return clampCustomRecurrenceInterval(monthlyInterval);
-  return 1;
-}
-
-function resolveMonthlyDateFromRule(rule, fallbackStartInput) {
-  const rawByDate = Array.isArray(rule?.bydate)
-    ? rule.bydate
-    : Array.isArray(rule?.byDate)
-      ? rule.byDate
-      : Array.isArray(rule?.bymonthday)
-        ? rule.bymonthday
-        : [];
-  for (const raw of rawByDate) {
-    const value = Number.parseInt(raw, 10);
-    if (Number.isFinite(value) && value >= 1 && value <= 31) {
-      return value;
-    }
-  }
-  const start = parseLocalInput(fallbackStartInput);
-  if (start) return start.date();
-  return 1;
-}
-
-function parseRecurrenceSelection(rule, fallbackStartInput = '') {
-  const fallbackLunar = parseLunarYearlyRule({ freq: 'lunar_yearly' }, fallbackStartInput) || {
-    year: dayjs().tz(LUNAR_TIMEZONE).year(),
-    month: 1,
-    day: 1,
-    isLeapMonth: false,
-  };
-  if (!rule) {
-    return {
-      type: 'daily',
-      days: [],
-      monthDate: 1,
-      interval: 1,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  const freq = String(rule.freq || 'daily').trim().toLowerCase();
-  const interval = Math.max(1, Number.parseInt(rule.interval, 10) || 1);
-  const byDay = normalizeByDayList(rule.byday || rule.byDay);
-  const monthDate = resolveMonthlyDateFromRule(rule, fallbackStartInput);
-  if (freq === 'lunar_yearly' || freq === 'lunar') {
-    const lunar = parseLunarYearlyRule(rule, fallbackStartInput) || fallbackLunar;
-    return {
-      type: 'lunar',
-      days: [],
-      monthDate,
-      interval: 1,
-      lunarYear: lunar.year,
-      lunarMonth: lunar.month,
-      lunarDay: lunar.day,
-      lunarIsLeapMonth: lunar.isLeapMonth,
-    };
-  }
-  if (freq === 'weekly' && interval === 2) {
-    return {
-      type: 'biweekly',
-      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-      monthDate,
-      interval: 2,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  if (freq === 'weekly' && interval > 2) {
-    return {
-      type: 'custom_weekly',
-      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-      monthDate,
-      interval,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  if (freq === 'monthly' && interval > 1) {
-    return {
-      type: 'custom_monthly',
-      days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-      monthDate,
-      interval,
-      lunarYear: fallbackLunar.year,
-      lunarMonth: fallbackLunar.month,
-      lunarDay: fallbackLunar.day,
-      lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-    };
-  }
-  return {
-    type: freq || 'daily',
-    days: byDay.filter((day) => WEEKDAY_ONLY_RE.test(day)),
-    monthDate,
-    interval,
-    lunarYear: fallbackLunar.year,
-    lunarMonth: fallbackLunar.month,
-    lunarDay: fallbackLunar.day,
-    lunarIsLeapMonth: fallbackLunar.isLeapMonth,
-  };
-}
-
 function buildInitialTaskModalValues(task, initialRange) {
   if (task) {
     const timezoneName = getUserTimezone();
@@ -616,6 +461,8 @@ function buildTaskModalSavedTask(task, savedTask, payload, saveContext) {
 function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { persistDraft } = useTaskDraftPersistence(queryClient);
+  const creationTaskIDRef = useRef(0);
   const { register, handleSubmit, watch, setValue, getValues } = useForm({
     defaultValues: buildInitialTaskModalValues(task, initialRange),
   });
@@ -735,13 +582,13 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
     : hasCategoryValue
       ? 'text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))]'
       : 'text-muted-foreground hover:bg-muted';
+  const recurrenceInterval = getRecurrenceIntervalForType(recurrenceType, recurrenceType === 'custom_monthly' ? monthlyInterval : weeklyInterval);
   const recurrenceSummaryLabel = buildRecurrenceSummaryLabel(showRecurrence, recurrenceType, selectedDays, t, {
     month: recurrenceLunarMonth,
     day: recurrenceLunarDay,
     isLeapMonth: recurrenceLunarIsLeapMonth,
     monthDate: monthlyDate,
-    weeklyInterval,
-    monthlyInterval,
+    interval: recurrenceInterval,
   });
   const recurrenceButtonClass = basicPanel === 'recurrence'
     ? 'bg-muted text-foreground-strong'
@@ -1279,6 +1126,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
 
   const onSubmit = async (data, options = {}) => {
     setError('');
+    setLoading(true);
     const submitOptions = options && typeof options === 'object' ? options : {};
     const silent = !!submitOptions.silent;
     const submitSource = String(submitOptions.submitSource || 'manual');
@@ -1351,7 +1199,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
         day: Number.parseInt(recurrenceLunarDay, 10) || 1,
         leap: !!recurrenceLunarIsLeapMonth,
       };
-      const currentRecurrenceInterval = getRecurrenceIntervalForType(recurrenceType, weeklyInterval, monthlyInterval);
+      const currentRecurrenceInterval = recurrenceInterval;
       const recurrenceChanged = isEditing && (
         showRecurrence !== !!existingRecurrenceRule
         || (showRecurrence && (
@@ -1591,40 +1439,17 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
         occurrence_date: payload.occurrence_date || '',
       });
 
-      // 处理重复规则
-      if (showRecurrence) {
-        const normalizedDays = selectedDays
-          .map((day) => String(day || '').toUpperCase())
-          .filter((day) => WEEKDAY_ONLY_RE.test(day));
-        let rule = { freq: recurrenceType, interval: 1 };
-        if (recurrenceType === 'lunar') {
-          const normalizedSelection = coerceLunarSelection({
-            year: recurrenceLunarYear,
-            month: recurrenceLunarMonth,
-            day: recurrenceLunarDay,
-            isLeapMonth: recurrenceLunarIsLeapMonth,
-          });
-          rule = buildLunarYearlyRuleFromSelection(normalizedSelection);
-        } else if (recurrenceType === 'biweekly') {
-          rule.freq = 'weekly';
-          rule.interval = 2;
-          rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
-        } else if (recurrenceType === 'custom_weekly') {
-          rule.freq = 'weekly';
-          rule.interval = clampCustomRecurrenceInterval(weeklyInterval);
-          rule.byday = normalizedDays.length > 0 ? normalizedDays : workDayKeys;
-        } else if (recurrenceType === 'custom_monthly') {
-          rule.freq = 'monthly';
-          rule.interval = clampCustomRecurrenceInterval(monthlyInterval);
-          rule.bydate = [clampMonthlyDate(monthlyDate)];
-        } else if (recurrenceType === 'monthly') {
-          rule.bydate = [clampMonthlyDate(monthlyDate)];
-        } else if (recurrenceType === 'weekly' && normalizedDays.length > 0) {
-          rule.byday = normalizedDays;
-        }
-        payload.recurrence_rule = rule;
-      } else if (isEditing) {
-        payload.recurrence_rule = null;
+      if (showRecurrence || isEditing) {
+        payload.recurrence_rule = buildRecurrenceRule({
+          type: recurrenceType,
+          days: selectedDays,
+          interval: recurrenceInterval,
+          monthDate: monthlyDate,
+          lunarYear: recurrenceLunarYear,
+          lunarMonth: recurrenceLunarMonth,
+          lunarDay: recurrenceLunarDay,
+          lunarIsLeapMonth: recurrenceLunarIsLeapMonth,
+        }, { enabled: showRecurrence, workDayKeys });
       }
 
       // 处理分类
@@ -1679,42 +1504,26 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
         description: String(payload.description || ''),
       };
       const withSavedDescription = (savedTask) => buildTaskModalSavedTask(task, savedTask, payload, saveContext);
-      let savePromise;
+      let savedTask;
       if (isEditing) {
-        if (!mutationTaskID) {
-          throw new Error('invalid task ID');
-        }
-        const localSavedTask = await updateTaskLocal(queryClient, mutationTaskID, payload, {
-          localOnly: true,
-          scheduleSync: false,
-          awaitPersist: true,
+        if (!mutationTaskID) throw new Error('invalid task ID');
+        savedTask = await persistDraft(mutationTaskID, payload, {
+          localOnly: false, scheduleSync: true, submitMeta,
         });
-        savePromise = updateTaskLocal(queryClient, mutationTaskID, payload, {
-          localOnly: false,
-          scheduleSync: true,
-          submitMeta,
-        });
-        if (!silent) {
-          onSaved(withSavedDescription(localSavedTask) || null, saveContext);
-        }
       } else {
-        savePromise = createTaskLocal(queryClient, payload, { submitMeta });
-        // onSaved called once from Promise.resolve below, with the created task (temp ID)
-      }
-
-      // Close immediately with optimistic UI; persistence/sync continues in background.
-      void Promise.resolve(savePromise)
-        .then((savedTask) => {
-          if (!silent && (isEditing ? savedTask?.id : true)) {
-            onSaved(withSavedDescription(savedTask) || null, saveContext);
-          }
-        })
-        .catch((err) => {
-          console.error('Failed to persist task after optimistic save:', err);
+        if (!creationTaskIDRef.current) creationTaskIDRef.current = createTempTaskID();
+        savedTask = await persistDraft(creationTaskIDRef.current, payload, {
+          taskCreation: true, localOnly: false, scheduleSync: true, submitMeta,
         });
+      }
+      // Keep the editor and its recovery journal until the local outbox is
+      // durable. Network synchronization still runs independently.
+      if (!silent) onSaved(withSavedDescription(savedTask) || null, saveContext);
     } catch (err) {
       console.error('TaskModal onSubmit failed:', err);
       setError(err.response?.data?.error || t('task.saveFailed'));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -2096,7 +1905,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
           <form onSubmit={handleSubmit(onSubmit)} className="flex flex-1 flex-col overflow-hidden">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
               {error && (
-                <div className="mx-4 mt-4 rounded-lg border border-[hsl(var(--accent-danger)/0.25)] bg-[hsl(var(--accent-danger-soft))] px-4 py-3 text-[hsl(var(--accent-danger-foreground))]">
+                <div role="alert" className="mx-4 mt-4 rounded-lg border border-[hsl(var(--accent-danger)/0.25)] bg-[hsl(var(--accent-danger-soft))] px-4 py-3 text-[hsl(var(--accent-danger-foreground))]">
                   {error}
                 </div>
               )}
@@ -2431,7 +2240,7 @@ function TaskModal({ task, initialRange, onClose, onSaved, onEditSeriesTemplate 
                       value={{
                         enabled: showRecurrence,
                         type: recurrenceType,
-                        interval: getRecurrenceIntervalForType(recurrenceType, weeklyInterval, monthlyInterval),
+                        interval: recurrenceInterval,
                         days: selectedDays,
                         date: monthlyDate,
                         lunar: {

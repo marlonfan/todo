@@ -219,7 +219,10 @@
     "pullRefreshRelease": "松开同步",
     "pullRefreshRefreshing": "同步中",
     "pullRefreshDone": "已同步",
-    "pullRefreshFailed": "同步失败"
+    "pullRefreshFailed": "同步失败",
+    "draftRecoveryTitle": "有 {{count}} 份任务草稿尚未保存",
+    "draftRecoveryBackedUp": "已保留恢复副本。请重试保存，成功后会继续同步。",
+    "draftRecoveryMemoryOnly": "草稿目前仅保留在此窗口。请勿关闭窗口，待存储恢复后重试。"
   },
   "category": {
     "name": "名称",

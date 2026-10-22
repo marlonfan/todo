@@ -1,3 +1,5 @@
+import { CALENDAR_CACHE_SCHEMA_VERSION } from './calendarCacheVersion.js';
+import { clearTaskDraftRecovery } from './taskDraftPersistence.js';
 import { cancelPendingAPIRequests, categoriesAPI, tasksAPI, getToken } from '../api/client';
 import { queryKeys } from '../query/keys';
 import {
@@ -86,10 +88,6 @@ const defaultPlatform = {
 const platform = (typeof window !== 'undefined' && window.__todoPlatform)
   ? { ...defaultPlatform, ...window.__todoPlatform }
   : defaultPlatform;
-
-// Keep in sync with CALENDAR_CACHE_SCHEMA_VERSION in useCalendarFetch.js
-const CALENDAR_CACHE_SCHEMA_VERSION = 2;
-
 const DEFAULT_SYNC_INTERVAL_SECONDS = 120;
 const MIN_SYNC_INTERVAL_SECONDS = 15;
 const MAX_SYNC_INTERVAL_SECONDS = 1800;
@@ -1111,6 +1109,7 @@ export function stopSyncEngine() {
 export async function clearAuthenticatedLocalState(queryClient = queryClientRef) {
   cancelPendingAPIRequests();
   stopSyncEngine();
+  await clearTaskDraftRecovery();
   await clearLocalNotificationsForLogout();
   await waitForIdle().catch(() => {});
   await safeLocalCall(() => clearAllLocalData(), null, 'clearAllLocalData:logout');

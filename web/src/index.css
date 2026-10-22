@@ -4266,10 +4266,18 @@ html.todo-electron.todo-authenticated-layout:has(:is(
   -webkit-tap-highlight-color: transparent;
 }
 
-.calendar-shell button:focus,
-.calendar-shell button:focus-visible {
+.calendar-shell button:focus:not(:focus-visible) {
   outline: none !important;
   box-shadow: none !important;
+}
+
+.calendar-shell button:focus-visible {
+  outline: 2px solid hsl(var(--ring)) !important;
+  outline-offset: -2px;
+}
+
+.calendar-shell .canvas-event:focus-visible {
+  z-index: 80;
 }
 
 .calendar-topbar {

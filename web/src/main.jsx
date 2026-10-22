@@ -11,6 +11,7 @@ import { queryClient } from './query/client'
 import { installTaskMutationUnloadGuard } from './data/pendingTaskMutationPersistence'
 import { initPlatform } from './platform/init'
 import { initInputModality } from './utils/inputModality'
+import { registerServiceWorkerUpdates } from './platform/serviceWorkerUpdates'
 
 const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1.0, viewport-fit=cover';
 
@@ -65,31 +66,8 @@ function ensureMobileViewport() {
 
   // Service Worker：桌面端和 Vite 开发模式不需要
   if (shouldUseServiceWorker) {
-    let refreshing = false;
-
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return;
-      refreshing = true;
-      window.location.reload();
-    });
-
     window.addEventListener('load', () => {
-      navigator.serviceWorker
-        .register('/sw.js')
-        .then((registration) => {
-          registration.addEventListener('updatefound', () => {
-            const worker = registration.installing;
-            if (!worker) return;
-
-            worker.addEventListener('statechange', () => {
-              if (worker.state === 'activated' && navigator.serviceWorker.controller) {
-                if (refreshing) return;
-                refreshing = true;
-                window.location.reload();
-              }
-            });
-          });
-        })
+      registerServiceWorkerUpdates(navigator.serviceWorker, () => window.location.reload())
         .catch((err) => {
           console.error('Service worker registration failed:', err);
         });

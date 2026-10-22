@@ -11,5 +11,8 @@ export default [{
   },
   plugins: { 'react-hooks': reactHooks },
   linterOptions: { reportUnusedDisableDirectives: false },
-  rules: { 'no-undef': 'error' },
+  rules: {
+    'no-undef': 'error',
+    'react-hooks/rules-of-hooks': 'error',
+  },
 }];

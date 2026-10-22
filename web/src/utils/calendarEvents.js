@@ -64,21 +64,15 @@ function buildSegmentEvent(event, dayKey, dayStart, dayEnd, eventStart, eventEnd
 
 export function buildEventsSignature(events) {
   const list = Array.isArray(events) ? events : [];
-  const lines = list.map((event) => {
-    const ext = event?.extendedProps || {};
-    return [
-      String(event?.id || ''),
-      String(event?.start || ''),
-      String(event?.end || ''),
-      String(event?.title || ''),
-      String(ext?.status || ''),
-      String(ext?.taskId || ''),
-      String(ext?.readOnly || ''),
-      String(ext?.source || ''),
-    ].join('|');
-  });
+  // Events are JSON data. Compare their complete content so new detail fields
+  // cannot silently disappear from cache updates. Object/event ordering is not
+  // meaningful, while nested array order and field boundaries remain intact.
+  const lines = list.map((event) => JSON.stringify(event, (_key, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]));
+  }));
   lines.sort();
-  return `${lines.length}:${lines.join('||')}`;
+  return JSON.stringify(lines);
 }
 
 /**

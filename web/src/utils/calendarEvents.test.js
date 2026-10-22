@@ -27,6 +27,35 @@ test('buildEventsSignature changes when event content changes but length stays s
   assert.notEqual(buildEventsSignature(before), buildEventsSignature(after));
 });
 
+test('event signatures include details, recurrence identity and presentation fields', () => {
+  const event = {
+    id: 'subscription', title: 'Meeting', start: '2026-10-22T08:00:00Z',
+    allDay: false, editable: false, backgroundColor: '#123456',
+    extendedProps: { description: 'Before', location: 'Room A', instanceId: 'instance-a', readOnly: true },
+  };
+  const changes = [
+    { allDay: true }, { editable: true }, { backgroundColor: '#654321' },
+    ...['description', 'location', 'organizer', 'attendees', 'meetingLink', 'recurrenceText', 'instanceId', 'provider']
+      .map((field) => ({ extendedProps: { ...event.extendedProps, [field]: 'changed' } })),
+  ];
+  for (const change of changes) {
+    assert.notEqual(buildEventsSignature([event]), buildEventsSignature([{ ...event, ...change }]), JSON.stringify(change));
+  }
+});
+
+test('event signatures ignore event order and object key order', () => {
+  const a = { id: 'a', extendedProps: { location: 'Room A', description: 'Notes', nested: { b: 2, a: 1 } } };
+  const reorderedA = { extendedProps: { nested: { a: 1, b: 2 }, description: 'Notes', location: 'Room A' }, id: 'a' };
+  const b = { id: 'b', title: 'Other' };
+  assert.equal(buildEventsSignature([a, b]), buildEventsSignature([b, reorderedA]));
+});
+
+test('event signature delimiters cannot hide changes across fields', () => {
+  const a = { id: 'a', title: 'title|pending', extendedProps: { status: 'done' } };
+  const b = { id: 'a', title: 'title', extendedProps: { status: 'pending|done' } };
+  assert.notEqual(buildEventsSignature([a]), buildEventsSignature([b]));
+});
+
 test('decomposeEventsByDay segments readonly cross-day events for each day', () => {
   const map = decomposeEventsByDay([
     {
