@@ -1,7 +1,7 @@
 # Todo CLI
 
 `todo-cli` exposes the Todo app HTTP API as an agent-friendly command line tool.
-It is intentionally lightweight: one Node.js script, no runtime dependencies, JSON
+It is intentionally lightweight: a small Node.js CLI, no runtime dependencies, JSON
 output by default, table/NDJSON for humans and pipelines, and `--dry-run` for
 side-effect previews.
 
@@ -86,52 +86,58 @@ Run Todo operations with the installed `todo-cli` binary. Avoid using
 an `npx` package fallback for normal commands because it may run a different
 published version than the installed skill expects.
 
-## Skill Installation
+## CLI and Skill Updates
 
-Install the AI-facing skill directly with `skills`.
+The npm package contains the canonical Skill matching that CLI release. Install
+with `npm install -g @marlonfan/todo-app-cli`, then use one update entry point:
 
-The npm package also includes an explicit, version-checked installer for hosts that do not discover package skills automatically:
+```bash
+todo-cli update --check       # Read-only: npm version and actual installed Skills
+todo-cli update               # Upgrade the global npm CLI, then sync Skills
+todo-cli update --skills-only # Sync/repair Skills without upgrading the CLI
+```
+
+`update` never downgrades a newer local version. Even when no CLI upgrade is
+needed, it synchronizes Skills. It supports npm global installations; a local
+checkout is not replaced. A CLI upgrade followed by a Skill sync failure is
+reported explicitly; retry with `update --skills-only`.
+
+Install the Skill for an agent once:
+
+```bash
+todo-cli skill install --target codex
+todo-cli skill install --target claude
+todo-cli skill install --target minis
+todo-cli skill install --target-dir ~/.agents/skills
+```
+
+Installation links `todo-cli` to the package's Skill directory and records its
+absolute target path in `skills-state.json` next to the CLI config. `update`
+synchronizes recorded targets and existing Todo Skills in standard shared,
+Codex, Claude, Pi and Cindy directories. Custom directories must be installed
+with `--target-dir` once. Shared agent links are preserved.
+
+For existing copies installed through `npx skills add` or copied by hand, run
+`todo-cli update --skills-only` to migrate them to package links. Use
+`todo-cli skill sync --target-dir /custom/skills` for a custom existing copy.
+Only Todo's Skill is managed; unrelated Skills are left alone.
 
 ```bash
 todo-cli skill path
-todo-cli skill install --target minis
-todo-cli skill install --target minis --force
-todo-cli skill doctor --target minis
+todo-cli skill doctor
+todo-cli skill doctor --target codex
+todo-cli skill sync --dry-run
 ```
 
-Supported built-in targets are `minis`, `codex`, and `claude`; use `--target-dir PATH` for another host. Installation creates a symlink and refuses to overwrite an existing target by default. Pass `--force` to move the old target to a timestamped `todo-cli.backup-*` path before installing. The new Skill takes effect in a new agent session.
+`skill doctor` compares the actual installed content and version with the bundled
+Skill, including broken links and modified copies. Normal resource commands warn
+on stderr when Skills drift, preserving stdout's JSON shape. `--check` and
+`--dry-run` do not install packages, write sync state or replace Skills.
 
-If the GitHub repository is public:
-
-```bash
-npx skills add marlonfan/todo@todo-cli -g -a codex -y
-```
-
-If the repository is private and your machine has GitHub SSH access:
-
-```bash
-npx skills add 'git@github.com:marlonfan/todo.git#main@todo-cli' -g -a codex -y
-```
-
-For all supported agents:
-
-```bash
-npx skills add marlonfan/todo@todo-cli -g --agent '*' -y
-```
-
-To inspect before installing:
-
-```bash
-npx skills add marlonfan/todo --list
-```
-
-The skill installs instructions for AI tools. The CLI binary is still installed through npm:
-
-```bash
-npm install -g @marlonfan/todo-app-cli
-todo-cli init --base-url https://your-todo-server.example.com
-todo-cli doctor
-```
+Installation refuses existing targets unless `--force` is passed; deliberate
+sync/update migrates existing copies automatically. Backups are kept under
+`skill-backups` next to the config, outside the standard Skill discovery roots.
+Start a new agent session after updating so it loads the new instructions.
 
 ## Commands
 

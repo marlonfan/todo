@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 
-import { lstat, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { SkillManager } from './skill-manager.mjs';
 
-const CLI_VERSION = '0.3.2';
+const execFileAsync = promisify(execFile);
+
+const CLI_VERSION = '0.3.3';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
 const DEFAULT_TIMEOUT_MS = 30000;
 const BUNDLED_SKILL_PATH = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'todo-cli', 'SKILL.md');
-const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes']);
+const NO_VALUE_FLAGS = new Set(['dry-run', 'force', 'help', 'h', 'yes', 'check', 'skills-only']);
 const TASK_INSTANCE_ID_PATTERN = /^\d+_(\d{4})(\d{2})(\d{2})$/;
 const RETIRED_TASK_REMINDER_FLAGS = [
   'remind-at-start',
@@ -1176,74 +1181,89 @@ function resolveSkillTargetDir(flags) {
   throw new CliError('invalid --target: expected minis, codex, or claude');
 }
 
-async function pathExists(path) {
-  try {
-    await lstat(path);
-    return true;
-  } catch (err) {
-    if (err?.code === 'ENOENT') return false;
-    throw err;
-  }
+function skillManager(ctx) {
+  return new SkillManager({ bundledPath: BUNDLED_SKILL_PATH, version: CLI_VERSION,
+    configPath: getConfigPath(ctx.flags) });
 }
 
-async function bundledSkillVersion() {
-  const content = await readFile(BUNDLED_SKILL_PATH, 'utf8');
-  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  const match = frontmatter?.[1].match(/^(?:version| {2}version):\s*["']?([^\s"']+)/m);
-  return match?.[1] || null;
+function skillTarget(ctx) {
+  const targetDir = resolveSkillTargetDir(ctx.flags);
+  return targetDir ? join(targetDir, 'todo-cli') : undefined;
 }
 
 async function handleSkill(ctx, args) {
   const action = args[0] || 'doctor';
-  const skillVersion = await bundledSkillVersion();
-  const targetDir = resolveSkillTargetDir(ctx.flags);
-  const targetPath = targetDir ? join(targetDir, 'todo-cli') : null;
-
-  if (action === 'path') {
-    return { path: BUNDLED_SKILL_PATH, version: skillVersion };
-  }
-  if (action === 'doctor') {
-    const targetReady = targetPath ? await pathExists(join(targetPath, 'SKILL.md')) : null;
-    return {
-      ok: Boolean(skillVersion) && skillVersion === CLI_VERSION && targetReady !== false,
-      cli_version: CLI_VERSION,
-      skill_version: skillVersion,
-      version_match: skillVersion === CLI_VERSION,
-      skill_path: BUNDLED_SKILL_PATH,
-      target_path: targetPath,
-      target_ready: targetReady,
-    };
-  }
+  const manager = skillManager(ctx);
+  const target = skillTarget(ctx);
+  if (action === 'path') return { path: BUNDLED_SKILL_PATH, version: CLI_VERSION };
+  if (action === 'doctor') return manager.doctor(target);
+  if (action === 'sync') return manager.sync(target, { dryRun: flagEnabled(ctx.flags, ['dry-run']) });
   if (action === 'install') {
-    if (!targetDir || !targetPath) {
-      throw new CliError('skill install requires --target minis|codex|claude or --target-dir PATH');
-    }
-    await mkdir(targetDir, { recursive: true });
-    let backup = null;
-    if (await pathExists(targetPath)) {
-      if (!ctx.flags.force) {
-        throw new CliError(`skill target already exists: ${targetPath}`);
-      }
-      backup = `${targetPath}.backup-${Date.now()}`;
-      await rename(targetPath, backup);
-    }
-    await symlink(dirname(BUNDLED_SKILL_PATH), targetPath, 'dir');
-    return {
-      ok: true,
-      installed: true,
-      cli_version: CLI_VERSION,
-      skill_version: skillVersion,
-      source: dirname(BUNDLED_SKILL_PATH),
-      target: targetPath,
-      backup,
-      new_session_required: true,
-    };
+    if (!target) throw new CliError('skill install requires --target minis|codex|claude or --target-dir PATH');
+    if (flagEnabled(ctx.flags, ['dry-run'])) return { dry_run: true, target, action: 'install_skill' };
+    return manager.install(target, { force: flagEnabled(ctx.flags, ['force']) });
   }
   throw new CliError(`unknown skill action: ${action}`);
 }
 
+async function handleUpdate(ctx) {
+  const manager = skillManager(ctx);
+  const target = skillTarget(ctx);
+  if (flagEnabled(ctx.flags, ['skills-only'])) {
+    return manager.sync(target, { dryRun: flagEnabled(ctx.flags, ['dry-run', 'check']) });
+  }
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const runNpm = async (args) => {
+    const result = await execFileAsync(npm, args, { timeout: 180000, maxBuffer: 4 * 1024 * 1024 });
+    return result.stdout.trim();
+  };
+  const latest = JSON.parse(await runNpm(['view', '@marlonfan/todo-app-cli@latest', 'version', '--json']));
+  if (typeof latest !== 'string' || !/^\d+\.\d+\.\d+$/.test(latest)) {
+    throw new CliError('npm returned an invalid release version');
+  }
+  const currentParts = CLI_VERSION.split('.').map(Number);
+  const latestParts = latest.split('.').map(Number);
+  const differingPart = latestParts.findIndex((part, index) => part !== currentParts[index]);
+  const updateAvailable = differingPart >= 0 && latestParts[differingPart] > currentParts[differingPart];
+  const targetVersion = updateAvailable ? latest : CLI_VERSION;
+  const skills = await manager.doctor(target);
+  if (flagEnabled(ctx.flags, ['check', 'dry-run'])) {
+    return { ok: skills.ok, current_version: CLI_VERSION, latest_version: latest,
+      update_available: updateAvailable, dry_run: flagEnabled(ctx.flags, ['dry-run']),
+      skills_status: skills };
+  }
+  // Resolve the global install before changing anything. Never replace a local checkout.
+  const prefix = await runNpm(['prefix', '-g']);
+  const packageDir = process.platform === 'win32'
+    ? join(prefix, 'node_modules', '@marlonfan', 'todo-app-cli')
+    : join(prefix, 'lib', 'node_modules', '@marlonfan', 'todo-app-cli');
+  const installedCLI = join(packageDir, 'todo-cli.mjs');
+  let globalInstall = false;
+  try { globalInstall = await realpath(installedCLI) === await realpath(fileURLToPath(import.meta.url)); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  if (!globalInstall) {
+    throw new CliError('Automatic update requires the npm global installation. Run npm install -g @marlonfan/todo-app-cli, then todo-cli update --skills-only.');
+  }
+  if (updateAvailable || flagEnabled(ctx.flags, ['force'])) {
+    await runNpm(['install', '-g', `@marlonfan/todo-app-cli@${targetVersion}`]);
+  }
+  // Re-enter the newly installed code: the old process still holds the old version.
+  const syncArgs = [installedCLI, 'skill', 'sync', '--config', getConfigPath(ctx.flags)];
+  if (target) syncArgs.push('--target-dir', dirname(target));
+  try {
+    const { stdout } = await execFileAsync(process.execPath, syncArgs, { timeout: 60000 });
+    const result = JSON.parse(stdout);
+    return { ...result, previous_version: CLI_VERSION,
+      action: updateAvailable ? 'updated' : 'already_up_to_date',
+      new_session_required: result.new_session_required || updateAvailable || flagEnabled(ctx.flags, ['force']) };
+  } catch (err) {
+    throw new CliError(`CLI installation completed, but Skill sync failed. Run todo-cli update --skills-only to retry. ${err.stderr || err.message}`);
+  }
+}
+
 function help(topic = []) {
   const [resource, action] = topic;
+  if (resource === 'update') return updateHelp();
   if (resource === 'task') return taskHelp(action);
   if (resource === 'auth') return authHelp();
   if (resource === 'category') return categoryHelp();
@@ -1277,6 +1297,8 @@ First run:
   todo-cli init --base-url https://your-todo-server.example.com
   todo-cli init --base-url https://your-todo-server.example.com --username u --password secret123
   todo-cli doctor
+  todo-cli update --check
+  todo-cli update
   todo-cli config set --base-url https://your-todo-server.example.com
 
 Auth:
@@ -1326,6 +1348,23 @@ Raw API:
 `;
 }
 
+function updateHelp() {
+  return `todo-cli update - upgrade the npm CLI and synchronize installed Skills
+
+Examples:
+  todo-cli update --check           Check npm and actual installed Skills; no writes
+  todo-cli update                   Upgrade and sync tracked/discovered todo-cli Skills
+  todo-cli update --skills-only     Repair Skills from the current installed package
+  todo-cli update --force           Reinstall even when the CLI is already current
+  todo-cli skill sync --target-dir /custom/skills
+
+--dry-run previews changes without installation.
+Automatic CLI upgrades support npm global installs; local checkouts are not replaced.
+Skills are linked to the installed package and tracked next to the CLI config.
+Start a new agent session after an upgrade to load the new instructions.
+`;
+}
+
 function skillHelp() {
   return `todo-cli skill - inspect and install the bundled AI skill
 
@@ -1334,12 +1373,14 @@ Examples:
   todo-cli skill path
   todo-cli skill doctor
   todo-cli skill doctor --target minis
+  todo-cli skill sync
   todo-cli skill install --target minis
   todo-cli skill install --target minis --force
   todo-cli skill install --target-dir /custom/skills
 
 Installation is explicit and creates a todo-cli directory symlink. Use --force to move an existing target
-to a timestamped backup before installing the symlink.
+to a backup under ~/.todo-cli/skill-backups (outside Skill discovery roots) before installing.
+Installed paths are recorded in skills-state.json next to the CLI config; update syncs them again.
 Start a new agent session after installation so the host can refresh its skill index.
 `;
 }
@@ -1645,8 +1686,17 @@ async function dispatch() {
   else if (resource === 'health') result = await handleHealth(ctx);
   else if (resource === 'doctor') result = await handleDoctor(ctx);
   else if (resource === 'skill') result = await handleSkill(ctx, args);
+  else if (resource === 'update') result = await handleUpdate(ctx);
   else throw new CliError(`unknown resource: ${resource}`);
 
+  if (!['skill', 'update'].includes(resource)) {
+    try {
+      const report = await skillManager(ctx).doctor();
+      if (!report.ok) console.error('Skill 与当前 CLI 不同步，请运行 todo-cli update --skills-only，并新建 agent 会话。');
+    } catch {
+      console.error('无法检查 Skill 同步状态，请运行 todo-cli skill doctor。');
+    }
+  }
   printResult(result, flags);
 }
 

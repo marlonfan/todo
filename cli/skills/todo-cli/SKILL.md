@@ -2,7 +2,7 @@
 name: todo-cli
 description: "Todo 任务管理：通过已安装的 todo-cli 创建、查看、更新、完成、取消和删除任务，并管理分类与日历。当用户说‘提醒我’‘创建待办’‘记个任务’‘今天有什么任务’，或提到 Todo CLI、Todo、task 时使用；所有含时间的请求都只设置任务时间。"
 metadata:
-  version: "0.3.2"
+  version: "0.3.3"
   requires:
     bins: ["todo-cli"]
   cliHelp: "todo-cli --help;todo-cli task --help;todo-cli calendar --help;todo-cli skill doctor"
@@ -130,6 +130,8 @@ Skill discovery directories so two folders do not advertise the same `name: todo
 todo_cli doctor
 todo_cli --version
 todo_cli skill doctor
+todo_cli update --check
+todo_cli update
 todo_cli init --base-url https://your-todo-server.example.com
 ```
 
@@ -142,7 +144,23 @@ todo_cli skill install --target minis --force
 todo_cli skill doctor --target minis
 ```
 
-Installation refuses to replace an existing target by default. Use `--force` only for an intentional upgrade; the CLI moves the old target to a timestamped `todo-cli.backup-*` path before creating the new symlink. If the agent discovers that backup as another Skill, move it outside the discovery root as part of the intentional upgrade.
+Installation refuses existing targets unless `--force` is passed. Existing copies
+are backed up under `skill-backups` next to the CLI config, outside standard Skill
+discovery roots, before being replaced with package links. Installed paths are
+recorded in `skills-state.json` next to the config.
+
+Use `todo_cli update` for future upgrades: it upgrades the npm global CLI and
+synchronizes tracked/existing Skills from that exact installed package.
+`todo_cli update --check` is read-only. If the CLI is already current or only
+Skills need repair, run `todo_cli update --skills-only`; use `todo_cli skill sync
+--target-dir PATH` for an existing custom location. The updater does not replace
+a local development checkout or downgrade a newer CLI.
+
+`skill doctor` checks actual installed content, version and links. If a regular
+command warns on stderr about Skill drift, complete the user's current request
+first, then report the repair command. Do not treat the warning as a task failure
+or change JSON parsing: stdout retains its usual object/array shape. After any
+upgrade, start a new agent session to load the updated Skill.
 
 ### Auth
 

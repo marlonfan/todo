@@ -41,7 +41,13 @@ async function runCLI(baseUrl, args, { timezone } = {}) {
 }
 
 async function runLocalCLI(args) {
-  return execFileAsync(process.execPath, [cliPath, ...args]);
+  const home = await mkdtemp(join(tmpdir(), 'todo-cli-home-'));
+  try {
+    return await execFileAsync(process.execPath, [cliPath, ...args], {
+      env: { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'),
+        TODO_CLI_CONFIG: join(home, 'config.json') },
+    });
+  } finally { await rm(home, { recursive: true, force: true }); }
 }
 
 test('notify settings output redacts credentials returned by an older server', async () => {
@@ -319,40 +325,41 @@ test('rescheduled instances retain their original date independently of the disp
 
 test('version and skill doctor report matching bundled versions', async () => {
   const versionResult = await runLocalCLI(['--version']);
-  assert.equal(versionResult.stdout.trim(), '0.3.2');
+  assert.equal(versionResult.stdout.trim(), '0.3.3');
 
   const doctorResult = await runLocalCLI(['skill', 'doctor']);
   const report = JSON.parse(doctorResult.stdout);
   assert.equal(report.ok, true);
-  assert.equal(report.cli_version, '0.3.2');
-  assert.equal(report.skill_version, '0.3.2');
+  assert.equal(report.cli_version, '0.3.3');
+  assert.equal(report.skill_version, '0.3.3');
   assert.equal(report.version_match, true);
 });
 
 test('skill install creates a discoverable target without overwriting it', async () => {
   const targetDir = await mkdtemp(join(tmpdir(), 'todo-cli-skill-target-'));
+  const runSkill = (args) => runLocalCLI([...args, '--config', join(targetDir, 'config.json')]);
   try {
-    const installResult = await runLocalCLI(['skill', 'install', '--target-dir', targetDir]);
+    const installResult = await runSkill(['skill', 'install', '--target-dir', targetDir]);
     const installed = JSON.parse(installResult.stdout);
     assert.equal(installed.ok, true);
     assert.equal(installed.installed, true);
 
-    const doctorResult = await runLocalCLI(['skill', 'doctor', '--target-dir', targetDir]);
+    const doctorResult = await runSkill(['skill', 'doctor', '--target-dir', targetDir]);
     const report = JSON.parse(doctorResult.stdout);
     assert.equal(report.ok, true);
     assert.equal(report.target_ready, true);
 
     await assert.rejects(
-      runLocalCLI(['skill', 'install', '--target-dir', targetDir]),
+      runSkill(['skill', 'install', '--target-dir', targetDir]),
       /already exists/,
     );
 
-    const forceResult = await runLocalCLI(['skill', 'install', '--target-dir', targetDir, '--force']);
+    const forceResult = await runSkill(['skill', 'install', '--target-dir', targetDir, '--force']);
     const replaced = JSON.parse(forceResult.stdout);
     assert.equal(replaced.ok, true);
-    assert.match(replaced.backup, /todo-cli\.backup-/);
+    assert.equal(replaced.backup, null); // Already linked: no redundant backup.
 
-    const doctorAfterForce = JSON.parse((await runLocalCLI(['skill', 'doctor', '--target-dir', targetDir])).stdout);
+    const doctorAfterForce = JSON.parse((await runSkill(['skill', 'doctor', '--target-dir', targetDir])).stdout);
     assert.equal(doctorAfterForce.target_ready, true);
   } finally {
     await rm(targetDir, { recursive: true, force: true });

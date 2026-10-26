@@ -1,6 +1,6 @@
 {
   "name": "@marlonfan/todo-app-cli",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Agent-friendly CLI for the Todo app HTTP API",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "todo-cli.mjs",
+    "skill-manager.mjs",
     "README.md",
     "skills"
   ],
@@ -33,6 +34,6 @@
   "scripts": {
     "start": "node ./todo-cli.mjs",
     "check": "node ./todo-cli.mjs --help",
-    "test": "node --test ./todo-cli.test.mjs"
+    "test": "node --test ./*.test.mjs"
   }
 }
