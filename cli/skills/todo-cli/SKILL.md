@@ -2,7 +2,7 @@
 name: todo-cli
 description: "Todo 任务管理：通过已安装的 todo-cli 创建、查看、更新、完成、取消和删除任务，并管理分类与日历。当用户说‘提醒我’‘创建待办’‘记个任务’‘今天有什么任务’，或提到 Todo CLI、Todo、task 时使用；所有含时间的请求都只设置任务时间。"
 metadata:
-  version: "0.3.1"
+  version: "0.3.2"
   requires:
     bins: ["todo-cli"]
   cliHelp: "todo-cli --help;todo-cli task --help;todo-cli calendar --help;todo-cli skill doctor"
@@ -68,6 +68,24 @@ todo_cli init --base-url https://your-todo-server.example.com
 Server URL precedence is `--base-url`, then `TODO_BASE_URL`, then
 `~/.todo-cli/config.json`, then the local development default.
 
+### Identify the CLI before reusing old instructions
+
+This Skill describes the Node/npm package `@marlonfan/todo-app-cli`, not a separate
+Python script named `todo_cli.py`. Check `command -v todo-cli`, `todo_cli --version`,
+and `todo_cli task update --help` before applying another agent's notes.
+Commands such as `add`, `list`, `next`, `done`, `calendar --days`, and `--json`
+from a different CLI must not be assumed compatible: this CLI uses `task create`,
+`task list`, `task complete`, `calendar +agenda --days`, and `--format json`.
+`task next-occurrences` queries recurring occurrences; it is not a generic `next` alias.
+
+Use `--priority high|medium|low`; this CLI and backend encode them as `1|0|-1`.
+Do not reuse the historical Python mapping `1|2|3`. A string-to-int HTTP 400 is
+not proof that any particular numeric mapping is correct.
+
+Keep operational facts in this versioned Skill/help rather than copying a command
+manual into long-term memory. When upgrading a Skill, keep backups outside agent
+Skill discovery directories so two folders do not advertise the same `name: todo-cli`.
+
 ## Operating Rules
 
 - **Visible-time invariant:** whenever the user supplies a time, the created task must have that visible `start_time`. Never send `end_time` or `--end-time-local` by itself: an end-only task can disappear from time-based views or be cleared by a later client save.
@@ -124,7 +142,7 @@ todo_cli skill install --target minis --force
 todo_cli skill doctor --target minis
 ```
 
-Installation refuses to replace an existing target by default. Use `--force` only for an intentional upgrade; the CLI moves the old target to a timestamped `todo-cli.backup-*` path before creating the new symlink.
+Installation refuses to replace an existing target by default. Use `--force` only for an intentional upgrade; the CLI moves the old target to a timestamped `todo-cli.backup-*` path before creating the new symlink. If the agent discovers that backup as another Skill, move it outside the discovery root as part of the intentional upgrade.
 
 ### Auth
 
@@ -217,10 +235,17 @@ Useful flags:
 
 ### Update Tasks
 
+Read the task first, identify the requested record/occurrence and its current
+revision, then submit only the fields the user wants changed. `task update` sends
+a partial field payload even though the HTTP method is PUT; omitted fields are
+preserved. Do not construct a full body from an old list summary or use Python
+`request()` as a workaround for an allegedly missing update command.
+
 ```bash
 todo_cli task detail 42
 todo_cli task detail 42 --date 2026-05-11
 todo_cli task update 42 --title "New title"
+todo_cli task update 42 --priority high --if-match 3
 todo_cli task update 42 --description "Updated markdown" --if-match 3
 todo_cli task update 42 --description-file ./daily-review.md --if-match 3
 todo_cli task update 42 --description-file ./daily-review.md --occurrence-date 2026-05-11 --if-match 3
@@ -232,8 +257,50 @@ todo_cli task schedule 42 --start-time-local "2026-05-11T14:00:00" --timezone As
 ```
 
 Use `--if-match REVISION` when the task record includes a `revision`; this helps avoid overwriting newer edits.
+The revision `3` above is illustrative: replace it with the revision just read.
+If the server reports a revision conflict, reread and reconcile the requested
+change with the newer content before retrying. After every create or update,
+read `task detail ID` (with `--date` for a specific occurrence) and verify the
+changed fields before reporting success.
 For recurring tasks, use `--occurrence-date YYYY-MM-DD` when the user wants to update the specific occurrence currently shown in the UI. After updating a recurring task, verify with `task detail ID --date YYYY-MM-DD` when the user's complaint is about what the page displays.
 Use `todo_cli task update --help` or `todo_cli task schedule --help` when changing task fields.
+
+### Write readable task descriptions
+
+Task descriptions support Markdown in the app. Use the user's language and
+preserve their facts. A short task needs only a sentence or a few bullets; for
+longer notes, use meaningful `##` headings, `-` lists, `- [ ]` action items, and
+`[label](URL)` links. Include background or completion criteria only when supplied
+or clearly implied; do not invent owners, deadlines, decisions, or empty sections.
+Keep agent reasoning, tool output, API metadata, and conversation transcripts out
+of the description unless the user explicitly wants them recorded.
+
+When editing existing notes, read and merge their content rather than replacing
+unrelated notes. `--description` and `--description-file` replace the entire
+description; they do not append. Do not wrap the whole description in a Markdown
+code fence or send literal `\n` text in place of real line breaks.
+
+For multiline content, use a temporary UTF-8 file and a quoted heredoc so shell
+variables, backticks, and `$()` in user text are not executed:
+
+```bash
+notes_file=$(mktemp)
+cat > "$notes_file" <<'TODO_DESCRIPTION'
+核对报价并整理差异，供下次讨论使用。
+
+## 待办
+- [ ] 核对两版报价
+- [ ] 汇总差异和待确认项
+TODO_DESCRIPTION
+todo_cli task update 42 --description-file "$notes_file" --if-match 3
+# After a successful update, read back and compare the saved description.
+todo_cli task detail 42
+rm "$notes_file"
+```
+
+Replace the example content, ID and revision with the real task's values. Run
+these commands sequentially and stop on an update error before claiming success.
+The same `--description-file` flag works with `task create`.
 
 ### Delete Tasks
 
@@ -271,6 +338,12 @@ todo_cli calendar events \
 
 Use `todo_cli calendar --help` for range query examples. Calendar event ranges require both `--start` and `--end`.
 
+For schedule summaries, present tasks and external calendar events separately.
+Only call intervals overlapping when `startA < endB` and `startB < endA`; an event
+ending at 12:00 and a task starting at 12:00 have zero gap, not an overlap. Mention
+the lack of transition time when relevant without inventing a required buffer.
+If a task has no end time, do not invent its duration to claim an overlap.
+
 ### Raw API
 
 Use this when wrapped commands do not cover a feature:
@@ -284,6 +357,9 @@ todo_cli api GET /calendar --query-file ./query.json
 ```
 
 Use `todo_cli api --help` before raw calls.
+The CLI adds `/api` to the configured server base. Pass resource paths such as
+`/tasks/42`, not `/api/tasks/42`, to avoid a doubled `/api/api` path. Credentials
+are managed through auth/config; do not print the config file to inspect tokens.
 
 ## Output Contract
 

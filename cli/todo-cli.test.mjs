@@ -319,13 +319,13 @@ test('rescheduled instances retain their original date independently of the disp
 
 test('version and skill doctor report matching bundled versions', async () => {
   const versionResult = await runLocalCLI(['--version']);
-  assert.equal(versionResult.stdout.trim(), '0.3.1');
+  assert.equal(versionResult.stdout.trim(), '0.3.2');
 
   const doctorResult = await runLocalCLI(['skill', 'doctor']);
   const report = JSON.parse(doctorResult.stdout);
   assert.equal(report.ok, true);
-  assert.equal(report.cli_version, '0.3.1');
-  assert.equal(report.skill_version, '0.3.1');
+  assert.equal(report.cli_version, '0.3.2');
+  assert.equal(report.skill_version, '0.3.2');
   assert.equal(report.version_match, true);
 });
 

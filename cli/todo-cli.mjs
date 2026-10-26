@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const CLI_VERSION = '0.3.1';
+const CLI_VERSION = '0.3.2';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_CONFIG_PATH = join(homedir(), '.todo-cli', 'config.json');
 const DEFAULT_TIMEOUT_MS = 30000;
