@@ -122,8 +122,9 @@ type CreateNotifySettingRequest struct {
 }
 
 type TestNotificationRequest struct {
-	Channel NotifyChannel   `json:"channel" binding:"required,oneof=telegram ntfy webhook"`
-	Config  NotifyConfigMap `json:"config" binding:"required"`
+	SettingID int64           `json:"setting_id" binding:"omitempty,gt=0"`
+	Channel   NotifyChannel   `json:"channel" binding:"omitempty,oneof=telegram ntfy webhook"`
+	Config    NotifyConfigMap `json:"config"`
 }
 
 type NotificationResponse struct {

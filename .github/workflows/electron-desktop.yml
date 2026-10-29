@@ -102,7 +102,18 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
         working-directory: electron
 
-      - name: Build Electron app
+      - name: Build signed macOS Electron app
+        if: runner.os == 'macOS'
+        run: |
+          npm run build -- --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
+          npm run verify:mac-signature
+        working-directory: electron
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://todo.marlon.life/api' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build Windows Electron app
+        if: runner.os == 'Windows'
         run: npm run build -- --publish never
         working-directory: electron
         env:

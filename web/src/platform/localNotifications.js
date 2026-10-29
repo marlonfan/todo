@@ -24,6 +24,9 @@ let sessionEpoch = 0;
 const delayedRefreshes = new Set();
 const activeReconciles = new Set();
 const inFlightIDs = new Set();
+// Electron timers live only in the current desktop process. Persisted schedule
+// entries are for cleanup, not proof that a timer survived an app restart.
+const sessionScheduledItems = new Map();
 let lastPermissionState = 'unknown';
 const statusListeners = new Set();
 
@@ -373,6 +376,7 @@ async function cancelIDs(ids) {
   const plugin = await loadNotificationModule();
   if (!plugin) return;
   await plugin.cancel(list);
+  list.forEach((id) => sessionScheduledItems.delete(id));
 }
 
 export async function cancelScheduledLocalNotifications() {
@@ -446,12 +450,9 @@ async function reconcileForSession(options, epoch) {
     await cancelIDs(removedIDs);
   }
 
-  const previousItemsByID = new Map(
-    current.items.map((item) => [Number(item?.id), String(item?.notify_at || '')]),
-  );
   for (const candidate of candidates) {
     if (!isCurrent()) return canceled();
-    const previousNotifyAt = previousItemsByID.get(candidate.id);
+    const previousNotifyAt = sessionScheduledItems.get(candidate.id);
     if (previousNotifyAt && previousNotifyAt !== candidate.notify_at) {
       await cancelIDs([candidate.id]);
     } else if (previousNotifyAt === candidate.notify_at) {
@@ -475,6 +476,7 @@ async function reconcileForSession(options, epoch) {
         instanceId: candidate.instance_id || '',
       },
     });
+    sessionScheduledItems.set(candidate.id, candidate.notify_at);
   }
 
   if (!isCurrent()) return canceled();

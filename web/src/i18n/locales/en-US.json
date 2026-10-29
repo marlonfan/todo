@@ -303,6 +303,8 @@
     "testSuccess": "Test notification sent successfully",
     "testFailed": "Failed to send test notification",
     "authEnabled": "(authentication enabled)",
+    "configured": "Configured; credentials are stored on the server",
+    "notConfigured": "Not configured",
     "telegram": {
       "botToken": "Bot Token",
       "chatId": "Chat ID",
@@ -331,7 +333,7 @@
     "reconcileFailed": "Failed to rebuild reminders",
     "local": {
       "title": "Local Notifications",
-      "hint": "Use the client as the default reminder channel on macOS and Android, with periodic refreshes and immediate updates after task changes. Telegram, ntfy, and Webhook keep working separately.",
+      "hint": "Reminders work while the desktop app is running, including with its window closed. Quitting the app stops reminders. On macOS, allow Todo in System Settings → Notifications and check Focus settings.",
       "status": "Permission status",
       "unsupported": "Not supported in this environment",
       "enable": "Enable local notifications",

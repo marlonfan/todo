@@ -38,6 +38,21 @@ test('desktop reminder obeys explicit offset when account defaults are disabled'
   } finally { await f.server.close(); }
 });
 
+test('desktop restart restores timers even when the persisted schedule is unchanged', async () => {
+  const f = await fixture();
+  try {
+    await f.notifications.reconcileLocalNotifications();
+    const first = f.sent[0];
+    f.sent.length = 0;
+    const restarted = await f.server.ssrLoadModule('/src/platform/localNotifications.js?restart');
+    await restarted.reconcileLocalNotifications();
+    assert.equal(f.sent.length, 1, 'a new desktop process must recreate its in-memory timer');
+    assert.equal(f.sent[0].id, first.id);
+    await restarted.reconcileLocalNotifications();
+    assert.equal(f.sent.length, 1, 'refreshing the same desktop session must not duplicate timers');
+  } finally { await f.server.close(); }
+});
+
 test('logout invalidates a reconciliation waiting for recurring tasks', async () => {
   const f = await fixture();
   try {

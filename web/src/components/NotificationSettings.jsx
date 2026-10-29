@@ -48,7 +48,7 @@ function NotificationSettings() {
   const fetchSettings = async () => {
     try {
       const res = await notifyAPI.getSettings();
-      setSettings(res.data);
+      setSettings(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       setError(t('notification.loadSettingsFailed'));
     }
@@ -57,9 +57,10 @@ function NotificationSettings() {
   const fetchChannels = async () => {
     try {
       const res = await notifyAPI.getChannels();
-      setChannels(res.data.channels);
-      if (res.data.channels.length > 0) {
-        setSelectedChannel(res.data.channels[0]);
+      const availableChannels = Array.isArray(res.data?.channels) ? res.data.channels : [];
+      setChannels(availableChannels);
+      if (availableChannels.length > 0) {
+        setSelectedChannel(availableChannels[0]);
       }
     } catch (err) {
       console.error('Failed to fetch channels:', err);
@@ -103,13 +104,13 @@ function NotificationSettings() {
     }
   };
 
-  const handleTest = async (channel, config) => {
+  const handleTest = async (payload) => {
     setLoading(true);
     setError('');
     setSuccess('');
 
     try {
-      await notifyAPI.test({ channel, config });
+      await notifyAPI.test(payload);
       setSuccess(t('notification.testSuccess'));
     } catch (err) {
       setError(err.response?.data?.error || t('notification.testFailed'));
@@ -430,7 +431,7 @@ function NotificationSettings() {
               {t('common.add')}
             </button>
             <button
-              onClick={() => handleTest(selectedChannel, config)}
+              onClick={() => handleTest({ channel: selectedChannel, config })}
               disabled={loading}
               className="btn-secondary"
             >
@@ -466,22 +467,7 @@ function NotificationSettings() {
                       )}
                     </div>
                     <div className="mt-1 text-sm text-muted-foreground">
-                      {Object.entries(setting.config).map(([key, value]) => {
-                        if (key === 'token') return null;
-                        return (
-                          <div key={key}>
-                            <span className="font-medium">{key}:</span>{' '}
-                            {key.includes('token') || key.includes('password')
-                              ? '***'
-                              : value}
-                          </div>
-                        );
-                      })}
-                      {setting.config.token && (
-                        <div className="text-xs text-muted-foreground">
-                          {t('notification.authEnabled')}
-                        </div>
-                      )}
+                      {t(setting.configured ? 'notification.configured' : 'notification.notConfigured')}
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -495,7 +481,7 @@ function NotificationSettings() {
                       </button>
                     )}
                     <button
-                      onClick={() => handleTest(setting.channel, setting.config)}
+                      onClick={() => handleTest({ setting_id: setting.id })}
                       disabled={loading}
                       className="text-primary hover:text-primary text-sm"
                     >

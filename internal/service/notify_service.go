@@ -263,12 +263,30 @@ func (s *NotifyService) SetDefaultUserSetting(userID, settingID int64) error {
 }
 
 func (s *NotifyService) TestNotification(userID int64, req *models.TestNotificationRequest) error {
-	notifier, ok := s.registry.Get(string(req.Channel))
+	channel, config := req.Channel, req.Config
+	if req.SettingID > 0 {
+		settings, err := s.notifyRepo.GetUserSettings(userID)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, setting := range settings {
+			if setting.ID == req.SettingID {
+				channel, config = setting.Channel, setting.Config
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("setting not found")
+		}
+	}
+	notifier, ok := s.registry.Get(string(channel))
 	if !ok {
 		return errors.New("unsupported notification channel")
 	}
 
-	if err := notifier.ValidateConfig(req.Config); err != nil {
+	if err := notifier.ValidateConfig(config); err != nil {
 		return err
 	}
 
@@ -279,7 +297,7 @@ func (s *NotifyService) TestNotification(userID int64, req *models.TestNotificat
 		UserID:      userID,
 	}
 
-	return notifier.Send(context.Background(), userID, req.Config, msg)
+	return notifier.Send(context.Background(), userID, config, msg)
 }
 
 // ProcessPendingNotifications bounds both the batch and the number of active sends.

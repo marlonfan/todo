@@ -303,6 +303,8 @@
     "testSuccess": "测试通知发送成功",
     "testFailed": "发送测试通知失败",
     "authEnabled": "（已启用鉴权）",
+    "configured": "已配置，密钥保存在服务端",
+    "notConfigured": "尚未配置",
     "telegram": {
       "botToken": "机器人 Token",
       "chatId": "聊天 ID",
@@ -331,7 +333,7 @@
     "reconcileFailed": "提醒重建失败",
     "local": {
       "title": "本机通知",
-      "hint": "作为客户端默认提醒通道，在 macOS 和安卓上定期刷新并在任务变动后更新本地排程，不影响 Telegram、ntfy 或 Webhook。",
+      "hint": "在桌面客户端运行期间提醒，关闭窗口后仍可提醒，完全退出应用后不再提醒。请在 macOS「系统设置 → 通知 → Todo」中允许通知，并检查专注模式。",
       "status": "权限状态",
       "unsupported": "当前环境不支持",
       "enable": "启用本机通知",
