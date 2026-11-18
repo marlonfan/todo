@@ -165,7 +165,7 @@ func wysiwygThemeOf(c *ui.Context) *richtext.Theme {
 // tables/HTML, and an optional raw Markdown source toggle.
 func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeholder string, source *string, readOnly bool, ref *ui.Handle, onEdit func(), onAI func()) {
 	t := tokensOf(c)
-	root := ui.Column(c.Key(key)).Grow(1).MinHeight(140).MinWidth(0).Gap(6)
+	root := ui.Column(c.Key(key)).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Gap(6).Clip()
 	st := ui.Local(root, "wysiwyg-state", func() wysiwygEditorState { return wysiwygEditorState{} })
 
 	reloadDoc := func(src string) {
@@ -213,7 +213,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 	root.Children(func() {
 		// Whisper-quiet, borderless icon-only formatting strip — no heavy gray box,
 		// no bulky text buttons, letting editorial Markdown typography lead.
-		toolbar := ui.Row(c.Key(key+"-toolbar")).MinHeight(26).Padding(0, 2).Gap(1).Wrap().AlignItems(ui.Center)
+		toolbar := ui.Row(c.Key(key+"-toolbar")).MinHeight(26).Shrink(0).Padding(0, 2).Gap(1).Wrap().AlignItems(ui.Center)
 		toolbar.Children(func() {
 			if !st.sourceMode && !st.complexSyntax && !readOnly {
 				f := st.doc.Formatting()
@@ -347,26 +347,33 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		})
 
 		// Main Editor Surface
+		// Wrap the editor surface in a clipped flex container (Basis(0).MinHeight(0).Clip())
+		// because MyGo invokes an element's own Draw callback before pushing its child
+		// clip rect; clipping on the wrapper guarantees long descriptions never bleed
+		// above into the toolbar/title or below into the bottom save footer.
 		if st.sourceMode {
-			ed := appTextArea(c.Key(key+"-raw"), source, field.TextAreaProps{
-				Variant:     field.InputBorderless,
-				Placeholder: placeholder,
-				MinRows:     6,
-				MaxRows:     24,
-			}).Label(label).Grow(1).MinHeight(120).MinWidth(0).Padding(6, 4).Disabled(readOnly)
-			if ref != nil {
-				ed.Ref(ref)
-			}
-			if ed.Changed() {
-				st.lastSerialized = *source
-				if onEdit != nil {
-					onEdit()
+			rawWrap := ui.Column(c.Key(key + "-raw-wrap")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Clip()
+			rawWrap.Children(func() {
+				ed := appTextArea(c.Key(key+"-raw"), source, field.TextAreaProps{
+					Variant:     field.InputBorderless,
+					Placeholder: placeholder,
+					MinRows:     6,
+					MaxRows:     24,
+				}).Label(label).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 4).Disabled(readOnly)
+				if ref != nil {
+					ed.Ref(ref)
 				}
-			}
+				if ed.Changed() {
+					st.lastSerialized = *source
+					if onEdit != nil {
+						onEdit()
+					}
+				}
+			})
 		} else if st.complexSyntax {
 			// Lossless rich surface for tasks containing GFM tables or custom HTML:
 			// preserves every byte until explicitly edited in source mode.
-			ui.Scroll(c.Key(key+"-complex-scroll")).Label("描述预览").Grow(1).MinHeight(120).MinWidth(0).Padding(4, 2).Children(func() {
+			ui.Scroll(c.Key(key+"-complex-scroll")).Label("描述预览").Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(4, 2).Children(func() {
 				markdown.View(c, *source, &a.markdown)
 				if !readOnly {
 					appActionButton(c, "编辑源码", action.ButtonProps{Variant: action.Text, Size: theme.Small}).Margin(6, 0, 0, 0).OnClick(func() {
@@ -376,7 +383,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 			})
 		} else {
 			svc := c.Services()
-			pasteGuard := ui.Column(c.Key(key + "-rich-wrap")).Grow(1).MinHeight(120).MinWidth(0).
+			pasteGuard := ui.Column(c.Key(key + "-rich-wrap")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Clip().
 				ObserveInput(func(ev ui.InputEvent) {
 					if readOnly {
 						return
@@ -432,7 +439,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 						st.linkURL = st.doc.Formatting().Link
 						st.linkOpen = true
 					},
-				}).Grow(1).MinHeight(120).MinWidth(0).Padding(6, 2)
+				}).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 2)
 				if ref != nil {
 					editor.Ref(ref)
 				}

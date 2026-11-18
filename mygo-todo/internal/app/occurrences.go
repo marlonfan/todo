@@ -165,7 +165,7 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 	}
 
 	// Top Toolbar
-	ui.Row(c.Key("occurrence-toolbar")).Label("本次任务工具栏").Height(toolbarHeight).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
+	ui.Row(c.Key("occurrence-toolbar")).Label("本次任务工具栏").Height(toolbarHeight).Shrink(0).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
 		if len(compact) > 0 && compact[0] {
 			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
 			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
@@ -186,13 +186,13 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 	})
 
 	// Body Container
-	body := ui.Column(c.Key("occurrence-content")).Label("本次任务详情内容").Padding(16, 20, 12, 20).Gap(12).MinWidth(0).Grow(1).MinHeight(0).Disabled(a.aiPanel != nil).
+	body := ui.Column(c.Key("occurrence-content")).Label("本次任务详情内容").Padding(16, 20, 12, 20).Gap(12).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip().Disabled(a.aiPanel != nil).
 		OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
 
 	body.Children(func() {
-		ui.Column(c.Key("occurrence-main")).Label("本次任务正文").Fill().MaxWidth(960).Gap(12).MinWidth(0).MinHeight(0).Children(func() {
+		ui.Column(c.Key("occurrence-main")).Label("本次任务正文").Fill().MaxWidth(960).Gap(12).MinWidth(0).MinHeight(0).Clip().Children(func() {
 			// 1. Direct 1-click editable Instance Title
-			ui.Column(c.Key("occurrence-heading")).Gap(4).MinWidth(0).Children(func() {
+			ui.Column(c.Key("occurrence-heading")).Shrink(0).Gap(4).MinWidth(0).Children(func() {
 				var occEsc func()
 				if !isTaskWorkspacePage(a.page) {
 					occEsc = func() { a.requestTaskTransition(func() {}) }
@@ -205,7 +205,7 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 			})
 
 			// 2. Upfront Iconic Instance Actions & Schedule Chip
-			ui.Row(c.Key("occurrence-properties")).Label("本次任务属性").Gap(4).Wrap().AlignItems(ui.Center).Children(func() {
+			ui.Row(c.Key("occurrence-properties")).Label("本次任务属性").Shrink(0).Gap(4).Wrap().AlignItems(ui.Center).Children(func() {
 				if !blocked {
 					if task.Status == "pending" {
 						detailPropertyChip(c, "occ-complete", "完成本次", "完成本次", lucide.Check(), false, t.Success, a.busy, func() {
@@ -260,12 +260,14 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 
 			// 3. Inline Schedule Editor when adjusting this occurrence's time
 			if a.occurrenceSchedule != nil {
-				ui.Column(c.Key("occurrence-schedule-card")).Padding(10, 12).Radius(8).Background(t.BgSubtle).Border(1, t.BorderSubtle).Gap(8).MinWidth(0).Children(func() {
-					a.occurrenceScheduleFields(c)
+				ui.Scroll(c.Key("occurrence-schedule-scroll")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Children(func() {
+					ui.Column(c.Key("occurrence-schedule-card")).Padding(10, 12).Radius(8).Background(t.BgSubtle).Border(1, t.BorderSubtle).Gap(8).MinWidth(0).Children(func() {
+						a.occurrenceScheduleFields(c)
+					})
 				})
 			}
 
-			ui.Box(c).Height(1).FillWidth().Background(t.BorderSubtle)
+			ui.Box(c).Height(1).Shrink(0).FillWidth().Background(t.BorderSubtle)
 
 			// 4. Full-height WYSIWYG Markdown Editor for this occurrence
 			if a.occurrenceSchedule == nil {

@@ -287,7 +287,7 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	t := tokensOf(c)
 
 	// Top Header Bar
-	ui.Row(c.Key("detail-toolbar")).Height(toolbarHeight).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
+	ui.Row(c.Key("detail-toolbar")).Height(toolbarHeight).Shrink(0).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
 		if len(compact) > 0 && compact[0] {
 			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
 			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
@@ -350,7 +350,7 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	})
 
 	// Main Detail Workspace: Title + Inline Property Chip Bar + Full-Height WYSIWYG Markdown
-	body := ui.Column(c.Key("task-editor-content")).Label("任务详情内容").Padding(16, 20, 12, 20).Gap(12).MinWidth(0).Grow(1).MinHeight(0)
+	body := ui.Column(c.Key("task-editor-content")).Label("任务详情内容").Padding(16, 20, 12, 20).Gap(12).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip()
 	if a.taskMetaOpen == "" {
 		body.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
 	}
@@ -361,9 +361,9 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	body.Children(func() {
 		titleFocused := ui.Local(body, "title-focused", func() bool { return false })
 		titleEdited := ui.Local(body, "title-edited", func() bool { return false })
-		ui.Column(c.Key("detail-main")).Fill().Gap(12).MinWidth(0).MinHeight(0).Children(func() {
+		ui.Column(c.Key("detail-main")).Fill().Gap(12).MinWidth(0).MinHeight(0).Clip().Children(func() {
 			// 1. Direct 1-click editable Title (with smart date/priority auto-recognition on Enter or Blur)
-			ui.Row(c.Key("task-heading")).MinWidth(0).Children(func() {
+			ui.Row(c.Key("task-heading")).Shrink(0).MinWidth(0).Children(func() {
 				var titleEsc func()
 				if !isTaskWorkspacePage(a.page) {
 					titleEsc = func() {
@@ -394,11 +394,11 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 			*titleFocused = nowFocused
 
 			// 2. Always-visible Horizontal Property Chips (replaces buried vertical table + duplicate toolbar icons)
-			ui.Column(c.Key("detail-properties")).MinWidth(0).Disabled(d.Task.ReadOnly).Children(func() {
+			ui.Column(c.Key("detail-properties")).Shrink(0).MinWidth(0).Disabled(d.Task.ReadOnly).Children(func() {
 				a.taskMetadata(c, d)
 			})
 
-			ui.Box(c).Height(1).FillWidth().Background(t.BorderSubtle)
+			ui.Box(c).Height(1).Shrink(0).FillWidth().Background(t.BorderSubtle)
 
 			// 3. Full-height True WYSIWYG Markdown Description Editor
 			a.wysiwygMarkdownEditor(c, "task-description", fmt.Sprintf("task:%d", d.Task.ID), "备注", "输入任务描述，支持 # 标题、- [ ] 待办、**加粗**、代码块…", &d.Description, d.Task.ReadOnly, &a.taskDescriptionInput, nil, func() {
@@ -408,12 +408,12 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	})
 
 	if a.failure != "" {
-		ui.Scroll(c.Key("editor-error")).MaxHeight(84).Padding(6, 20).Children(func() {
+		ui.Scroll(c.Key("editor-error")).Shrink(0).MaxHeight(84).Padding(6, 20).Children(func() {
 			feedback.Alert(c, a.failure, feedback.AlertProps{Type: feedback.Error})
 		})
 	}
 	if !d.Task.ReadOnly {
-		ui.Row(c.Key("task-save-bar")).Label("任务底部操作").Height(48).Padding(0, 20).Gap(8).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle).Children(func() {
+		ui.Row(c.Key("task-save-bar")).Label("任务底部操作").Height(48).Shrink(0).Padding(0, 20).Gap(8).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle).Children(func() {
 			saveLabel := a.detailSaveLabel()
 			dot := t.Success
 			if strings.Contains(saveLabel, "失败") || a.autosave.failure != "" {

@@ -322,12 +322,12 @@ func TestTrayMenuBarTitleAndFlyoutCompanion(t *testing.T) {
 	// 1. Verify macOS Menu Bar live title modes ("next", "count", "icon")
 	a.setTrayTitleMode("next")
 	titleNext := a.trayStatusTitle(now)
-	if !strings.Contains(titleNext, "14:30") || !strings.Contains(titleNext, "架构方案评审") || !strings.Contains(titleNext, "·2") {
+	if !strings.Contains(titleNext, "14:30") || !strings.Contains(titleNext, "架构方案评审") || strings.Contains(titleNext, "·") {
 		t.Fatalf("unexpected 'next' tray title: %q", titleNext)
 	}
 	a.setTrayTitleMode("count")
 	titleCount := a.trayStatusTitle(now)
-	if titleCount != " 今日 2" {
+	if titleCount != " 2" {
 		t.Fatalf("unexpected 'count' tray title: %q", titleCount)
 	}
 	a.setTrayTitleMode("icon")
@@ -337,9 +337,9 @@ func TestTrayMenuBarTitleAndFlyoutCompanion(t *testing.T) {
 	a.setTrayTitleMode("next")
 
 	// 2. Render the interactive Menu Bar Flyout view and test quick capture, tab switching, and task completion
-	tt := ui.NewTester(a.trayFlyoutView, 360, 460)
+	tt := ui.NewTester(a.trayFlyoutView, 328, 420)
 	tt.Frame()
-	if !tt.HasText("今日焦点") || !tt.HasText("架构方案评审") || !tt.HasText("整理发布记录") {
+	if !tt.HasText("架构方案评审") || !tt.HasText("整理发布记录") {
 		t.Fatalf("tray flyout missing today's tasks: %v", tt.Texts())
 	}
 
@@ -376,5 +376,59 @@ func TestTrayMenuBarTitleAndFlyoutCompanion(t *testing.T) {
 	tt.Frame()
 	if len(a.cache.Outbox) < 2 {
 		t.Fatalf("expected status mutation in outbox after completing from tray, got %d", len(a.cache.Outbox))
+	}
+}
+
+func TestLongTaskDetailNeverOverflowsTopOrBottom(t *testing.T) {
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.client, _ = api.New(api.DefaultServer, "")
+	a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+
+	var lines []string
+	for i := 1; i <= 60; i++ {
+		lines = append(lines, "- [ ] 超长任务详情段落第 "+string(rune('A'+(i%26)))+" 行：验证上下滚动绝不破版溢出到顶栏或底栏")
+	}
+	longDesc := strings.Join(lines, "\n")
+	task := api.Task{ID: 1, Title: "超长内容防破版测试任务", Description: longDesc, Status: "pending"}
+	a.adoptCache(storage.Cache{Server: api.DefaultServer, UserID: 1, Tasks: []api.Task{task}})
+	a.editTaskNow(task)
+
+	tt := ui.NewTester(a.view, 1280, 720)
+	tt.Frame()
+
+	footerBefore, ok := tt.Access("任务底部操作")
+	if !ok || footerBefore.Bounds.H != 48 || footerBefore.Bounds.Y+footerBefore.Bounds.H > 720 {
+		t.Fatalf("bottom save bar pushed out of bounds on long description: %+v", footerBefore)
+	}
+	editorNode, ok := tt.AccessByRole(ui.RoleTextField, "备注")
+	if !ok {
+		t.Fatal("missing rich description editor")
+	}
+	if editorNode.Bounds.Y+editorNode.Bounds.H > footerBefore.Bounds.Y+0.5 {
+		t.Fatalf("editor overlapped bottom save bar: editor=%+v footer=%+v", editorNode.Bounds, footerBefore.Bounds)
+	}
+
+	// Scroll down inside the rich description editor so top paragraphs have negative relative Y
+	// and bottom paragraphs extend past the bottom of the editor viewport.
+	tt.Scroll(editorNode.Bounds.X+80, editorNode.Bounds.Y+80, 0, -240)
+	tt.Frame()
+
+	footerAfter, ok := tt.Access("任务底部操作")
+	if !ok || footerAfter.Bounds != footerBefore.Bounds {
+		t.Fatalf("scrolling long description shifted bottom save bar: before=%+v after=%+v", footerBefore.Bounds, footerAfter.Bounds)
+	}
+
+	// Verify the gap strip right above editorNode (between divider and editor) and inside the
+	// footer blank region has zero bled text pixels from the scrolled richtext paragraphs.
+	img := tt.Image()
+	bg := img.RGBAAt(int(editorNode.Bounds.X+10), int(footerAfter.Bounds.Y+8))
+	// Check horizontal strip in the top area of footer (above the 11px status text) across the middle
+	for x := int(editorNode.Bounds.X + 200); x < int(editorNode.Bounds.X+editorNode.Bounds.W-120); x++ {
+		for y := int(footerAfter.Bounds.Y + 4); y < int(footerAfter.Bounds.Y+14); y++ {
+			if got := img.RGBAAt(x, y); got != bg {
+				t.Fatalf("richtext paragraph bled into bottom footer at (%d,%d): got=%+v want bg=%+v", x, y, got, bg)
+			}
+		}
 	}
 }

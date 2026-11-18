@@ -189,7 +189,7 @@ func TestUIRedesignEndToEndAndVisuals(t *testing.T) {
 	savePreviewPNG(t, dir, "11-calendar-drawer-light.png", tt)
 
 	// macOS Menu Bar Flyout Task Companion preview
-	trayTester := ui.NewTester(a.trayFlyoutView, 360, 460)
+	trayTester := ui.NewTester(a.trayFlyoutView, 328, 420)
 	trayTester.Frame()
 	savePreviewPNG(t, dir, "12-tray-flyout-light.png", trayTester)
 }
