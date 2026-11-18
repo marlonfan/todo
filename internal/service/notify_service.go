@@ -449,65 +449,6 @@ func (s *NotifyService) processNotification(ctx context.Context, n models.Notifi
 	})
 }
 
-func (s *NotifyService) resolveNextPendingRecurringReminderStart(task *models.Task, from time.Time) (*time.Time, error) {
-	if task == nil || task.RecurrenceRule == nil {
-		return nil, nil
-	}
-
-	fromUTC := from.UTC()
-	if fromUTC.IsZero() {
-		fromUTC = time.Now().UTC()
-	}
-	fromDate := fromUTC.Truncate(24 * time.Hour)
-	searchStart := fromDate.AddDate(-3, 0, 0)
-	horizon := fromDate.AddDate(3, 0, 0)
-	latestOccurrenceDates, err := s.taskRepo.ListLatestTaskOccurrenceDates(task.UserID, []int64{task.ID})
-	if err != nil {
-		return nil, err
-	}
-	if latestDate, ok := latestOccurrenceDates[task.ID]; ok {
-		horizon = extendRecurringSearchHorizon(horizon, latestDate, task.RecurrenceRule)
-	}
-	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(task.UserID, []int64{task.ID}, searchStart, horizon)
-	if err != nil {
-		return nil, err
-	}
-	occurrenceByDate := make(map[string]*models.TaskOccurrence, len(rows))
-	for i := range rows {
-		row := &rows[i]
-		occurrenceByDate[row.OccurrenceDate.UTC().Format("2006-01-02")] = row
-	}
-
-	tz := s.resolveUserTimezone(task.UserID, nil)
-	loc := loadLocationOrUTC(tz)
-	occurrences := buildTaskOccurrenceStarts(task, searchStart, horizon, tz)
-	var earliestPending *time.Time
-	for _, occurrenceStart := range occurrences {
-		localOcc := occurrenceStart.In(loc)
-		dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
-		override := occurrenceByDate[dateOnly.Format("2006-01-02")]
-
-		status := task.Status
-		if override != nil && override.Status != "" {
-			status = override.Status
-		}
-		if status != models.TaskStatusPending {
-			continue
-		}
-
-		startTime := occurrenceStart.UTC()
-		if override != nil && override.StartTime != nil {
-			startTime = override.StartTime.UTC()
-		}
-		if earliestPending == nil || startTime.Before(*earliestPending) {
-			next := startTime
-			earliestPending = &next
-		}
-	}
-
-	return earliestPending, nil
-}
-
 func (s *NotifyService) resolveUserTimezone(userID int64, taskUser *models.User) string {
 	if taskUser != nil && taskUser.Timezone != "" {
 		return taskUser.Timezone
@@ -626,12 +567,15 @@ func (s *NotifyService) reconcileUserRemindersInTransaction(userID int64) error 
 			continue
 		}
 		var reminderStart *time.Time
+		reminderAllDay := task.AllDay
 		if task.RecurrenceRule != nil {
-			nextStart, err := s.resolveNextPendingRecurringReminderStart(&task, now)
+			instance, err := nextPendingReminderInstance(s.taskRepo, &task, now, user.Timezone, user.DefaultMorningTime)
 			if err != nil {
 				return err
 			}
-			reminderStart = nextStart
+			if instance != nil {
+				reminderStart, reminderAllDay = &instance.StartTime, instance.AllDay
+			}
 		} else if task.StartTime != nil {
 			start := task.StartTime.UTC()
 			reminderStart = &start
@@ -641,7 +585,7 @@ func (s *NotifyService) reconcileUserRemindersInTransaction(userID int64) error 
 		}
 		resolvedStart := resolveReminderStartForTask(
 			reminderStart.UTC(),
-			task.AllDay,
+			reminderAllDay,
 			user.Timezone,
 			user.DefaultMorningTime,
 		)

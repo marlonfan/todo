@@ -36,15 +36,17 @@ const (
 
 // RecurrenceRule represents recurring task rule
 type RecurrenceRule struct {
-	Freq             string   `json:"freq,omitempty"`                // daily, weekly, monthly, yearly, lunar_yearly
-	Interval         int      `json:"interval,omitempty"`            // every N days/weeks/months/years
-	ByDay            []string `json:"byday,omitempty"`               // MO, TU, WE, TH, FR, SA, SU
-	ByMonth          []int    `json:"bymonth,omitempty"`             // 1-12
-	ByDate           []int    `json:"bydate,omitempty"`              // day of month
-	Count            int      `json:"count,omitempty"`               // max occurrences
-	LunarMonth       int      `json:"lunar_month,omitempty"`         // 1-12
-	LunarDay         int      `json:"lunar_day,omitempty"`           // 1-30
-	LunarIsLeapMonth bool     `json:"lunar_is_leap_month,omitempty"` // true => leap month when available
+	Freq             string           `json:"freq,omitempty"`                // daily, weekly, monthly, yearly, lunar_yearly
+	Timezone         string           `json:"timezone,omitempty"`            // IANA zone used by a calendar series; empty means account timezone
+	ExRules          []RecurrenceRule `json:"exrules,omitempty"`             // unbounded RFC 5545 exclusion rules
+	Interval         int              `json:"interval,omitempty"`            // every N days/weeks/months/years
+	ByDay            []string         `json:"byday,omitempty"`               // MO, TU, WE, TH, FR, SA, SU
+	ByMonth          []int            `json:"bymonth,omitempty"`             // 1-12
+	ByDate           []int            `json:"bydate,omitempty"`              // day of month
+	Count            int              `json:"count,omitempty"`               // max occurrences
+	LunarMonth       int              `json:"lunar_month,omitempty"`         // 1-12
+	LunarDay         int              `json:"lunar_day,omitempty"`           // 1-30
+	LunarIsLeapMonth bool             `json:"lunar_is_leap_month,omitempty"` // true => leap month when available
 }
 
 // Value implements driver.Valuer
@@ -129,20 +131,22 @@ type TaskOccurrenceOverride struct {
 // TaskOccurrence stores persisted recurring-instance overrides/history.
 // One row represents one expanded occurrence date for a recurring series.
 type TaskOccurrence struct {
-	ID             int64      `json:"id" gorm:"primaryKey;autoIncrement;index:idx_task_occurrences_user_status_date_id,priority:4"`
-	UserID         int64      `json:"user_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index:idx_task_occurrence_status_date,priority:1;index:idx_task_occurrences_user_status_date_id,priority:1"`
-	TaskID         int64      `json:"task_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:2"`
-	OccurrenceDate time.Time  `json:"occurrence_date" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:4;index:idx_task_occurrences_user_status_date_id,priority:3"`
-	InstanceID     string     `json:"instance_id" gorm:"size:64;not null;default:'';index"`
-	Status         TaskStatus `json:"status" gorm:"size:20;not null;default:'pending';index:idx_task_occurrence_status_date,priority:3;index:idx_task_occurrences_user_status_date_id,priority:2"`
-	CompletedAt    *time.Time `json:"completed_at"`
-	DeletedAt      *time.Time `json:"deleted_at"`
-	Description    string     `json:"description" gorm:"type:text;not null;default:''"`
-	StartTime      *time.Time `json:"start_time"`
-	EndTime        *time.Time `json:"end_time"`
-	AllDay         bool       `json:"all_day" gorm:"default:false"`
-	CreatedAt      time.Time  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt      time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+	ScheduleOverride bool       `json:"schedule_override" gorm:"not null;default:false"`
+	ID               int64      `json:"id" gorm:"primaryKey;autoIncrement;index:idx_task_occurrences_user_status_date_id,priority:4"`
+	UserID           int64      `json:"user_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index:idx_task_occurrence_status_date,priority:1;index:idx_task_occurrences_user_status_date_id,priority:1"`
+	TaskID           int64      `json:"task_id" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:2"`
+	OccurrenceDate   time.Time  `json:"occurrence_date" gorm:"not null;uniqueIndex:idx_task_occurrence_unique;index;index:idx_task_occurrence_status_date,priority:4;index:idx_task_occurrences_user_status_date_id,priority:3"`
+	InstanceID       string     `json:"instance_id" gorm:"size:64;not null;default:'';index"`
+	Title            string     `json:"title" gorm:"size:200;not null;default:''"`
+	Status           TaskStatus `json:"status" gorm:"size:20;not null;default:'pending';index:idx_task_occurrence_status_date,priority:3;index:idx_task_occurrences_user_status_date_id,priority:2"`
+	CompletedAt      *time.Time `json:"completed_at"`
+	DeletedAt        *time.Time `json:"deleted_at"`
+	Description      string     `json:"description" gorm:"type:text;not null;default:''"`
+	StartTime        *time.Time `json:"start_time"`
+	EndTime          *time.Time `json:"end_time"`
+	AllDay           bool       `json:"all_day" gorm:"default:false"`
+	CreatedAt        time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt        time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type TaskDeleteLog struct {
@@ -223,6 +227,17 @@ type UpdateTaskScheduleRequest struct {
 	StartTime *time.Time `json:"start_time"`
 	EndTime   *time.Time `json:"end_time"`
 	AllDay    bool       `json:"all_day"`
+}
+
+// A separate endpoint prevents older servers from treating an instance edit as
+// a series schedule update. Times form a full replacement; nil end clears it.
+type UpdateTaskOccurrenceScheduleRequest struct {
+	InstanceID     string     `json:"instance_id"`
+	OccurrenceDate string     `json:"occurrence_date"`
+	StartTime      *time.Time `json:"start_time"`
+	EndTime        *time.Time `json:"end_time"`
+	AllDay         bool       `json:"all_day"`
+	Reset          bool       `json:"reset_schedule"`
 }
 
 type TaskResponse struct {

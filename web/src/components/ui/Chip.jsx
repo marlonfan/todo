@@ -11,7 +11,7 @@ const chipVariants = cva(
       variant: {
         default: 'bg-muted text-muted-foreground',
         primary: 'bg-accent text-primary',
-        success: 'bg-[hsl(var(--success)/0.08)] text-[hsl(var(--success-foreground))]',
+        success: 'bg-[hsl(var(--success)/0.08)] text-[hsl(var(--success-ink))]',
         warning: 'bg-[hsl(var(--warning)/0.08)] text-[hsl(var(--warning-foreground))]',
         destructive: 'bg-[hsl(var(--accent-danger)/0.08)] text-[hsl(var(--accent-danger))]',
         outline: 'border border-border text-muted-foreground',

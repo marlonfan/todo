@@ -323,17 +323,17 @@ function NotificationSettings() {
   return (
     <div className="space-y-6">
       {error && (
-        <div className="bg-[hsl(var(--accent-danger-soft))] border border-[hsl(var(--accent-danger)/0.25)] text-[hsl(var(--accent-danger-foreground))] px-4 py-3 rounded">
+        <div className="bg-[hsl(var(--accent-danger-soft))] border border-[hsl(var(--accent-danger)/0.25)] text-[hsl(var(--accent-danger-foreground))] px-4 py-3 rounded-lg">
           {error}
         </div>
       )}
       {success && (
-        <div className="bg-[hsl(var(--success)/0.12)] border border-[hsl(var(--success)/0.3)] text-[hsl(var(--success-foreground))] px-4 py-3 rounded">
+        <div className="bg-[hsl(var(--success)/0.12)] border border-[hsl(var(--success)/0.3)] text-[hsl(var(--success-ink))] px-4 py-3 rounded-lg">
           {success}
         </div>
       )}
 
-      <div className="bg-card p-4 border border-border">
+      <div className="md-card p-4">
         <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex-1">
             <h3 className="text-lg font-medium mb-2">{t('notification.local.title')}</h3>
@@ -390,7 +390,7 @@ function NotificationSettings() {
       </div>
 
       {/* Add New Setting */}
-      <div className="bg-card p-4 border border-border">
+      <div className="md-card p-4">
         <h3 className="text-lg font-medium mb-4">{t('notification.addChannel')}</h3>
         
         <div className="space-y-4">
@@ -442,7 +442,7 @@ function NotificationSettings() {
       </div>
 
       {/* Existing Settings */}
-      <div className="bg-card border border-border">
+      <div className="md-card overflow-hidden">
         <div className="p-4 border-b border-border">
           <h3 className="font-medium">{t('settings.notifications')}</h3>
         </div>
@@ -502,7 +502,7 @@ function NotificationSettings() {
       </div>
 
       {/* Rebuild Reminders */}
-      <div className="bg-card border border-border p-4">
+      <div className="md-card p-4">
         <h3 className="text-lg font-medium mb-2">{t('notification.rebuildReminders')}</h3>
         <p className="text-sm text-muted-foreground mb-4">{t('notification.rebuildRemindersHint')}</p>
         <button

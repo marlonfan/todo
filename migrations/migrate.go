@@ -13,6 +13,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Prompt{},
 		&models.PromptAskHistory{},
 		&models.Category{},
+		&models.CategoryMutationReceipt{},
 		&models.Task{},
 		&models.TaskDeleteLog{},
 		&models.TaskChangeLog{},

@@ -54,6 +54,8 @@ build/
 test-results/
 web/playwright-report/
 web/test-results/
+.cindy-worktrees/
+artifacts/
 
 # Config (keep example)
 config.yaml

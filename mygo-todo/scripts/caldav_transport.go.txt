@@ -1,0 +1,42 @@
+//go:build native_caldav_fixture
+
+// Injected only by caldav_smoke.py's temporary Go overlay, never into a normal
+// backend build. Production SSRF policy stays unchanged. Requests to the single
+// synthetic test hostname are routed to the disposable local DAV server.
+package service
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"time"
+
+	"todo-app/internal/repository"
+)
+
+type nativeFixtureTransport struct{ target *url.URL }
+
+func (t nativeFixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Hostname() != "calendar.example.test" {
+		return nil, fmt.Errorf("fixture rejects unexpected calendar host")
+	}
+	clone := r.Clone(r.Context())
+	u := *r.URL
+	u.Scheme, u.Host = t.target.Scheme, t.target.Host
+	clone.URL, clone.Host = &u, t.target.Host
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	return transport.RoundTrip(clone)
+}
+
+func NewNativeFixtureCaldavService(repo *repository.CaldavRepository, secret string) *CaldavService {
+	target, err := url.Parse(os.Getenv("TODO_NATIVE_DAV_FIXTURE_URL"))
+	if err != nil || target == nil || target.Scheme != "http" || target.Hostname() != "127.0.0.1" || target.Port() == "" {
+		panic("fixture requires an explicit local DAV server")
+	}
+	s := NewCaldavService(repo, secret)
+	s.httpClient = &http.Client{Timeout: 10 * time.Second, Transport: nativeFixtureTransport{target}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return s
+}

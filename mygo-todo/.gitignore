@@ -1,0 +1,9 @@
+/build/
+/artifacts/
+/mygo.ts
+/mygo-todo
+*.key
+*.db
+*.db-shm
+*.db-wal
+__pycache__/

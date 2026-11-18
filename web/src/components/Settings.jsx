@@ -1023,7 +1023,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
         </div>
       )}
       {modal ? (
-        <aside className="hidden w-56 shrink-0 border-r border-border bg-muted/80 px-3 py-5 md:block">
+        <aside className="hidden w-56 shrink-0 border-r border-border bg-[hsl(var(--sidebar))] px-3 py-5 md:block">
           <div className="mb-4 px-2 text-base font-semibold text-foreground">{t('settings.title')}</div>
           <nav className="space-y-1">
             {settingsNavItems.map((item) => {
@@ -1048,7 +1048,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           </nav>
         </aside>
       ) : (
-        <div className="hidden border-b border-accent bg-card/90 p-4 md:block">
+        <div className="hidden border-b border-border bg-card p-4 md:block">
           <h2 className="text-xl font-semibold">{t('settings.title')}</h2>
         </div>
       )}
@@ -1138,7 +1138,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
           {activeTab === 'account' && (
             <div className="space-y-4 p-1 md:p-0">
-              <div className="rounded-xl bg-muted p-5">
+              <div className="md-card p-5">
                 <div className="flex flex-col items-center text-center">
                   <div className="relative">
                     <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full bg-primary text-2xl font-semibold text-white shadow-sm">
@@ -1177,12 +1177,12 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
               </div>
 
-              <div className="rounded-xl bg-muted p-4">
+              <div className="md-card p-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                   <Shield className="h-4 w-4 text-muted-foreground" />
                   {t('settings.accountInfo')}
                 </div>
-                <div className="mt-3 divide-y divide-border rounded-xl bg-card">
+                <div className="mt-3 divide-y divide-border rounded-lg bg-surface-muted">
                   <div className="flex items-center justify-between px-4 py-3 text-sm">
                     <span className="text-muted-foreground">{t('auth.username')}</span>
                     <span className="font-medium text-foreground">{profileUser.username || cachedUser.username}</span>
@@ -1194,7 +1194,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
               </div>
 
-              <form onSubmit={handlePasswordSubmit} className="settings-password-card">
+              <form onSubmit={handlePasswordSubmit} className="md-card settings-password-card">
                 <div className="settings-password-card-header">
                   <div className="settings-password-icon">
                     <KeyRound className="h-4 w-4" />
@@ -1269,13 +1269,13 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
           {/* General Settings */}
           {activeTab === 'general' && (
-            <div className="p-6">
+            <div>
               <h3 className="text-lg font-medium mb-4">{t('settings.title')}</h3>
 
               <div className="space-y-6">
                 <PWAInstallCard />
 
-                <div className="rounded-xl border border-border bg-card p-4">
+                <div className="md-card p-4">
                   <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 gap-3">
                       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
@@ -1315,7 +1315,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
 
                 {isDesktopUpdateRuntimeAvailable() && (
-                  <div className="rounded-xl border border-border bg-card p-4">
+                  <div className="md-card p-4">
                     <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 gap-3">
                         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
@@ -1339,7 +1339,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                             </p>
                           )}
                           {desktopUpdateStatus.downloaded && (
-                            <p className="mt-1 text-xs font-medium text-[hsl(var(--success-foreground))]">
+                            <p className="mt-1 text-xs font-medium text-[hsl(var(--success-ink))]">
                               {t('settings.desktopUpdateReady')}
                             </p>
                           )}
@@ -1488,7 +1488,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   </Select>
                 </div>
 
-                <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                <div className="md-card p-4">
                   <p className="mb-3 text-sm font-medium text-foreground">{t('settings.naturalTimeDefaults')}</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
@@ -1556,7 +1556,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                   </label>
                 </div>
 
-                <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                <div className="md-card p-4">
                   <p className="mb-3 text-sm font-medium text-foreground">{t('settings.mobileNavigation')}</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
@@ -1616,7 +1616,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 <p className="mt-1 text-sm text-muted-foreground">{t('settings.aiSettingsHint')}</p>
               </div>
 
-              <div className="settings-ai-card">
+              <div className="md-card settings-ai-card">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <label className="form-label">{t('settings.aiProtocol')}</label>
@@ -1673,7 +1673,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
               </div>
 
-              <div className="settings-ai-card">
+              <div className="md-card settings-ai-card">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <h4 className="text-sm font-semibold text-foreground">{t('settings.aiPromptTitle')}</h4>
@@ -1695,7 +1695,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 />
               </div>
 
-              <div className="settings-ai-card">
+              <div className="md-card settings-ai-card">
                 <h4 className="text-sm font-semibold text-foreground">{t('settings.aiUserProfileTitle')}</h4>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('settings.aiUserProfileHint')}</p>
                 <textarea
@@ -1739,13 +1739,13 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
 
           {/* Sync Settings */}
           {activeTab === 'sync' && (
-            <div className="space-y-6 p-6">
+            <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-medium text-foreground">{t('settings.syncSettings')}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">{t('settings.syncSettingsHint')}</p>
               </div>
 
-              <div className="rounded-xl border border-accent bg-accent/40 p-4">
+              <div className="md-card p-4">
                 <p className="text-sm text-foreground">
                   {t('settings.syncPendingCount')}: <span className="font-medium">{syncStatus.pendingCount}</span>
                 </p>
@@ -1759,7 +1759,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 )}
               </div>
 
-              <div className="rounded-xl border border-accent bg-accent/40 p-4">
+              <div className="md-card p-4">
                 <p className="text-sm font-medium text-foreground">Auto sync interval</p>
                 <p className="mt-1 text-sm text-muted-foreground">Longer interval avoids overlapping slow calendar/task pulls.</p>
                 <Select
@@ -1776,7 +1776,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </Select>
               </div>
 
-              <div className="rounded-md border border-accent bg-accent p-4">
+              <div className="md-card p-4">
                 <h4 className="text-sm font-semibold text-primary">{t('settings.syncNowTitle')}</h4>
                 <p className="mt-1 text-sm text-primary">{t('settings.syncNowHint')}</p>
                 <button
@@ -1806,7 +1806,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
           )}
 
           {activeTab === 'caldav' && (
-            <div className="space-y-4 p-6">
+            <div className="space-y-4">
               <div>
                 <h3 className="text-lg font-medium text-foreground">{t('settings.caldav.title')}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">{t('settings.caldav.hint')}</p>
@@ -1817,7 +1817,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 ) : null}
               </div>
 
-              <div className="rounded-xl border border-accent bg-accent/40 p-3">
+              <div className="md-card p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium text-foreground">{t('settings.caldav.subscriptionTitle')}</p>
@@ -1914,7 +1914,7 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
               </div>
 
               {caldavCalendars.length > 0 && (
-                <div className="rounded-xl border border-accent bg-accent/40 p-3">
+                <div className="md-card p-4">
                   <p className="mb-2 text-sm font-medium text-foreground">{t('settings.caldav.selectCalendars')}</p>
                   <div className="space-y-2">
                     {caldavCalendars.map((item, idx) => (
@@ -1936,14 +1936,14 @@ function Settings({ modal = false, onClose, user: currentUser, setUser }) {
                 </div>
               )}
 
-              <div className="rounded-xl border border-accent bg-accent/40 p-3">
+              <div className="md-card p-4">
                 <p className="mb-2 text-sm font-medium text-foreground">{t('settings.caldav.configuredSources')}</p>
                 {caldavSources.length === 0 ? (
                   <p className="text-sm text-muted-foreground">{t('settings.caldav.noSource')}</p>
                 ) : (
                   <div className="space-y-2">
                     {caldavSources.map((source) => (
-                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent bg-card px-3 py-2">
+                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
                         <div>
                           <div className="text-sm font-medium text-foreground">{source.name}</div>
                           <div className="text-xs text-muted-foreground">{source.base_url}</div>

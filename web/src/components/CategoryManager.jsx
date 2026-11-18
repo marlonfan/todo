@@ -119,12 +119,12 @@ function CategoryManager() {
   };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="hidden border-b border-accent bg-card/90 p-4 md:block">
+    <div className="md-page flex flex-col">
+      <div className="hidden border-b border-border bg-card p-4 md:block">
         <h2 className="text-xl font-semibold">{t('nav.categories')}</h2>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-5">
         <div className="max-w-2xl">
           {error && (
             <div className="mb-4 rounded-xl border border-[hsl(var(--accent-danger)/0.2)] bg-[hsl(var(--accent-danger)/0.08)] px-4 py-3 text-[hsl(var(--accent-danger))]">
@@ -133,12 +133,12 @@ function CategoryManager() {
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit(onSubmit)} className="md-card mb-6 p-5">
+          <form onSubmit={handleSubmit(onSubmit)} className="md-card mb-5 p-4">
             <h3 className="text-lg font-medium mb-4">
               {editingCategory ? t('category.editCategory') : t('category.newCategory')}
             </h3>
-            <div className="flex gap-4">
-              <div className="flex-1">
+            <div className="flex flex-wrap items-start gap-3">
+              <div className="w-full min-w-0 sm:w-auto sm:flex-1">
                 <input
                   {...register('name', { required: true })}
                   type="text"
@@ -146,7 +146,7 @@ function CategoryManager() {
                   className="form-input"
                 />
               </div>
-              <div className="w-32">
+              <div className="w-28">
                 <Select
                   value={watch('emoji') || '📁'}
                   onChange={(e) => setValue('emoji', e.target.value)}
@@ -164,10 +164,10 @@ function CategoryManager() {
                   {...register('color')}
                   type="color"
                   defaultValue="#3788d8"
-                  className="h-10 w-12 cursor-pointer rounded-xl border border-accent bg-card"
+                  className="h-9 w-10 cursor-pointer rounded-md border border-input bg-surface-muted"
                 />
               </div>
-              <div className="flex gap-2">
+              <div className="flex shrink-0 flex-wrap gap-2">
                 {editingCategory && (
                   <button
                     type="button"
@@ -200,25 +200,25 @@ function CategoryManager() {
             ) : (
               <ul className="divide-y divide-border">
                 {categories.map((category) => (
-                  <li key={category.id} className="flex items-center justify-between p-4 transition-colors hover:bg-accent/60">
-                    <div className="flex items-center gap-3">
+                  <li key={category.id} className="flex items-center justify-between gap-3 p-4 transition-colors hover:bg-surface-muted">
+                    <div className="flex min-w-0 items-center gap-3">
                       <span className="text-xl leading-none">{category.emoji || '📁'}</span>
                       <span
-                        className="w-6 h-6 rounded-full"
+                        className="h-4 w-4 shrink-0 rounded-full"
                         style={{ backgroundColor: category.color }}
                       />
-                      <span className="font-medium">{category.name}</span>
+                      <span className="truncate font-medium">{category.name}</span>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex shrink-0 flex-wrap gap-2">
                       <button
                         onClick={() => handleEdit(category)}
-                        className="rounded-full px-3 py-1 text-sm text-primary transition-colors hover:bg-accent hover:text-primary"
+                        className="rounded-md px-2 py-1 text-sm text-primary transition-colors hover:bg-accent hover:text-primary"
                       >
                         {t('common.edit')}
                       </button>
                       <button
                         onClick={() => handleDelete(category.id)}
-                        className="rounded-full px-3 py-1 text-sm text-[hsl(var(--accent-danger))] transition-colors hover:bg-[hsl(var(--accent-danger)/0.08)] hover:text-[hsl(var(--accent-danger))]"
+                        className="rounded-md px-2 py-1 text-sm text-[hsl(var(--accent-danger))] transition-colors hover:bg-[hsl(var(--accent-danger)/0.08)] hover:text-[hsl(var(--accent-danger))]"
                       >
                         {t('common.delete')}
                       </button>

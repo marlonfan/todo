@@ -52,7 +52,7 @@ function SearchDialog({ open, initialQuery, onClose }) {
     <div className="desktop-search-dialog-overlay fixed inset-0 z-[80] flex items-start justify-center bg-black/35 p-3 pt-14 md:p-4 md:pt-20" onClick={requestClose}>
       <div
         ref={dialogRef}
-        className="w-full max-w-2xl rounded-lg border border-border bg-card shadow-xl"
+        className="w-full max-w-2xl rounded-[var(--radius-xl)] border border-border bg-card shadow-lg"
         role="dialog"
         aria-modal="true"
         aria-label={t('task.searchTasks')}

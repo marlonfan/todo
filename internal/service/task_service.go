@@ -38,6 +38,7 @@ type TaskActivityMeta struct {
 
 type recurringOccurrencePatch struct {
 	status      *models.TaskStatus
+	title       *string
 	description *string
 	completedAt *time.Time
 	deletedAt   *time.Time
@@ -464,11 +465,14 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 				if override.InstanceID != "" {
 					instance.InstanceID = override.InstanceID
 				}
+				if strings.TrimSpace(override.Title) != "" {
+					instance.Title = override.Title
+				}
 				if override.Description != "" {
 					instance.Description = override.Description
 				}
 				applyScheduleOverride := true
-				if override.StartTime != nil {
+				if override.StartTime != nil && !override.ScheduleOverride {
 					overrideLocalDate := override.StartTime.In(loc).Format("2006-01-02")
 					occurrenceLocalDate := dateOnly.Format("2006-01-02")
 					if overrideLocalDate != occurrenceLocalDate {
@@ -476,6 +480,9 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 					}
 				}
 				if applyScheduleOverride {
+					if override.ScheduleOverride {
+						instance.EndTime = cloneTimePointer(override.EndTime)
+					}
 					if override.StartTime != nil {
 						instance.StartTime = override.StartTime.UTC()
 					}
@@ -494,12 +501,30 @@ func (s *TaskService) ListNextPendingOccurrences(userID int64, from time.Time) (
 				}
 				continue
 			}
-			if instance.Status == models.TaskStatusPending && firstAfterFromPending == nil {
+			if instance.Status == models.TaskStatusPending && (firstAfterFromPending == nil || instance.StartTime.Before(firstAfterFromPending.StartTime)) {
 				candidate := instance
 				firstAfterFromPending = &candidate
 			}
 		}
 
+		// Moved instances can originate before the search window or beyond its
+		// horizon. Their persisted identity is independent of the new date.
+		for _, row := range rows {
+			if row.TaskID != task.ID || !row.ScheduleOverride || !validOccurrenceDate(task, row.OccurrenceDate, tz) {
+				continue
+			}
+			instance := taskInstanceFromOccurrenceRow(task, &row, tz)
+			if instance.Status != models.TaskStatusPending {
+				continue
+			}
+			if !instance.StartTime.After(fromCutoff) {
+				if earliestPending == nil || instance.StartTime.Before(earliestPending.StartTime) {
+					earliestPending = &instance
+				}
+			} else if firstAfterFromPending == nil || instance.StartTime.Before(firstAfterFromPending.StartTime) {
+				firstAfterFromPending = &instance
+			}
+		}
 		if earliestPending != nil && earliestPending.Status == models.TaskStatusPending {
 			instances = append(instances, *earliestPending)
 			continue
@@ -594,14 +619,17 @@ func (s *TaskService) updateInTransaction(
 	var completedAnchorTimestamp *time.Time
 	var occurrenceStatusValue *models.TaskStatus
 	var occurrenceDescriptionValue *string
+	var occurrenceTitleValue *string
 
 	// Update fields
 	if fieldMask["title"] {
 		trimmedTitle := strings.TrimSpace(req.Title)
-		if trimmedTitle == "" {
+		if trimmedTitle == "" && !(task.RecurrenceRule != nil && hasOccurrenceContext) {
 			return nil, errors.New("title cannot be empty")
 		}
-		if task.Title != trimmedTitle {
+		if task.RecurrenceRule != nil && hasOccurrenceContext {
+			occurrenceTitleValue = &trimmedTitle
+		} else if task.Title != trimmedTitle {
 			task.Title = trimmedTitle
 			baseChanged = true
 		}
@@ -765,7 +793,7 @@ func (s *TaskService) updateInTransaction(
 		}
 	}
 	occurrencePatchNeeded := task.RecurrenceRule != nil && hasOccurrenceContext &&
-		(occurrenceStatusValue != nil || occurrenceDescriptionValue != nil)
+		(occurrenceTitleValue != nil || occurrenceStatusValue != nil || occurrenceDescriptionValue != nil)
 	if occurrencePatchNeeded {
 		if occurrenceStatusValue != nil && s.shouldEnforceRecurringOccurrenceOrder(userID, task, occurrenceDateValue, *occurrenceStatusValue) {
 			if err := s.ensureRecurringOccurrenceIsNextPending(userID, task, occurrenceDateValue); err != nil {
@@ -774,6 +802,7 @@ func (s *TaskService) updateInTransaction(
 		}
 		if err := s.upsertRecurringOccurrence(task, occurrenceDateValue, recurringOccurrencePatch{
 			status:      occurrenceStatusValue,
+			title:       occurrenceTitleValue,
 			description: occurrenceDescriptionValue,
 		}); err != nil {
 			return nil, err
@@ -1122,14 +1151,21 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 		return nil
 	}
 
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	var reminderStart *time.Time
+	reminderAllDay := task.AllDay
 	if task.RecurrenceRule != nil {
-		nextStart, err := s.resolveNextPendingRecurringReminderStart(userID, task, now)
+		instance, err := nextPendingReminderInstance(s.taskRepo, task, now, user.Timezone, user.DefaultMorningTime)
 		if err != nil {
 			return err
 		}
-		reminderStart = nextStart
+		if instance != nil {
+			reminderStart, reminderAllDay = &instance.StartTime, instance.AllDay
+		}
 	} else if task.StartTime != nil {
 		start := task.StartTime.UTC()
 		reminderStart = &start
@@ -1138,10 +1174,6 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 		return nil
 	}
 
-	user, err := s.userRepo.GetByID(userID)
-	if err != nil {
-		return err
-	}
 	minutes, enabled := resolveTaskReminderMinutes(task, user)
 	if !enabled {
 		return nil
@@ -1150,7 +1182,7 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 
 	resolvedStart := resolveReminderStartForTask(
 		reminderStart.UTC(),
-		task.AllDay,
+		reminderAllDay,
 		user.Timezone,
 		user.DefaultMorningTime,
 	)
@@ -1193,66 +1225,6 @@ func (s *TaskService) syncTaskReminder(userID int64, task *models.Task) error {
 		Status:       models.NotifyStatusPending,
 	}
 	return s.notifyRepo.ReplaceActiveByTaskSource(notification)
-}
-
-func (s *TaskService) resolveNextPendingRecurringReminderStart(userID int64, task *models.Task, from time.Time) (*time.Time, error) {
-	if task == nil || task.RecurrenceRule == nil {
-		return nil, nil
-	}
-
-	fromUTC := from.UTC()
-	if fromUTC.IsZero() {
-		fromUTC = time.Now().UTC()
-	}
-	fromDate := fromUTC.Truncate(24 * time.Hour)
-	searchStart := fromDate.AddDate(-3, 0, 0)
-	horizon := fromDate.AddDate(3, 0, 0)
-	latestOccurrenceDates, err := s.taskRepo.ListLatestTaskOccurrenceDates(userID, []int64{task.ID})
-	if err != nil {
-		return nil, err
-	}
-	if latestDate, ok := latestOccurrenceDates[task.ID]; ok {
-		horizon = extendRecurringSearchHorizon(horizon, latestDate, task.RecurrenceRule)
-	}
-	rows, err := s.taskRepo.ListTaskOccurrencesForTasksInRange(userID, []int64{task.ID}, searchStart, horizon)
-	if err != nil {
-		return nil, err
-	}
-	occurrenceByDate := make(map[string]*models.TaskOccurrence, len(rows))
-	for i := range rows {
-		row := &rows[i]
-		occurrenceByDate[row.OccurrenceDate.UTC().Format("2006-01-02")] = row
-	}
-
-	tz := s.resolveUserTimezone(userID)
-	loc := loadLocationOrUTC(tz)
-	occurrences := buildTaskOccurrenceStarts(task, searchStart, horizon, tz)
-	var earliestPending *time.Time
-	for _, occurrenceStart := range occurrences {
-		localOcc := occurrenceStart.In(loc)
-		// Encode local calendar date as UTC 00:00 (occurrenceDate convention).
-		dateOnly := time.Date(localOcc.Year(), localOcc.Month(), localOcc.Day(), 0, 0, 0, 0, time.UTC)
-		override := occurrenceByDate[dateOnly.Format("2006-01-02")]
-
-		status := task.Status
-		if override != nil && override.Status != "" {
-			status = override.Status
-		}
-		if status != models.TaskStatusPending {
-			continue
-		}
-
-		startTime := occurrenceStart.UTC()
-		if override != nil && override.StartTime != nil {
-			startTime = override.StartTime.UTC()
-		}
-		if earliestPending == nil || startTime.Before(*earliestPending) {
-			next := startTime
-			earliestPending = &next
-		}
-	}
-
-	return earliestPending, nil
 }
 
 type taskActivitySnapshot struct {
@@ -1314,11 +1286,19 @@ func cloneRecurrenceRule(rule *models.RecurrenceRule) *models.RecurrenceRule {
 	}
 	cloned := &models.RecurrenceRule{
 		Freq:             rule.Freq,
+		Timezone:         rule.Timezone,
 		Interval:         rule.Interval,
 		Count:            rule.Count,
 		LunarMonth:       rule.LunarMonth,
 		LunarDay:         rule.LunarDay,
 		LunarIsLeapMonth: rule.LunarIsLeapMonth,
+	}
+	if len(rule.ExRules) > 0 {
+		cloned.ExRules = make([]models.RecurrenceRule, len(rule.ExRules))
+		for i := range rule.ExRules {
+			cloned.ExRules[i] = *cloneRecurrenceRule(&rule.ExRules[i])
+			cloned.ExRules[i].ExRules = nil
+		}
 	}
 	if len(rule.ByDay) > 0 {
 		cloned.ByDay = append([]string(nil), rule.ByDay...)
@@ -1480,6 +1460,26 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 	if err != nil {
 		return nil, err
 	}
+	// A moved occurrence can enter this range even when its series anchor or
+	// recurrence end is outside it. Fetch only those additional series.
+	known := make(map[int64]bool, len(tasks))
+	for _, task := range tasks {
+		known[task.ID] = true
+	}
+	var extraIDs []int64
+	for _, row := range occurrenceRows {
+		if row.ScheduleOverride && !known[row.TaskID] {
+			extraIDs = append(extraIDs, row.TaskID)
+			known[row.TaskID] = true
+		}
+	}
+	if len(extraIDs) > 0 {
+		extra, err := s.taskRepo.GetTasksByIDsAndUser(userID, extraIDs)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, extra...)
+	}
 	occurrenceByTaskDate := make(map[string]*models.TaskOccurrence, len(occurrenceRows))
 	for i := range occurrenceRows {
 		row := &occurrenceRows[i]
@@ -1528,8 +1528,14 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 
 			overrideKey := fmt.Sprintf("%d|%s", task.ID, dateOnly.Format("2006-01-02"))
 			if override := occurrenceByTaskDate[overrideKey]; override != nil {
+				if override.ScheduleOverride {
+					continue // appended once below, using the effective time range
+				}
 				if override.InstanceID != "" {
 					instance.InstanceID = override.InstanceID
+				}
+				if strings.TrimSpace(override.Title) != "" {
+					instance.Title = override.Title
 				}
 				if override.Status != "" {
 					instance.Status = override.Status
@@ -1546,6 +1552,15 @@ func (s *TaskService) ExpandRecurringTasks(userID int64, start, end time.Time) (
 			}
 
 			instances = append(instances, instance)
+		}
+		for _, row := range occurrenceRows {
+			if row.TaskID != task.ID || !row.ScheduleOverride || !validOccurrenceDate(&task, row.OccurrenceDate, tz) {
+				continue
+			}
+			instance := taskInstanceFromOccurrenceRow(&task, &row, tz)
+			if instance.StartTime.Before(end) && ((instance.EndTime != nil && instance.EndTime.After(start)) || (instance.EndTime == nil && !instance.StartTime.Before(start))) {
+				instances = append(instances, instance)
+			}
 		}
 	}
 
@@ -1574,6 +1589,7 @@ func (s *TaskService) upsertRecurringOccurrence(
 		TaskID:         task.ID,
 		OccurrenceDate: dateOnly,
 		InstanceID:     buildOccurrenceInstanceID(task.ID, dateOnly),
+		Title:          "",
 		Status:         task.Status,
 		CompletedAt:    cloneTimePointer(task.CompletedAt),
 		DeletedAt:      cloneTimePointer(task.DeletedAt),
@@ -1600,11 +1616,13 @@ func (s *TaskService) upsertRecurringOccurrence(
 	if occurrence.Status == models.TaskStatusCancelled && occurrence.DeletedAt == nil {
 		occurrence.DeletedAt = cloneTimePointer(task.DeletedAt)
 	}
-	occurrence.AllDay = task.AllDay
+	if !occurrence.ScheduleOverride {
+		occurrence.AllDay = task.AllDay
+	}
 	if occurrence.StartTime == nil && baseStart != nil {
 		occurrence.StartTime = cloneTimePointer(baseStart)
 	}
-	if occurrence.EndTime == nil && baseEnd != nil {
+	if occurrence.EndTime == nil && baseEnd != nil && !occurrence.ScheduleOverride {
 		occurrence.EndTime = cloneTimePointer(baseEnd)
 	}
 	if patch.status != nil {
@@ -1630,6 +1648,9 @@ func (s *TaskService) upsertRecurringOccurrence(
 	if patch.description != nil {
 		occurrence.Description = *patch.description
 	}
+	if patch.title != nil {
+		occurrence.Title = strings.TrimSpace(*patch.title)
+	}
 
 	if taskOccurrenceMatchesSeriesDefault(occurrence, task, baseStart, baseEnd) {
 		return s.taskRepo.DeleteTaskOccurrence(task.UserID, task.ID, dateOnly)
@@ -1646,10 +1667,16 @@ func taskOccurrenceMatchesSeriesDefault(
 	if occurrence == nil || task == nil {
 		return false
 	}
+	if occurrence.ScheduleOverride {
+		return false
+	}
 	if occurrence.Status != task.Status {
 		return false
 	}
 	if strings.TrimSpace(occurrence.Description) != "" {
+		return false
+	}
+	if strings.TrimSpace(occurrence.Title) != "" {
 		return false
 	}
 	if occurrence.CompletedAt != nil || occurrence.DeletedAt != nil {
@@ -1683,7 +1710,7 @@ func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence
 	if row.StartTime != nil {
 		start = cloneTimePointer(row.StartTime)
 	}
-	if row.EndTime != nil {
+	if row.EndTime != nil || row.ScheduleOverride {
 		end = cloneTimePointer(row.EndTime)
 	}
 	allDay = row.AllDay
@@ -1714,6 +1741,9 @@ func taskInstanceFromOccurrenceRow(task *models.Task, row *models.TaskOccurrence
 		CompletedAt:           cloneTimePointer(row.CompletedAt),
 		DeletedAt:             cloneTimePointer(row.DeletedAt),
 		Categories:            task.Categories,
+	}
+	if strings.TrimSpace(row.Title) != "" {
+		instance.Title = row.Title
 	}
 	if instance.Status == "" {
 		instance.Status = task.Status
@@ -1751,6 +1781,9 @@ func deriveOccurrenceRangeFromTask(task *models.Task, occurrenceDate time.Time, 
 	}
 
 	loc := loadLocationOrUTC(userTimezone)
+	if task.RecurrenceRule != nil && strings.TrimSpace(task.RecurrenceRule.Timezone) != "" {
+		loc = loadLocationOrUTC(task.RecurrenceRule.Timezone)
+	}
 	localAnchor := anchor.In(loc)
 	start := time.Date(
 		date.Year(),
@@ -1766,6 +1799,20 @@ func deriveOccurrenceRangeFromTask(task *models.Task, occurrenceDate time.Time, 
 	var duration time.Duration
 	hasDuration := false
 	if task.StartTime != nil && task.EndTime != nil {
+		if task.AllDay {
+			// All-day ranges are calendar dates. Measuring their UTC instants
+			// across a DST boundary would turn a two-day range into 47/49
+			// hours and make recurring instances end on the wrong local date.
+			anchorLocal := task.StartTime.In(loc)
+			endLocal := task.EndTime.In(loc)
+			anchorDate := time.Date(anchorLocal.Year(), anchorLocal.Month(), anchorLocal.Day(), 0, 0, 0, 0, time.UTC)
+			endDate := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), 0, 0, 0, 0, time.UTC)
+			days := int(endDate.Sub(anchorDate) / (24 * time.Hour))
+			if days > 0 {
+				end := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, days).UTC()
+				return &start, &end
+			}
+		}
 		duration = task.EndTime.UTC().Sub(task.StartTime.UTC())
 		hasDuration = duration > 0
 	} else if task.EndTime != nil && task.DueDate != nil {
@@ -1835,6 +1882,13 @@ func parseOccurrenceDate(instanceID, occurrenceDate string) (time.Time, bool, er
 }
 
 func buildRRuleString(rule *models.RecurrenceRule, dtStart *time.Time, until *time.Time) string {
+	return buildRRuleStringWithDateUntil(rule, dtStart, until, false)
+}
+
+// buildRRuleStringWithDateUntil keeps the recurrence engine's UTC UNTIL
+// representation while allowing calendar exports of all-day events to use
+// the RFC 5545 DATE form required when DTSTART is VALUE=DATE.
+func buildRRuleStringWithDateUntil(rule *models.RecurrenceRule, dtStart *time.Time, until *time.Time, dateUntil bool) string {
 	if dtStart == nil {
 		dtStart = &time.Time{}
 	}
@@ -1872,9 +1926,24 @@ func buildRRuleString(rule *models.RecurrenceRule, dtStart *time.Time, until *ti
 			rruleStr += ";BYMONTHDAY=" + strings.Join(monthDays, ",")
 		}
 	}
+	if len(rule.ByMonth) > 0 {
+		months := make([]string, 0, len(rule.ByMonth))
+		for _, month := range rule.ByMonth {
+			if month >= 1 && month <= 12 {
+				months = append(months, strconv.Itoa(month))
+			}
+		}
+		if len(months) > 0 {
+			rruleStr += ";BYMONTH=" + strings.Join(months, ",")
+		}
+	}
 
 	if until != nil {
-		rruleStr += fmt.Sprintf(";UNTIL=%s", until.UTC().Format("20060102T150405Z"))
+		if dateUntil {
+			rruleStr += fmt.Sprintf(";UNTIL=%s", until.UTC().Format("20060102"))
+		} else {
+			rruleStr += fmt.Sprintf(";UNTIL=%s", until.UTC().Format("20060102T150405Z"))
+		}
 	}
 
 	if rule.Count > 0 {

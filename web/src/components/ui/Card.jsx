@@ -1,11 +1,11 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
 
-// 卡片容器（阶段 2）：统一 .md-card / .prompt-card / .settings-*-card 等多套手写实现。
+// 与旧页面的 .md-card 共用表面、边框和圆角。
 const Card = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn('rounded-lg border border-border bg-card text-card-foreground shadow-sm', className)}
+    className={cn('md-card', className)}
     {...props}
   />
 ));

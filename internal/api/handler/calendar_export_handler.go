@@ -288,16 +288,22 @@ func (h *CalendarExportHandler) DAVPut(c *gin.Context) {
 		c.Status(http.StatusMethodNotAllowed)
 		return
 	}
-	if !h.checkPreconditions(c, reqCtx) {
-		return
-	}
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 4<<20))
 	if err != nil {
+		var sizeError *http.MaxBytesError
+		if errors.As(err, &sizeError) {
+			c.Status(http.StatusRequestEntityTooLarge)
+			return
+		}
 		c.String(http.StatusBadRequest, "failed to read calendar object")
 		return
 	}
-	object, created, err := h.exportService.UpsertObject(reqCtx.User.ID, reqCtx.ObjectName, body)
+	object, created, err := h.exportService.UpsertObjectConditional(reqCtx.User.ID, reqCtx.ObjectName, body, c.GetHeader("If-Match"), c.GetHeader("If-None-Match"))
 	if err != nil {
+		if errors.Is(err, service.ErrCalendarPrecondition) {
+			c.Status(http.StatusPreconditionFailed)
+			return
+		}
 		if isReadOnlyCalendarObjectError(err) {
 			c.Status(http.StatusForbidden)
 			return

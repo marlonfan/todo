@@ -299,6 +299,40 @@ func TestUpdateRecurringOccurrenceDescriptionKeepsSeriesStatus(t *testing.T) {
 	}
 }
 
+func TestUpdateRecurringOccurrenceTitleKeepsSeriesTitle(t *testing.T) {
+	svc, taskRepo, userID := newTestTaskService(t)
+	start := time.Date(2026, 3, 9, 9, 0, 0, 0, time.UTC)
+	task := &models.Task{
+		UserID: userID, Title: "系列标题", Status: models.TaskStatusPending, Priority: models.PriorityMedium,
+		StartTime: &start, Revision: 1, RecurrenceRule: &models.RecurrenceRule{Freq: "daily", Interval: 1},
+	}
+	if err := taskRepo.Create(task); err != nil {
+		t.Fatal(err)
+	}
+	revision := int64(1)
+	if _, err := svc.Update(userID, task.ID, &models.UpdateTaskRequest{Title: "本次标题", InstanceID: fmt.Sprintf("%d_20260310", task.ID), OccurrenceDate: "2026-03-10"}, map[string]bool{"title": true}, &revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	current, err := taskRepo.GetByID(task.ID)
+	if err != nil || current.Title != "系列标题" {
+		t.Fatal(current, err)
+	}
+	date, _, _ := parseOccurrenceDate("", "2026-03-10")
+	row, err := taskRepo.GetTaskOccurrence(userID, task.ID, date)
+	if err != nil || row.Title != "本次标题" {
+		t.Fatal(row, err)
+	}
+	instances, err := svc.ExpandRecurringTasks(userID, date, date.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, instance := range instances {
+		if instance.InstanceID == row.InstanceID && instance.Title != "本次标题" {
+			t.Fatalf("expanded title = %q", instance.Title)
+		}
+	}
+}
+
 func TestEnableRecurrenceSeedsFirstOccurrenceDescription(t *testing.T) {
 	svc, taskRepo, userID := newTestTaskService(t)
 

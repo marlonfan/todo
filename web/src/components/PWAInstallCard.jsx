@@ -37,7 +37,7 @@ function PWAInstallCard() {
 
   if (installed) {
     return (
-      <div className="rounded-md border border-[hsl(var(--success)/0.2)] bg-[hsl(var(--success)/0.08)] p-3 text-sm text-[hsl(var(--success-foreground))]">
+      <div className="rounded-md border border-[hsl(var(--success)/0.2)] bg-[hsl(var(--success)/0.08)] p-3 text-sm text-[hsl(var(--success-ink))]">
         {t('settings.pwaInstalled')}
       </div>
     );
@@ -46,7 +46,7 @@ function PWAInstallCard() {
   const ios = typeof window !== 'undefined' && isIOSDevice();
 
   return (
-    <div className="rounded-md border border-border bg-muted p-3">
+    <div className="md-card p-4">
       <p className="text-sm font-medium text-foreground-strong">{t('settings.pwaTitle')}</p>
       <p className="mt-1 text-xs text-muted-foreground">{t('settings.pwaHint')}</p>
       {deferredPrompt ? (

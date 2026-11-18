@@ -127,6 +127,7 @@ func (r *Router) Setup() *gin.Engine {
 			protected.DELETE("/tasks/:id", r.taskHandler.Delete)
 			protected.PATCH("/tasks/:id/status", r.taskHandler.UpdateStatus)
 			protected.PATCH("/tasks/:id/schedule", r.taskHandler.UpdateSchedule)
+			protected.PATCH("/tasks/:id/occurrences/schedule", r.taskHandler.UpdateOccurrenceSchedule)
 			protected.GET("/tasks/:id/instances", r.calendarHandler.GetInstances)
 			protected.GET("/tasks/:id/activities", r.taskHandler.ListActivities)
 			protected.GET("/tasks/:id/notifications", r.taskHandler.ListNotifications)
@@ -137,6 +138,7 @@ func (r *Router) Setup() *gin.Engine {
 			// Categories
 			protected.GET("/categories", r.categoryHandler.List)
 			protected.POST("/categories", r.categoryHandler.Create)
+			protected.POST("/categories/sync", r.categoryHandler.Sync)
 			protected.GET("/categories/:id", r.categoryHandler.Get)
 			protected.PUT("/categories/:id", r.categoryHandler.Update)
 			protected.DELETE("/categories/:id", r.categoryHandler.Delete)

@@ -181,9 +181,10 @@ export function buildRecurringProjectedEvents(task, options) {
   const rule = parseRecurrenceRule(task?.recurrence_rule || task?.recurrenceRule);
   if (!rule) return [];
 
-  const dtStart = toFakeUTCDate(rawStart, timezone);
-  const rangeStartDate = toFakeUTCDate(rangeStart, timezone);
-  const rangeEndDate = toFakeUTCDate(rangeEnd, timezone);
+  const effectiveTimezone = String(rule.timezone || '').trim() || timezone;
+  const dtStart = toFakeUTCDate(rawStart, effectiveTimezone);
+  const rangeStartDate = toFakeUTCDate(rangeStart, effectiveTimezone);
+  const rangeEndDate = toFakeUTCDate(rangeEnd, effectiveTimezone);
   if (!dtStart || !rangeStartDate || !rangeEndDate) return [];
 
   const freqKey = String(rule.freq || '').trim().toLowerCase();
@@ -232,7 +233,14 @@ export function buildRecurringProjectedEvents(task, options) {
 
   const byDay = normalizeByDayList(rule.byday || rule.byDay);
   const byWeekday = byDay
-    .map((day) => RECURRENCE_WEEKDAY_MAP[day])
+    .map((token) => {
+      if (RECURRENCE_WEEKDAY_MAP[token]) return RECURRENCE_WEEKDAY_MAP[token];
+      const match = String(token || '').match(/^([+-]?[1-9])(MO|TU|WE|TH|FR|SA|SU)$/);
+      if (!match) return null;
+      const ord = Number.parseInt(match[1], 10);
+      const base = RECURRENCE_WEEKDAY_MAP[match[2]];
+      return base && typeof base.nth === 'function' ? base.nth(ord) : base;
+    })
     .filter(Boolean);
   if (byWeekday.length > 0) {
     rruleOptions.byweekday = byWeekday;
@@ -258,7 +266,7 @@ export function buildRecurringProjectedEvents(task, options) {
   }
 
   const untilCandidate = task?.recurrence_end_date || task?.recurrenceEndDate || rule?.until;
-  const until = toFakeUTCDate(untilCandidate, timezone);
+  const until = toFakeUTCDate(untilCandidate, effectiveTimezone);
   if (until) {
     rruleOptions.until = until;
   }
@@ -282,13 +290,13 @@ export function buildRecurringProjectedEvents(task, options) {
   const seen = new Set();
   const projected = [];
   occurrences.forEach((occurrenceDate) => {
-    const startISO = fromFakeUTCToISO(occurrenceDate, timezone) || occurrenceDate.toISOString();
-    const dayToken = dayjs(startISO).tz(timezone).format('YYYYMMDD');
+    const startISO = fromFakeUTCToISO(occurrenceDate, effectiveTimezone) || occurrenceDate.toISOString();
+    const dayToken = dayjs(startISO).tz(effectiveTimezone).format('YYYYMMDD');
     const instanceId = `${task.id}_${dayToken}`;
     if (seen.has(instanceId)) return;
     seen.add(instanceId);
     const eventEndISO = (Number.isFinite(durationMs) && durationMs > 0)
-      ? (fromFakeUTCToISO(new Date(occurrenceDate.getTime() + durationMs), timezone) || new Date(occurrenceDate.getTime() + durationMs).toISOString())
+      ? (fromFakeUTCToISO(new Date(occurrenceDate.getTime() + durationMs), effectiveTimezone) || new Date(occurrenceDate.getTime() + durationMs).toISOString())
       : undefined;
     projected.push(buildProjectedEvent(task, {
       id: instanceId,
@@ -297,7 +305,7 @@ export function buildRecurringProjectedEvents(task, options) {
       allDay: !!(task.all_day || task.allDay),
       isRecurring: true,
       instanceId,
-      timezone,
+      timezone: effectiveTimezone,
     }));
   });
 

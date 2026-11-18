@@ -68,6 +68,24 @@ func normalizeRecurrenceRule(rule *models.RecurrenceRule) *models.RecurrenceRule
 		freq = recurrenceFreqLunarYearly
 	}
 	normalized.Freq = freq
+	normalized.Timezone = strings.TrimSpace(normalized.Timezone)
+	if normalized.Timezone != "" {
+		if _, err := time.LoadLocation(normalized.Timezone); err != nil {
+			normalized.Timezone = ""
+		}
+	}
+	if len(normalized.ExRules) > 0 {
+		filtered := make([]models.RecurrenceRule, 0, len(normalized.ExRules))
+		for _, exclusion := range normalized.ExRules {
+			exclusion.ExRules = nil
+			normalizedExclusion := normalizeRecurrenceRule(&exclusion)
+			if normalizedExclusion == nil || isLunarYearlyRule(normalizedExclusion) {
+				continue
+			}
+			filtered = append(filtered, *normalizedExclusion)
+		}
+		normalized.ExRules = filtered
+	}
 	if normalized.Interval <= 0 {
 		normalized.Interval = 1
 	}
@@ -191,7 +209,40 @@ func buildTaskOccurrenceStarts(task *models.Task, rangeStart, rangeEnd time.Time
 	if isLunarYearlyRule(rule) {
 		return buildLunarYearlyOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC)
 	}
-	return buildGregorianOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC, userTimezone)
+	seriesTimezone := userTimezone
+	if rule.Timezone != "" {
+		seriesTimezone = rule.Timezone
+	}
+	values := buildGregorianOccurrenceStarts(anchor, task.RecurrenceEndDate, rule, startUTC, endUTC, seriesTimezone)
+	if len(values) == 0 || len(rule.ExRules) == 0 {
+		return values
+	}
+	loc := loadLocationOrUTC(seriesTimezone)
+	excluded := make(map[string]struct{})
+	for _, exclusion := range rule.ExRules {
+		exclusionTimezone := seriesTimezone
+		if exclusion.Timezone != "" {
+			exclusionTimezone = exclusion.Timezone
+		}
+		for _, occurrence := range buildGregorianOccurrenceStarts(anchor, nil, &exclusion, startUTC, endUTC, exclusionTimezone) {
+			key := occurrence.UTC().Format(time.RFC3339Nano)
+			if task.AllDay {
+				key = occurrence.In(loc).Format("2006-01-02")
+			}
+			excluded[key] = struct{}{}
+		}
+	}
+	filtered := values[:0]
+	for _, occurrence := range values {
+		key := occurrence.UTC().Format(time.RFC3339Nano)
+		if task.AllDay {
+			key = occurrence.In(loc).Format("2006-01-02")
+		}
+		if _, skip := excluded[key]; !skip {
+			filtered = append(filtered, occurrence)
+		}
+	}
+	return filtered
 }
 
 func extendRecurringSearchHorizon(baseHorizon, latestOccurrenceDate time.Time, rule *models.RecurrenceRule) time.Time {

@@ -48,7 +48,7 @@ export default {
           DEFAULT: "hsl(var(--background) / <alpha-value>)",
           card: "hsl(var(--card) / <alpha-value>)",
           popover: "hsl(var(--popover) / <alpha-value>)",
-          muted: "hsl(var(--muted) / <alpha-value>)",
+          muted: "hsl(var(--surface-subtle) / <alpha-value>)",
           accent: "hsl(var(--accent) / <alpha-value>)",
         },
         warning: {
@@ -70,7 +70,7 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       boxShadow: {
-        soft: "0 8px 30px rgba(15, 23, 42, 0.06)",
+        soft: "var(--shadow-soft)",
         sm: "var(--shadow-sm)",
         md: "var(--shadow-md)",
         lg: "var(--shadow-lg)",

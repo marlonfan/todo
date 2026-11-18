@@ -2,7 +2,9 @@ package service
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"time"
 	"todo-app/internal/models"
 	"todo-app/internal/repository"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
@@ -68,6 +71,7 @@ type icalProp struct {
 }
 
 type parsedICalendarObject struct {
+	Properties        map[string][]icalProp
 	Component         string
 	UID               string
 	Summary           string
@@ -79,6 +83,22 @@ type parsedICalendarObject struct {
 	AllDay            bool
 	RecurrenceRule    *models.RecurrenceRule
 	RecurrenceEndDate *time.Time
+}
+
+func taskCalendarLocation(task *models.Task, user *models.User) *time.Location {
+	tz := "UTC"
+	if user != nil && strings.TrimSpace(user.Timezone) != "" {
+		tz = user.Timezone
+	}
+	if task != nil && task.RecurrenceRule != nil && strings.TrimSpace(task.RecurrenceRule.Timezone) != "" {
+		tz = task.RecurrenceRule.Timezone
+	}
+	return loadLocationOrUTC(tz)
+}
+
+type lunarCalendarMetadata struct {
+	Rule  *models.RecurrenceRule
+	Until *time.Time
 }
 
 func NewCalendarExportService(taskSvc *TaskService, userRepo *repository.UserRepository, secret string) *CalendarExportService {
@@ -186,9 +206,15 @@ func (s *CalendarExportService) ExportFeed(userID int64, start, end time.Time) (
 		return "", err
 	}
 	components := make([]string, 0, len(objects))
+	seenZones := map[string]bool{}
 	for _, object := range objects {
-		component := extractFirstCalendarComponent(object.Data)
-		if component != "" {
+		for _, component := range extractCalendarComponents(object.Data) {
+			if strings.HasPrefix(component, "BEGIN:VTIMEZONE\r\n") {
+				if seenZones[component] {
+					continue
+				}
+				seenZones[component] = true
+			}
 			components = append(components, component)
 		}
 	}
@@ -341,54 +367,7 @@ func (s *CalendarExportService) GetObjectsByNames(userID int64, objectNames []st
 }
 
 func (s *CalendarExportService) UpsertObject(userID int64, objectName string, data []byte) (*CalendarObject, bool, error) {
-	loc := s.userLocation(userID)
-	parsed, err := parseICalendarObject(data, loc)
-	if err != nil {
-		return nil, false, err
-	}
-	if parsed.UID == "" {
-		parsed.UID = strings.TrimSuffix(strings.TrimSpace(objectName), ".ics")
-	}
-	if strings.TrimSpace(parsed.Summary) == "" {
-		parsed.Summary = "Untitled"
-	}
-	objectName = normalizeCalendarObjectName(objectName)
-	task, err := s.findTaskByObjectName(userID, objectName, parsed.UID)
-	created := false
-	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, false, err
-		}
-		if _, externalErr := s.findExternalTaskByObjectName(userID, objectName); externalErr == nil {
-			return nil, false, errors.New("calendar object is read-only")
-		}
-		task, err = s.createTaskFromICalendar(userID, parsed)
-		if err != nil {
-			return nil, false, err
-		}
-		created = true
-	} else {
-		task, err = s.updateTaskFromICalendar(userID, task, parsed)
-		if err != nil {
-			return nil, false, err
-		}
-	}
-	if task.CalDAVUID != parsed.UID || task.CalDAVHref != objectName {
-		task.CalDAVUID = parsed.UID
-		task.CalDAVHref = objectName
-		if err := s.taskSvc.taskRepo.Update(task); err != nil {
-			return nil, false, err
-		}
-		task, err = s.taskSvc.taskRepo.GetByIDAndUser(task.ID, userID)
-		if err != nil {
-			return nil, false, err
-		}
-	}
-	object, err := s.taskToObject(task)
-	if err != nil {
-		return nil, false, err
-	}
-	return object, created, nil
+	return s.UpsertObjectConditional(userID, objectName, data, "", "")
 }
 
 func (s *CalendarExportService) DeleteObject(userID int64, objectName string) error {
@@ -414,6 +393,9 @@ func (s *CalendarExportService) CollectionToken(userID int64) (string, error) {
 		return "", err
 	}
 	h := sha256.New()
+	// Force existing subscribers to refresh after the detached-instance and
+	// timezone representation upgrade, even when task revisions are unchanged.
+	fmt.Fprintln(h, "calendar-format:2")
 	fmt.Fprintf(h, "tasks:%d:%d:%s\n", taskState.Count, taskState.MaxRevision, taskState.MaxUpdatedAt.UTC().Format(time.RFC3339Nano))
 	fmt.Fprintf(
 		h,
@@ -445,7 +427,7 @@ func (s *CalendarExportService) wrapCalendar(name string, components []string) s
 	}
 	lines = append(lines, components...)
 	lines = append(lines, "END:VCALENDAR")
-	return strings.Join(lines, "\r\n") + "\r\n"
+	return foldICalendar(strings.Join(lines, "\r\n") + "\r\n")
 }
 
 func (s *CalendarExportService) taskToObject(task *models.Task) (*CalendarObject, error) {
@@ -459,7 +441,20 @@ func (s *CalendarExportService) taskToObject(task *models.Task) (*CalendarObject
 	uid := taskCalDAVUID(task)
 	href := taskCalDAVHref(task)
 	component := s.taskToComponent(task, uid, user)
-	data := s.wrapCalendar(task.Title, []string{component})
+	components := []string{component}
+	if task.RecurrenceRule != nil && !task.ReadOnly {
+		exceptions, err := s.taskOccurrenceComponents(task, uid, user)
+		if err != nil {
+			return nil, err
+		}
+		components = append(components, exceptions...)
+		if !task.AllDay {
+			if zone := calendarTimezoneComponent(taskCalendarLocation(task, user)); zone != "" {
+				components = append([]string{zone}, components...)
+			}
+		}
+	}
+	data := s.wrapCalendar(task.Title, components)
 	return &CalendarObject{
 		Href:     href,
 		UID:      uid,
@@ -471,7 +466,7 @@ func (s *CalendarExportService) taskToObject(task *models.Task) (*CalendarObject
 }
 
 func (s *CalendarExportService) taskToComponent(task *models.Task, uid string, user *models.User) string {
-	loc := loadLocationOrUTC(user.Timezone)
+	loc := taskCalendarLocation(task, user)
 	stamp := taskCalendarStampTime(task)
 	nowStamp := stamp.UTC().Format("20060102T150405Z")
 	lines := []string{}
@@ -497,15 +492,19 @@ func (s *CalendarExportService) taskToComponent(task *models.Task, uid string, u
 				lines = append(lines, "DTEND;VALUE=DATE:"+formatICalDate(start.In(loc).AddDate(0, 0, 1), loc))
 			}
 		} else {
-			lines = append(lines, "DTSTART:"+start.UTC().Format("20060102T150405Z"))
+			timeLine := func(name string, value time.Time) string {
+				if task.RecurrenceRule != nil && loc != time.UTC {
+					return name + ";TZID=" + loc.String() + ":" + value.In(loc).Format("20060102T150405")
+				}
+				return name + ":" + value.UTC().Format("20060102T150405Z")
+			}
+			lines = append(lines, timeLine("DTSTART", start))
 			if task.EndTime != nil {
-				lines = append(lines, "DTEND:"+task.EndTime.UTC().Format("20060102T150405Z"))
+				lines = append(lines, timeLine("DTEND", *task.EndTime))
 			}
 		}
 		if task.RecurrenceRule != nil {
-			if rruleLine := taskRRuleLine(task); rruleLine != "" {
-				lines = append(lines, rruleLine)
-			}
+			lines = append(lines, taskRecurrenceLines(task, user)...)
 		}
 		if categories := taskCategoriesLine(task); categories != "" {
 			lines = append(lines, categories)
@@ -580,6 +579,30 @@ func (s *CalendarExportService) listExportTasks(userID int64, start, end time.Ti
 	for _, task := range recurring {
 		seen[task.ID] = task
 	}
+	// A detached instance can move before its series anchor or beyond UNTIL.
+	rows, err := s.taskSvc.taskRepo.ListTaskOccurrencesInRange(userID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	var extraIDs []int64
+	for _, row := range rows {
+		if row.ScheduleOverride && row.StartTime != nil && row.StartTime.Before(end) && ((row.EndTime != nil && row.EndTime.After(start)) || (row.EndTime == nil && !row.StartTime.Before(start))) {
+			if _, exists := seen[row.TaskID]; !exists {
+				extraIDs = append(extraIDs, row.TaskID)
+			}
+		}
+	}
+	if len(extraIDs) > 0 {
+		extra, err := s.taskSvc.taskRepo.GetTasksByIDsAndUser(userID, extraIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, task := range extra {
+			if task.RecurrenceRule != nil {
+				seen[task.ID] = task
+			}
+		}
+	}
 	out := make([]models.Task, 0, len(seen))
 	for _, task := range seen {
 		out = append(out, task)
@@ -635,12 +658,14 @@ func (s *CalendarExportService) createTaskFromICalendar(userID int64, parsed *pa
 		RecurrenceRule:    parsed.RecurrenceRule,
 		RecurrenceEndDate: parsed.RecurrenceEndDate,
 	}
-	task, err := s.taskSvc.Create(userID, req)
+	// Called inside the resource transaction; reminder sync and notification
+	// happen only after all detached components have been reconciled.
+	task, err := s.taskSvc.createInTransaction(userID, req)
 	if err != nil {
 		return nil, err
 	}
 	if parsed.Status != "" && parsed.Status != models.TaskStatusPending {
-		task, err = s.taskSvc.UpdateStatus(userID, task.ID, parsed.Status, "", "", nil, &TaskActivityMeta{SubmitSource: "caldav"})
+		task, err = s.taskSvc.updateStatusInTransaction(userID, task.ID, parsed.Status, "", "", nil, &TaskActivityMeta{SubmitSource: "caldav"})
 		if err != nil {
 			return nil, err
 		}
@@ -672,7 +697,7 @@ func (s *CalendarExportService) updateTaskFromICalendar(userID int64, task *mode
 		"recurrence_rule":     true,
 		"recurrence_end_date": true,
 	}
-	return s.taskSvc.Update(userID, task.ID, req, fieldMask, nil, &TaskActivityMeta{SubmitSource: "caldav"})
+	return s.taskSvc.updateInTransaction(userID, task.ID, req, fieldMask, nil, &TaskActivityMeta{SubmitSource: "caldav"})
 }
 
 func (s *CalendarExportService) userLocation(userID int64) *time.Location {
@@ -685,6 +710,14 @@ func (s *CalendarExportService) userLocation(userID int64) *time.Location {
 }
 
 func parseICalendarObject(data []byte, loc *time.Location) (*parsedICalendarObject, error) {
+	resource, err := parseICalendarResource(data, loc)
+	if err != nil {
+		return nil, err
+	}
+	return resource.Master, nil
+}
+
+func parseICalendarComponent(data []byte, loc *time.Location) (*parsedICalendarObject, error) {
 	lines := unfoldICalLines(string(data))
 	var component string
 	nestedDepth := 0
@@ -727,15 +760,19 @@ componentLines:
 		return nil, errors.New("calendar object must contain VEVENT or VTODO")
 	}
 	parsed := &parsedICalendarObject{
-		Component: component,
-		UID:       unescapeICalText(firstICalValue(props, "UID")),
-		Summary:   unescapeICalText(firstICalValue(props, "SUMMARY")),
-		Status:    models.TaskStatusPending,
+		Properties: props,
+		Component:  component,
+		UID:        unescapeICalText(firstICalValue(props, "UID")),
+		Summary:    unescapeICalText(firstICalValue(props, "SUMMARY")),
+		Status:     models.TaskStatusPending,
 	}
 	parsed.Description = unescapeICalText(firstICalValue(props, "DESCRIPTION"))
 	statusRaw := strings.ToUpper(strings.TrimSpace(firstICalValue(props, "STATUS")))
 	switch component {
 	case "VEVENT":
+		if statusRaw != "" && statusRaw != "CONFIRMED" && statusRaw != "TENTATIVE" && statusRaw != "CANCELLED" {
+			return nil, errors.New("unsupported VEVENT status")
+		}
 		if statusRaw == "CANCELLED" {
 			parsed.Status = models.TaskStatusCancelled
 		}
@@ -743,14 +780,46 @@ componentLines:
 		if err != nil {
 			return nil, fmt.Errorf("invalid DTSTART: %w", err)
 		}
-		end, endAllDay, err := parseICalTime(firstICalProp(props, "DTEND"), loc)
+		endProp := firstICalProp(props, "DTEND")
+		durationProp := firstICalProp(props, "DURATION")
+		if endProp != nil && durationProp != nil {
+			return nil, errors.New("VEVENT cannot contain both DTEND and DURATION")
+		}
+		end, endAllDay, err := parseICalTime(endProp, loc)
 		if err != nil {
 			return nil, fmt.Errorf("invalid DTEND: %w", err)
 		}
 		parsed.StartTime = start
 		parsed.EndTime = end
+		if start != nil && end != nil && allDay != endAllDay {
+			return nil, errors.New("DTSTART and DTEND must use the same value type")
+		}
 		parsed.AllDay = allDay || endAllDay
+		if durationProp != nil {
+			if start == nil {
+				return nil, errors.New("DURATION requires DTSTART")
+			}
+			duration, durationErr := parseICalDuration(durationProp.Value)
+			if durationErr != nil {
+				return nil, durationErr
+			}
+			if parsed.AllDay {
+				if duration%(24*time.Hour) != 0 {
+					return nil, errors.New("all-day DURATION must be a whole number of days")
+				}
+				localStart := start.In(loc)
+				localEnd := localStart.AddDate(0, 0, int(duration/(24*time.Hour)))
+				endUTC := localEnd.UTC()
+				parsed.EndTime = &endUTC
+			} else {
+				endUTC := start.Add(duration)
+				parsed.EndTime = &endUTC
+			}
+		}
 	case "VTODO":
+		if firstICalProp(props, "DURATION") != nil {
+			return nil, errors.New("VTODO DURATION is not supported")
+		}
 		switch statusRaw {
 		case "COMPLETED":
 			parsed.Status = models.TaskStatusCompleted
@@ -769,10 +838,57 @@ componentLines:
 		parsed.DueDate = due
 		parsed.AllDay = allDay || dueAllDay
 	}
+	if todoStatus := firstICalValue(props, "X-TODO-STATUS"); todoStatus != "" {
+		switch models.TaskStatus(todoStatus) {
+		case models.TaskStatusPending, models.TaskStatusCompleted, models.TaskStatusCancelled, models.TaskStatusSkipped:
+			parsed.Status = models.TaskStatus(todoStatus)
+		default:
+			return nil, errors.New("invalid X-TODO-STATUS")
+		}
+		// Standard calendar cancellation/restoration takes precedence over stale
+		// extension properties echoed by clients that do not understand Todo.
+		if statusRaw == "CANCELLED" && parsed.Status != models.TaskStatusSkipped {
+			parsed.Status = models.TaskStatusCancelled
+		}
+		if (statusRaw == "CONFIRMED" || statusRaw == "TENTATIVE") && (parsed.Status == models.TaskStatusCancelled || parsed.Status == models.TaskStatusSkipped) {
+			parsed.Status = models.TaskStatusPending
+		}
+	}
 	rule, until := parseICalRRule(firstICalValue(props, "RRULE"), loc)
+	if rule != nil {
+		if startProp := firstICalProp(props, "DTSTART"); startProp != nil {
+			rule.Timezone = strings.TrimSpace(startProp.Params["TZID"])
+		}
+	}
+	if encoded := firstICalValue(props, "X-TODO-LUNAR-RULE"); encoded != "" {
+		metadataRule, metadataUntil, err := parseLunarCalendarMetadata(encoded)
+		if err != nil {
+			return nil, err
+		}
+		if rule != nil {
+			return nil, errors.New("lunar metadata cannot be combined with RRULE")
+		}
+		rule, until = metadataRule, metadataUntil
+	}
 	parsed.RecurrenceRule = rule
 	parsed.RecurrenceEndDate = until
 	return parsed, nil
+}
+
+func parseLunarCalendarMetadata(encoded string) (*models.RecurrenceRule, *time.Time, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil || len(raw) > 4096 {
+		return nil, nil, errors.New("invalid lunar recurrence metadata")
+	}
+	var metadata lunarCalendarMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil || metadata.Rule == nil || !isLunarYearlyRule(metadata.Rule) {
+		return nil, nil, errors.New("invalid lunar recurrence metadata")
+	}
+	rule, err := normalizeAndValidateRecurrenceRule(metadata.Rule, nil, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid lunar recurrence metadata: %w", err)
+	}
+	return rule, metadata.Until, nil
 }
 
 func parseICalProp(line string) (icalProp, bool) {
@@ -803,8 +919,24 @@ func parseICalTime(prop *icalProp, loc *time.Location) (*time.Time, bool, error)
 		return nil, false, nil
 	}
 	value := strings.TrimSpace(prop.Value)
+	if loc == nil {
+		loc = time.UTC
+	}
+	if zone := prop.Params["TZID"]; zone != "" {
+		var err error
+		loc, err = time.LoadLocation(zone)
+		if err != nil {
+			return nil, false, fmt.Errorf("unsupported TZID %q", zone)
+		}
+	}
 	valueType := strings.ToUpper(strings.TrimSpace(prop.Params["VALUE"]))
+	if valueType != "" && valueType != "DATE" && valueType != "DATE-TIME" {
+		return nil, false, errors.New("unsupported calendar time value type")
+	}
 	if valueType == "DATE" || (len(value) == 8 && !strings.Contains(value, "T")) {
+		if prop.Params["TZID"] != "" {
+			return nil, true, errors.New("DATE values cannot have TZID")
+		}
 		parsed, err := time.ParseInLocation("20060102", value, loc)
 		if err != nil {
 			return nil, true, err
@@ -852,6 +984,12 @@ func parseICalRRule(raw string, loc *time.Location) (*models.RecurrenceRule, *ti
 				day = strings.ToUpper(strings.TrimSpace(day))
 				if day != "" {
 					rule.ByDay = append(rule.ByDay, day)
+				}
+			}
+		case "BYMONTH":
+			for _, rawMonth := range strings.Split(value, ",") {
+				if n, err := strconv.Atoi(strings.TrimSpace(rawMonth)); err == nil && n >= 1 && n <= 12 {
+					rule.ByMonth = append(rule.ByMonth, n)
 				}
 			}
 		case "BYMONTHDAY":
@@ -912,23 +1050,47 @@ func firstICalValue(props map[string][]icalProp, name string) string {
 	return prop.Value
 }
 
-func extractFirstCalendarComponent(data string) string {
+func extractCalendarComponents(data string) []string {
 	lines := unfoldICalLines(data)
+	var components []string
 	var out []string
-	inComponent := false
+	depth := 0
 	for _, line := range lines {
 		upper := strings.ToUpper(strings.TrimSpace(line))
-		if upper == "BEGIN:VEVENT" || upper == "BEGIN:VTODO" {
-			inComponent = true
+		if depth == 0 && upper != "BEGIN:VEVENT" && upper != "BEGIN:VTODO" && upper != "BEGIN:VTIMEZONE" {
+			continue
 		}
-		if inComponent {
-			out = append(out, line)
+		if strings.HasPrefix(upper, "BEGIN:") {
+			depth++
 		}
-		if upper == "END:VEVENT" || upper == "END:VTODO" {
-			break
+		out = append(out, line)
+		if strings.HasPrefix(upper, "END:") {
+			depth--
+			if depth == 0 {
+				components = append(components, strings.Join(out, "\r\n"))
+				out = nil
+			}
 		}
 	}
-	return strings.Join(out, "\r\n")
+	return components
+}
+
+func foldICalendar(data string) string {
+	var out strings.Builder
+	for _, line := range strings.Split(strings.TrimSuffix(data, "\r\n"), "\r\n") {
+		for len(line) > 75 {
+			i := 75
+			for !utf8.RuneStart(line[i]) {
+				i--
+			}
+			out.WriteString(line[:i])
+			out.WriteString("\r\n")
+			line = " " + line[i:]
+		}
+		out.WriteString(line)
+		out.WriteString("\r\n")
+	}
+	return out.String()
 }
 
 func taskCalDAVUID(task *models.Task) string {
@@ -1136,7 +1298,7 @@ func taskCalendarCreatedTime(task *models.Task) time.Time {
 	return taskCalendarStampTime(task)
 }
 
-func taskRRuleLine(task *models.Task) string {
+func taskRRuleLine(task *models.Task, user *models.User) string {
 	if task == nil || task.RecurrenceRule == nil {
 		return ""
 	}
@@ -1144,13 +1306,138 @@ func taskRRuleLine(task *models.Task) string {
 	if start == nil {
 		start = task.DueDate
 	}
-	raw := buildRRuleString(task.RecurrenceRule, start, task.RecurrenceEndDate)
+	rule := cloneRecurrenceRule(task.RecurrenceRule)
+	if rule == nil {
+		return ""
+	}
+	if isLunarYearlyRule(rule) {
+		return ""
+	}
+	until := cloneTimePointer(task.RecurrenceEndDate)
+	// RFC 5545 forbids COUNT and UNTIL together. Todo accepts both as an
+	// "earlier boundary" convenience, so encode the effective count when the
+	// end date cuts the series short. This keeps native and external expansion
+	// identical without relying on a non-standard dual-boundary RRULE.
+	if rule.Count > 0 && until != nil && start != nil && !isLunarYearlyRule(rule) {
+		countRule := cloneRecurrenceRule(rule)
+		countRule.Count = 0
+		zone := taskCalendarLocation(task, user).String()
+		occurrences := buildGregorianOccurrenceStarts(*start, nil, countRule, *start, until.UTC().Add(time.Second), zone)
+		if len(occurrences) < rule.Count {
+			rule.Count = len(occurrences)
+		}
+		until = nil
+		if rule.Count == 0 {
+			return ""
+		}
+	}
+	dateUntil := task.AllDay
+	untilForOutput := until
+	if dateUntil && until != nil && user != nil {
+		loc := taskCalendarLocation(task, user)
+		local := until.In(loc)
+		date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+		untilForOutput = &date
+	}
+	raw := buildRRuleStringWithDateUntil(rule, start, untilForOutput, dateUntil)
 	for _, line := range strings.Split(raw, "\n") {
 		if strings.HasPrefix(strings.ToUpper(line), "RRULE:") {
 			return strings.TrimSpace(line)
 		}
 	}
 	return ""
+}
+
+func taskRecurrenceLines(task *models.Task, user *models.User) []string {
+	if task == nil || task.RecurrenceRule == nil {
+		return nil
+	}
+	if !isLunarYearlyRule(task.RecurrenceRule) {
+		lines := make([]string, 0, 1+len(task.RecurrenceRule.ExRules))
+		if line := taskRRuleLine(task, user); line != "" {
+			lines = append(lines, line)
+		}
+		start := task.StartTime
+		if start == nil {
+			start = task.DueDate
+		}
+		for i := range task.RecurrenceRule.ExRules {
+			raw := buildRRuleStringWithDateUntil(&task.RecurrenceRule.ExRules[i], start, nil, task.AllDay)
+			for _, candidate := range strings.Split(raw, "\n") {
+				if strings.HasPrefix(strings.ToUpper(candidate), "RRULE:") {
+					lines = append(lines, "EXRULE:"+strings.TrimPrefix(candidate, "RRULE:"))
+					break
+				}
+			}
+		}
+		return lines
+	}
+	rule := normalizeRecurrenceRule(task.RecurrenceRule)
+	if rule == nil {
+		return nil
+	}
+	metadata := lunarCalendarMetadata{Rule: rule, Until: cloneTimePointer(task.RecurrenceEndDate)}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	lines := []string{"X-TODO-LUNAR-RULE:" + base64.RawURLEncoding.EncodeToString(raw)}
+	values := lunarCalendarRDates(task, user)
+	if len(values) == 0 {
+		return lines
+	}
+	loc := taskCalendarLocation(task, user)
+	formatted := make([]string, 0, len(values))
+	for _, value := range values {
+		if task.AllDay {
+			formatted = append(formatted, value.In(loc).Format("20060102"))
+		} else {
+			formatted = append(formatted, value.In(loc).Format("20060102T150405"))
+		}
+	}
+	if task.AllDay {
+		lines = append(lines, "RDATE;VALUE=DATE:"+strings.Join(formatted, ","))
+	} else if loc != time.UTC {
+		lines = append(lines, "RDATE;TZID="+loc.String()+":"+strings.Join(formatted, ","))
+	} else {
+		for i := range formatted {
+			formatted[i] += "Z"
+		}
+		lines = append(lines, "RDATE:"+strings.Join(formatted, ","))
+	}
+	return lines
+}
+
+func lunarCalendarRDates(task *models.Task, user *models.User) []time.Time {
+	if task == nil || task.RecurrenceRule == nil {
+		return nil
+	}
+	anchor, ok := resolveTaskOccurrenceAnchorDate(task)
+	if !ok {
+		return nil
+	}
+	until := cloneTimePointer(task.RecurrenceEndDate)
+	end := anchor.AddDate(40, 0, 0)
+	if until != nil {
+		end = until.Add(time.Second)
+	} else if task.RecurrenceRule.Count > 0 {
+		interval := task.RecurrenceRule.Interval
+		if interval < 1 {
+			interval = 1
+		}
+		end = anchor.AddDate((task.RecurrenceRule.Count+1)*interval+1, 0, 0)
+	}
+	values := buildLunarYearlyOccurrenceStarts(anchor, until, task.RecurrenceRule, anchor.Add(-time.Second), end)
+	// DTSTART already represents the first generated value. RDATE carries the
+	// remaining finite expansion so clients do not show the first event twice.
+	result := make([]time.Time, 0, len(values))
+	for _, value := range values {
+		if value.Equal(anchor) {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
 }
 
 func taskCategoriesLine(task *models.Task) string {

@@ -653,7 +653,7 @@ function MainLayout({ user, setUser }) {
   ), [t]);
   const searchDialogFallback = (
     <div className="desktop-search-dialog-overlay fixed inset-0 z-[80] flex items-start justify-center bg-black/35 p-3 pt-14 md:p-4 md:pt-20">
-      <div className="w-full max-w-2xl rounded-lg border border-border bg-card shadow-xl" aria-hidden="true">
+      <div className="w-full max-w-2xl rounded-[var(--radius-xl)] border border-border bg-card shadow-lg" aria-hidden="true">
         <div className="border-b border-border px-3 py-2.5 md:px-4 md:py-3">
           <div className="h-4 w-24 animate-pulse rounded-full bg-muted" />
         </div>
@@ -1103,7 +1103,7 @@ function MainLayout({ user, setUser }) {
                       isTaskNavActive(`/tasks?category_id=${cat.id}`)
                         ? 'md-nav-item-active'
                         : dragOverCategoryID === cat.id
-                          ? 'bg-[hsl(var(--success)/0.12)] text-[hsl(var(--success-foreground))] ring-1 ring-[hsl(var(--success)/0.3)]'
+                          ? 'bg-[hsl(var(--success)/0.12)] text-[hsl(var(--success-ink))] ring-1 ring-[hsl(var(--success)/0.3)]'
                           : 'md-nav-item-idle'
                     }`}
                   >
@@ -1259,7 +1259,7 @@ function MainLayout({ user, setUser }) {
         </Suspense>
       </div>
 
-      {/* 移动端浮岛胶囊底栏：玻璃胶囊 + 中央凸起「+」主按钮 */}
+      {/* 移动端胶囊底栏：暖白浮层 + 青瓷添加按钮 */}
       <div className="mobile-dock fixed inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] md:hidden">
         <div className="mobile-dock-capsule glass-panel-strong flex items-center gap-1 rounded-full px-2 py-1.5">
           {mobileTabs.map((item) => {
@@ -1387,7 +1387,7 @@ function MainLayout({ user, setUser }) {
                           aria-pressed={selected === 'server'}
                           className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                             selected === 'server'
-                              ? 'border-[hsl(var(--success))] bg-[hsl(var(--success)/0.12)] text-[hsl(var(--success-foreground))]'
+                              ? 'border-[hsl(var(--success))] bg-[hsl(var(--success)/0.12)] text-[hsl(var(--success-ink))]'
                               : 'border-border bg-card text-foreground-strong'
                           }`}
                         >
@@ -1464,7 +1464,7 @@ function MainLayout({ user, setUser }) {
         >
           <div
             ref={settingsDialogRef}
-            className="h-[min(46rem,calc(100vh-2rem))] w-[min(54rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl bg-card shadow-2xl"
+            className="h-[min(46rem,calc(100vh-2rem))] w-[min(54rem,calc(100vw-1.5rem))] overflow-hidden rounded-[var(--radius-xl)] border border-border bg-card shadow-lg"
             role="dialog"
             aria-modal="true"
             aria-label={t('settings.title')}

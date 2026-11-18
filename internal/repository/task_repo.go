@@ -483,6 +483,14 @@ func (r *TaskRepository) GetTaskOccurrence(userID, taskID int64, occurrenceDate 
 	return &occurrence, nil
 }
 
+// A DAV calendar object contains the entire series and all its detached
+// exceptions, including exceptions moved beyond the requested query range.
+func (r *TaskRepository) ListTaskOccurrences(userID, taskID int64) ([]models.TaskOccurrence, error) {
+	var rows []models.TaskOccurrence
+	err := r.db.Where("user_id = ? AND task_id = ?", userID, taskID).Order("occurrence_date ASC, id ASC").Find(&rows).Error
+	return rows, err
+}
+
 func (r *TaskRepository) UpsertTaskOccurrence(occurrence *models.TaskOccurrence) error {
 	if occurrence == nil {
 		return nil
@@ -499,6 +507,7 @@ func (r *TaskRepository) UpsertTaskOccurrence(occurrence *models.TaskOccurrence)
 		},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"instance_id",
+			"title",
 			"status",
 			"completed_at",
 			"deleted_at",
@@ -506,6 +515,7 @@ func (r *TaskRepository) UpsertTaskOccurrence(occurrence *models.TaskOccurrence)
 			"start_time",
 			"end_time",
 			"all_day",
+			"schedule_override",
 			"updated_at",
 		}),
 	}).Create(occurrence).Error
@@ -519,11 +529,13 @@ func (r *TaskRepository) DeleteTaskOccurrence(userID, taskID int64, occurrenceDa
 }
 
 func (r *TaskRepository) ListTaskOccurrencesInRange(userID int64, start, end time.Time) ([]models.TaskOccurrence, error) {
-	startDate := start.UTC().Truncate(24 * time.Hour)
-	endDate := end.UTC().Truncate(24 * time.Hour)
+	// occurrence_date is an account-local date encoded as UTC midnight. Include
+	// adjacent UTC dates for offsets on both sides of UTC and partial-day ranges.
+	startDate := start.UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	endDate := end.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
 	var rows []models.TaskOccurrence
 	err := r.db.
-		Where("user_id = ? AND occurrence_date >= ? AND occurrence_date <= ?", userID, startDate, endDate).
+		Where("user_id = ? AND ((occurrence_date >= ? AND occurrence_date <= ?) OR (schedule_override = ? AND start_time < ? AND (end_time > ? OR (end_time IS NULL AND start_time >= ?))))", userID, startDate, endDate, true, end, start, start).
 		Order("occurrence_date ASC, id ASC").
 		Find(&rows).Error
 	return rows, err
@@ -542,7 +554,7 @@ func (r *TaskRepository) ListTaskOccurrencesForTasksInRange(
 	endDate := end.UTC().Truncate(24 * time.Hour)
 	var rows []models.TaskOccurrence
 	err := r.db.
-		Where("user_id = ? AND task_id IN ? AND occurrence_date >= ? AND occurrence_date <= ?", userID, taskIDs, startDate, endDate).
+		Where("user_id = ? AND task_id IN ? AND ((occurrence_date >= ? AND occurrence_date <= ?) OR schedule_override = ?)", userID, taskIDs, startDate, endDate, true).
 		Order("occurrence_date ASC, id ASC").
 		Find(&rows).Error
 	return rows, err
