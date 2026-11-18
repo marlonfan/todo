@@ -48,15 +48,24 @@ func TestWYSIWYGModeToggleAndTableFallback(t *testing.T) {
 				t.Fatalf("switching back to WYSIWYG leaked syntax: %q", richAgain.Value)
 			}
 
-			// External GFM table preserves source losslessly via markdown.View fallback
-			tableMD := "| 阶段 | 状态 |\n| --- | --- |\n| 重构 | 已完成 |"
+			// GFM table renders inline inside the live WYSIWYG editor (no locked fallback banner!)
+			// and preserves its Markdown source losslessly.
+			tableMD := "## 进度概览\n\n| 阶段 | 状态 |\n| --- | --- |\n| 重构 | 已完成 |\n\n---\n\n后续计划正常推进。"
 			source = tableMD
 			tt.Frame()
 			if source != tableMD {
-				t.Fatalf("table fallback mutated Markdown source: %q", source)
+				t.Fatalf("inline WYSIWYG table mutated Markdown source: %q", source)
 			}
-			if !tt.HasText("包含表格或扩展语法 · 已启用无损渲染") {
-				t.Fatalf("expected lossless table banner, got %v", tt.Texts())
+			if tt.HasText("包含表格或扩展语法 · 已启用无损渲染") {
+				t.Fatalf("unexpected legacy fallback banner in texts: %v", tt.Texts())
+			}
+			richWithTable, ok := tt.AccessByRole(ui.RoleTextField, "备注")
+			if !ok || !strings.Contains(richWithTable.Value, "进度概览") || !strings.Contains(richWithTable.Value, "后续计划正常推进") {
+				t.Fatalf("expected live WYSIWYG editor with inline table attachment, got %+v", richWithTable)
+			}
+			// Formatting toolbar remains active even with tables and dividers in the document
+			if _, ok := tt.AccessByRole(ui.RoleButton, "一级标题"); !ok {
+				t.Fatal("WYSIWYG formatting toolbar was hidden when document contained a table")
 			}
 		})
 	}

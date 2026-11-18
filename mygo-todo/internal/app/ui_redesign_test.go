@@ -48,7 +48,7 @@ func TestUIRedesignEndToEndAndVisuals(t *testing.T) {
 	catDesign := api.Category{ID: 2, Name: "设计体验", Color: "#10B981", Emoji: "🎨"}
 	catLife := api.Category{ID: 3, Name: "个人生活", Color: "#F59E0B", Emoji: "🌿"}
 
-	richMD := "## 核心体验升级清单\n\n本次重构采用温润的纸感配色与轻量图标表达，让注意力回归内容本身：\n\n- [x] Claude 暖白纸感与深炭灰语义配色，零阴影扁平界面\n- [ ] Google 风格全幅日历与月视图行高自适应防遮挡\n- [ ] 单行内联快捷添加与自由拖拽分栏宽度\n\n> 少即是多，克制线框与文字噪音。\n\n```go\nfunc main() {\n\tfmt.Println(\"Hello Warm Editorial UI!\")\n}\n```"
+	richMD := "## 核心体验升级清单\n\n本次重构采用温润的纸感配色与轻量图标表达，让注意力回归内容本身：\n\n- [x] Claude 暖白纸感与深炭灰语义配色，零阴影扁平界面\n- [ ] Google 风格全幅日历与月视图行高自适应防遮挡\n- [ ] 单行内联快捷添加与自由拖拽分栏宽度\n\n| 模块 | 状态 | 备注 |\n| --- | --- | --- |\n| 编辑器 | 已完成 | 表格与分隔线直接内联所见即所得 |\n| 状态栏 | 已完成 | Apple 极简风下拉速览 |\n\n---\n\n> 少即是多，克制线框与文字噪音。\n\n```go\nfunc main() {\n\tfmt.Println(\"Hello Warm Editorial UI!\")\n}\n```"
 
 	tasks := []api.Task{
 		{

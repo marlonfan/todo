@@ -5,7 +5,6 @@ import (
 
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
 	"github.com/egoist/mygo/ui/richtext"
 	"github.com/lobehub/lobe-mygo/pkg/action"
@@ -21,18 +20,29 @@ type wysiwygEditorState struct {
 	lastSerialized string
 	docVersion     uint64
 	fenceLangs     []string
-	complexSyntax  bool
 	sourceMode     bool
 	composing      bool
 	linkOpen       bool
 	linkURL        string
+	dark           bool
+}
+
+type richBlockAttachment struct {
+	kind string // "table", "hr", "rawblock"
+	raw  string
+}
+
+type parsedTableData struct {
+	aligns []parser.Align
+	rows   [][]string
+	header []bool
+	colW   []float32
+	totalW float32
+	totalH float32
 }
 
 // inspectMarkdownSource detects fenced code block info strings (so we can
-// restore ```go, ```json, etc. when serializing richtext back to Markdown) and
-// checks whether the source uses constructs that richtext's flat paragraph
-// model cannot round-trip losslessly (GFM tables, raw HTML attributes, ordered
-// lists not starting at 1, thematic breaks, image titles).
+// restore ```go, ```json, etc. when serializing richtext back to Markdown).
 func inspectMarkdownSource(src string) (fenceLangs []string, complexSyntax bool) {
 	if strings.TrimSpace(src) == "" {
 		return nil, false
@@ -43,67 +53,256 @@ func inspectMarkdownSource(src string) (fenceLangs []string, complexSyntax bool)
 	walk = func(parent int) {
 		for idx := range d.Children(parent) {
 			b := d.Block(idx)
-			switch b.Kind {
-			case parser.CodeBlock:
-				if b.Fenced {
-					lang := strings.TrimSpace(b.Info())
-					fenceLangs = append(fenceLangs, lang)
-				}
-			case parser.Table, parser.HTMLBlock, parser.MathBlock, parser.ThematicBreak:
-				complexSyntax = true
-			case parser.Quote:
-				if b.Alert != parser.NoAlert {
-					complexSyntax = true
-				}
-			case parser.List:
-				if b.Ordered && b.Number != 0 && b.Number != 1 {
-					complexSyntax = true
-				}
-			}
-			inlines := d.Inlines(idx)
-			for k := 0; k < len(inlines); k++ {
-				in := &inlines[k]
-				switch in.Kind {
-				case parser.Image:
-					if in.Title != "" {
-						complexSyntax = true
-					}
-				case parser.HTML:
-					raw := strings.ToLower(strings.TrimSpace(in.Text))
-					inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(raw, "<"), ">"))
-					inner = strings.TrimPrefix(inner, "/")
-					inner = strings.TrimSuffix(inner, "/")
-					if strings.ContainsAny(inner, " \t=") {
-						complexSyntax = true
-					} else {
-						switch inner {
-						case "br", "u", "ins", "s", "strike", "del", "b", "strong", "i", "em":
-						default:
-							if inner != "" {
-								complexSyntax = true
-							}
-						}
-					}
-				}
+			if b.Kind == parser.CodeBlock && b.Fenced {
+				fenceLangs = append(fenceLangs, strings.TrimSpace(b.Info()))
 			}
 			walk(idx)
 		}
 	}
 	walk(0)
-	return fenceLangs, complexSyntax
+	return fenceLangs, false
 }
 
-// serializeRichMarkdown exports richtext.Text to CommonMark/GFM while restoring
-// fenced code block language tags recorded from the source document.
-func serializeRichMarkdown(txt richtext.Text, fenceLangs []string) string {
-	out := txt.Markdown()
+func extractTableData(d *parser.Document, tableIdx int) parsedTableData {
+	b := d.Block(tableIdx)
+	cols := len(b.Align)
+	if cols == 0 {
+		cols = 1
+	}
+	td := parsedTableData{
+		aligns: append([]parser.Align(nil), b.Align...),
+		colW:   make([]float32, cols),
+	}
+	for c := 0; c < cols; c++ {
+		td.colW[c] = 88
+	}
+	for r := tableIdx + 1; r < d.Block(tableIdx).Next; r = d.Block(r).Next {
+		row := d.Block(r)
+		cells := make([]string, cols)
+		k := 0
+		for cell := r + 1; cell < d.Block(r).Next && k < cols; cell = d.Block(cell).Next {
+			txt := strings.TrimSpace(parser.PlainText(d.Inlines(cell)))
+			cells[k] = txt
+			font := ui.Font{Size: 13, Weight: 400}
+			if row.Header {
+				font.Weight = 600
+			}
+			w, _ := ui.ShapeText(txt, font, 0).Size()
+			td.colW[k] = max(td.colW[k], min(220, w+26))
+			k++
+		}
+		td.rows = append(td.rows, cells)
+		td.header = append(td.header, row.Header)
+	}
+	var sumW float32
+	for _, w := range td.colW {
+		sumW += w
+	}
+	td.totalW = max(180, min(460, sumW))
+	rowCount := max(1, len(td.rows))
+	td.totalH = float32(rowCount)*32 + 4
+	return td
+}
+
+func drawWYSIWYGTable(p *ui.Painter, r ui.Rect, td parsedTableData, t designTokens) {
+	if len(td.rows) == 0 || r.W <= 4 || r.H <= 4 {
+		return
+	}
+	box := ui.Rect{X: r.X, Y: r.Y + 2, W: r.W, H: max(16, r.H-4)}
+	const radius = 7.0
+	p.Fill(box, t.BgApp, radius)
+
+	cols := max(1, len(td.colW))
+	var sumColW float32
+	for _, w := range td.colW {
+		sumColW += w
+	}
+	if sumColW <= 0 {
+		sumColW = 1
+	}
+	rowH := box.H / float32(len(td.rows))
+
+	p.Clip(box, radius, func() {
+		for ri, row := range td.rows {
+			ry := box.Y + float32(ri)*rowH
+			rowRect := ui.Rect{X: box.X, Y: ry, W: box.W, H: rowH}
+			if ri < len(td.header) && td.header[ri] {
+				p.Fill(rowRect, t.BgSubtle, 0)
+			} else if ri%2 == 1 {
+				p.Fill(rowRect, t.BgSubtle.Alpha(0.35), 0)
+			}
+			if ri > 0 {
+				p.Fill(ui.Rect{X: box.X, Y: ry, W: box.W, H: 1}, t.BorderSubtle, 0)
+			}
+			cx := box.X
+			for ci := 0; ci < cols; ci++ {
+				cw := box.W * (td.colW[ci] / sumColW)
+				if ci == cols-1 {
+					cw = box.X + box.W - cx
+				}
+				if ci > 0 {
+					p.Fill(ui.Rect{X: cx, Y: ry, W: 1, H: rowH}, t.BorderSubtle, 0)
+				}
+				if ci < len(row) && row[ci] != "" {
+					font := ui.Font{Size: 12.5, Weight: 400}
+					fg := t.TextPrimary
+					if ri < len(td.header) && td.header[ri] {
+						font.Weight = 600
+					}
+					availW := max(1, cw-20)
+					layout := ui.ShapeText(row[ci], font, availW)
+					tw, th := layout.Size()
+					tx := cx + 10
+					if ci < len(td.aligns) {
+						switch td.aligns[ci] {
+						case parser.AlignCenter:
+							tx = cx + max(6, (cw-tw)/2)
+						case parser.AlignRight:
+							tx = cx + max(6, cw-10-tw)
+						}
+					}
+					ty := ry + max(2, (rowH-th)/2)
+					p.TextLayout(layout, tx, ty, fg)
+				}
+				cx += cw
+			}
+		}
+	})
+	p.Stroke(box, t.BorderDefault, radius, 1)
+}
+
+func makeDividerAttachment(raw string, t designTokens) *richtext.Attachment {
+	if strings.TrimSpace(raw) == "" {
+		raw = "---"
+	}
+	return &richtext.Attachment{
+		Width:  360,
+		Height: 16,
+		Name:   "分隔线",
+		Data:   richBlockAttachment{kind: "hr", raw: raw},
+		Draw: func(p *ui.Painter, r ui.Rect) {
+			y := r.Y + r.H/2
+			p.Fill(ui.Rect{X: r.X, Y: y, W: r.W, H: 1}, t.BorderDefault, 0)
+		},
+	}
+}
+
+func makeTableAttachment(d *parser.Document, idx int, raw string, t designTokens) *richtext.Attachment {
+	td := extractTableData(d, idx)
+	summaryParts := []string{}
+	for _, row := range td.rows {
+		summaryParts = append(summaryParts, strings.Join(row, " "))
+	}
+	return &richtext.Attachment{
+		Width:  td.totalW,
+		Height: td.totalH,
+		Name:   strings.Join(summaryParts, " · "),
+		Data:   richBlockAttachment{kind: "table", raw: raw},
+		Draw: func(p *ui.Painter, r ui.Rect) {
+			drawWYSIWYGTable(p, r, td, t)
+		},
+	}
+}
+
+func makeRawBlockAttachment(raw string, t designTokens) *richtext.Attachment {
+	trimmed := strings.TrimSpace(raw)
+	font := ui.Font{Family: "SF Mono, Menlo, ui-monospace, monospace", Size: 12, LineHeight: 1.45}
+	layout := ui.ShapeText(trimmed, font, 340)
+	_, th := layout.Size()
+	h := max(32, th+16)
+	return &richtext.Attachment{
+		Width:  360,
+		Height: h,
+		Name:   trimmed,
+		Data:   richBlockAttachment{kind: "rawblock", raw: raw},
+		Draw: func(p *ui.Painter, r ui.Rect) {
+			box := ui.Rect{X: r.X, Y: r.Y + 1, W: r.W, H: max(16, r.H-2)}
+			p.Fill(box, t.BgSubtle, 6)
+			p.Stroke(box, t.BorderSubtle, 6, 1)
+			l := ui.ShapeText(trimmed, font, max(1, box.W-16))
+			p.TextLayout(l, box.X+8, box.Y+7, t.TextSecondary)
+		},
+	}
+}
+
+// parseRichMarkdown converts CommonMark/GFM into richtext.Text while rendering
+// GFM tables, horizontal dividers (---), and raw HTML/Math blocks as visual inline
+// canvas attachments that round-trip their exact Markdown source on save.
+func parseRichMarkdown(src string, t designTokens) richtext.Text {
+	if src == "" {
+		return richtext.Text{}
+	}
+	d := parser.New(parser.Default)
+	d.Set(src)
+
+	var paras []richtext.Paragraph
+	spanStart := -1
+	flushSpan := func(end int) {
+		if spanStart >= 0 && end > spanStart {
+			chunk := strings.Trim(src[spanStart:end], "\r\n")
+			if chunk != "" {
+				for _, p := range richtext.ParseMarkdown(chunk).Paragraphs() {
+					paras = append(paras, p)
+				}
+			}
+		}
+		spanStart = -1
+	}
+
+	for idx := range d.Children(0) {
+		b := d.Block(idx)
+		switch b.Kind {
+		case parser.Table:
+			flushSpan(b.Start)
+			raw := strings.TrimRight(src[b.Start:b.End], "\r\n")
+			at := makeTableAttachment(d, idx, raw, t)
+			paras = append(paras, richtext.Paragraph{
+				Runs: []richtext.Run{{
+					Text:       string(richtext.ObjectReplacement),
+					Attributes: richtext.Attributes{Attachment: at},
+				}},
+			})
+		case parser.ThematicBreak:
+			flushSpan(b.Start)
+			raw := strings.TrimRight(src[b.Start:b.End], "\r\n")
+			at := makeDividerAttachment(raw, t)
+			paras = append(paras, richtext.Paragraph{
+				Runs: []richtext.Run{{
+					Text:       string(richtext.ObjectReplacement),
+					Attributes: richtext.Attributes{Attachment: at},
+				}},
+			})
+		case parser.HTMLBlock, parser.MathBlock:
+			flushSpan(b.Start)
+			raw := strings.TrimRight(src[b.Start:b.End], "\r\n")
+			at := makeRawBlockAttachment(raw, t)
+			paras = append(paras, richtext.Paragraph{
+				Runs: []richtext.Run{{
+					Text:       string(richtext.ObjectReplacement),
+					Attributes: richtext.Attributes{Attachment: at},
+				}},
+			})
+		default:
+			if spanStart < 0 {
+				spanStart = b.Start
+			}
+		}
+	}
+	flushSpan(len(src))
+
+	if len(paras) == 0 {
+		return richtext.ParseMarkdown(src)
+	}
+	return richtext.TextOf(paras...)
+}
+
+func restoreFenceLanguages(out string, fenceLangs []string, langIdx *int) string {
 	if len(fenceLangs) == 0 || !strings.Contains(out, "```") {
 		return out
 	}
 	lines := strings.Split(out, "\n")
 	inFence := false
 	openFence := ""
-	langIdx := 0
 	for i, line := range lines {
 		trimmed := strings.TrimLeft(line, "> ")
 		prefix := line[:len(line)-len(trimmed)]
@@ -112,10 +311,10 @@ func serializeRichMarkdown(txt richtext.Text, fenceLangs []string) string {
 			if strings.Trim(ticks, "`") == "" {
 				inFence = true
 				openFence = ticks
-				if langIdx < len(fenceLangs) && fenceLangs[langIdx] != "" {
-					lines[i] = prefix + ticks + fenceLangs[langIdx]
+				if *langIdx < len(fenceLangs) && fenceLangs[*langIdx] != "" {
+					lines[i] = prefix + ticks + fenceLangs[*langIdx]
 				}
-				langIdx++
+				*langIdx++
 			}
 		} else if inFence && trimmed == openFence {
 			inFence = false
@@ -123,6 +322,39 @@ func serializeRichMarkdown(txt richtext.Text, fenceLangs []string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// serializeRichMarkdown exports richtext.Text to CommonMark/GFM while restoring
+// fenced code block language tags and lossless block attachments (tables, rules, etc.).
+func serializeRichMarkdown(txt richtext.Text, fenceLangs []string) string {
+	var blocks []string
+	var normalSpan []richtext.Paragraph
+	langIdx := 0
+
+	flushNormal := func() {
+		if len(normalSpan) == 0 {
+			return
+		}
+		md := richtext.TextOf(normalSpan...).Markdown()
+		md = restoreFenceLanguages(md, fenceLangs, &langIdx)
+		if md != "" {
+			blocks = append(blocks, md)
+		}
+		normalSpan = normalSpan[:0]
+	}
+
+	for _, p := range txt.Paragraphs() {
+		if len(p.Runs) == 1 && p.Runs[0].Attributes.Attachment != nil {
+			if meta, ok := p.Runs[0].Attributes.Attachment.Data.(richBlockAttachment); ok {
+				flushNormal()
+				blocks = append(blocks, meta.raw)
+				continue
+			}
+		}
+		normalSpan = append(normalSpan, p)
+	}
+	flushNormal()
+	return strings.Join(blocks, "\n\n")
 }
 
 func wysiwygThemeOf(c *ui.Context) *richtext.Theme {
@@ -161,24 +393,26 @@ func wysiwygThemeOf(c *ui.Context) *richtext.Theme {
 
 // wysiwygMarkdownEditor provides a single-surface WYSIWYG Markdown editor
 // backed by MyGo's native richtext engine, with formatting controls, interactive
-// task checkboxes, fence-language preservation, lossless fallback for GFM
-// tables/HTML, and an optional raw Markdown source toggle.
+// task checkboxes, fence-language preservation, inline visual GFM tables and
+// dividers, and an optional raw Markdown source toggle.
 func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeholder string, source *string, readOnly bool, ref *ui.Handle, onEdit func(), onAI func()) {
 	t := tokensOf(c)
+	dark := c.Theme().Dark
 	root := ui.Column(c.Key(key)).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Gap(6).Clip()
 	st := ui.Local(root, "wysiwyg-state", func() wysiwygEditorState { return wysiwygEditorState{} })
 
 	reloadDoc := func(src string) {
-		langs, complex := inspectMarkdownSource(src)
+		langs, _ := inspectMarkdownSource(src)
 		st.identity = identity
 		st.loadedSource = src
 		st.lastSerialized = src
 		st.fenceLangs = langs
-		st.complexSyntax = complex
+		st.dark = dark
+		parsed := parseRichMarkdown(src, t)
 		if st.doc == nil {
-			st.doc = richtext.NewDocument(richtext.ParseMarkdown(src))
+			st.doc = richtext.NewDocument(parsed)
 		} else {
-			st.doc.SetText(richtext.ParseMarkdown(src))
+			st.doc.SetText(parsed)
 		}
 		st.docVersion = st.doc.Version()
 	}
@@ -191,6 +425,9 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		reloadDoc(*source)
 	} else if !st.composing && *source != st.lastSerialized && *source != st.loadedSource {
 		// External update (e.g. AI generation or remote sync rebase on clean draft).
+		reloadDoc(*source)
+	} else if st.dark != dark && !st.composing && !st.sourceMode {
+		// Refresh attachment theme colors on light/dark theme switch.
 		reloadDoc(*source)
 	}
 	a.richDoc = st.doc
@@ -210,12 +447,26 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		}
 	}
 
+	insertMarkdownBlock := func(rawBlock string) {
+		syncRichToSource()
+		cur := strings.TrimRight(*source, "\r\n")
+		if cur == "" {
+			*source = rawBlock
+		} else {
+			*source = cur + "\n\n" + rawBlock
+		}
+		if onEdit != nil {
+			onEdit()
+		}
+		reloadDoc(*source)
+	}
+
 	root.Children(func() {
-		// Whisper-quiet, borderless icon-only formatting strip — no heavy gray box,
-		// no bulky text buttons, letting editorial Markdown typography lead.
+		// Whisper-quiet, borderless icon-only formatting strip — always active in
+		// WYSIWYG mode, even when the note contains tables or dividers.
 		toolbar := ui.Row(c.Key(key+"-toolbar")).MinHeight(26).Shrink(0).Padding(0, 2).Gap(1).Wrap().AlignItems(ui.Center)
 		toolbar.Children(func() {
-			if !st.sourceMode && !st.complexSyntax && !readOnly {
+			if !st.sourceMode && !readOnly {
 				f := st.doc.Formatting()
 				fmtBtn := func(id, tip string, active bool, icon *ui.SVG, actionFn func()) ui.Element {
 					btn := ui.ButtonBase(c.Key("fmt-"+id)).Label(tip).Tooltip(tip).Size(25, 25).Padding(0).Radius(5).Center().
@@ -266,6 +517,12 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 				fmtBtn("task", "待办清单", !f.ParagraphsMixed && f.Paragraph.List == richtext.Tasks, lucide.ListTodo(), func() { st.doc.ToggleList(richtext.Tasks) })
 				fmtBtn("quote", "引用", !f.ParagraphsMixed && f.Paragraph.Quote, lucide.Quote(), func() { st.doc.ToggleQuote() })
 				fmtBtn("codeblock", "代码块", !f.ParagraphsMixed && f.Paragraph.CodeBlock, lucide.SquareCode(), func() { st.doc.ToggleCodeBlock() })
+				fmtBtn("table", "插入表格", false, lucide.Table(), func() {
+					insertMarkdownBlock("| 阶段 | 内容 | 状态 |\n| --- | --- | --- |\n| 计划 | 核心事项 | 进行中 |")
+				})
+				fmtBtn("hr", "插入分隔线", false, lucide.Minus(), func() {
+					insertMarkdownBlock("---")
+				})
 
 				linkAnchor := fmtBtn("link", "插入链接 (⌘K)", f.Link != "", lucide.Link(), func() {
 					st.linkURL = f.Link
@@ -298,9 +555,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 						})
 					})
 				}
-			} else if st.complexSyntax && !st.sourceMode {
-				ui.Text(c, "包含表格或扩展语法 · 已启用无损渲染").FontSize(11).TextColor(t.TextSecondary).Padding(0, 4)
-			} else {
+			} else if st.sourceMode {
 				ui.Text(c, "Markdown 源码").FontSize(11).FontWeight(500).TextColor(t.TextSecondary).Padding(0, 4)
 			}
 
@@ -370,17 +625,6 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					}
 				}
 			})
-		} else if st.complexSyntax {
-			// Lossless rich surface for tasks containing GFM tables or custom HTML:
-			// preserves every byte until explicitly edited in source mode.
-			ui.Scroll(c.Key(key+"-complex-scroll")).Label("描述预览").Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(4, 2).Children(func() {
-				markdown.View(c, *source, &a.markdown)
-				if !readOnly {
-					appActionButton(c, "编辑源码", action.ButtonProps{Variant: action.Text, Size: theme.Small}).Margin(6, 0, 0, 0).OnClick(func() {
-						st.sourceMode = true
-					})
-				}
-			})
 		} else {
 			svc := c.Services()
 			pasteGuard := ui.Column(c.Key(key + "-rich-wrap")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Clip().
@@ -414,10 +658,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					if strings.TrimSpace(plain) == "" {
 						return
 					}
-					langs, complex := inspectMarkdownSource(plain)
-					if complex {
-						return
-					}
+					langs, _ := inspectMarkdownSource(plain)
 					if len(langs) > 0 {
 						st.fenceLangs = append(st.fenceLangs, langs...)
 					}
