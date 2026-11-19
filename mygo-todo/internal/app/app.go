@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -470,9 +471,10 @@ func (a *App) refresh() {
 	}
 	calZone := a.location().String()
 	epoch, ctx, win := a.epoch, a.ctx, a.win
+	prevSession := a.session
 	a.syncing = true
 	go func() {
-		reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 		finish := func(apply func()) {
 			if win == nil || win.IsDestroyed() {
@@ -500,7 +502,7 @@ func (a *App) refresh() {
 			})
 		}
 		var user api.User
-		authCtx, authCancel := context.WithTimeout(reqCtx, 6*time.Second)
+		authCtx, authCancel := context.WithTimeout(reqCtx, 20*time.Second)
 		authErr := client.Do(authCtx, "GET", "/auth/me", nil, &user, 0)
 		authCancel()
 		if authErr != nil {
@@ -583,13 +585,16 @@ func (a *App) refresh() {
 			return
 		}
 		state = updated
-		if err = a.store.SaveSession(session); err != nil {
-			if profileErr != nil {
+		if session.Server != prevSession.Server || session.Token != prevSession.Token {
+			if err = a.store.SaveSession(session); err != nil && profileErr != nil {
 				failed(profileErr)
 				return
 			}
-			failed(err)
-			return
+		} else if !reflect.DeepEqual(session.User, prevSession.User) {
+			if err = a.store.SaveSessionMetadata(session); err != nil && profileErr != nil {
+				failed(profileErr)
+				return
+			}
 		}
 		finish(func() {
 			a.session = session

@@ -133,11 +133,12 @@ func (a *App) startAutoSync() {
 						return
 					}
 					a.pollRemote(ctx)
-					if time.Now().Before(nextRefresh) {
+					offline := strings.HasPrefix(a.message, "连接中断")
+					if !offline && time.Now().Before(nextRefresh) {
 						return
 					}
 					nextRefresh = time.Now().Add(30 * time.Second)
-					needsFullSync := a.cache.SyncCursor == "" || a.cache.ProfileChanges != nil || len(a.cache.CategoryOutbox) > 0 || strings.HasPrefix(a.message, "连接中断")
+					needsFullSync := a.cache.SyncCursor == "" || a.cache.ProfileChanges != nil || len(a.cache.CategoryOutbox) > 0 || offline
 					if !needsFullSync {
 						return
 					}
@@ -148,7 +149,7 @@ func (a *App) startAutoSync() {
 							break
 						}
 					}
-					if ctx.Err() == nil && a.client != nil && !a.busy && !a.syncing && !a.quick.Open && !a.quickDraftDirty() && !a.search.Open && a.aiPanel == nil && a.aiConfigDraft == nil && a.aiPromptDraft == nil && a.aiDelete == nil && !a.accountEditing && !a.editing && !a.categoryEditing && !a.caldavEditing && !a.notifyEditing && a.deleteNotify == nil && a.taskCenter == nil && a.deleteCaldav == nil && a.selectedOccurrence == nil && a.calendarDetail == nil && a.deleteTask == nil && a.deleteCategory == nil && !a.discardProfile && a.discardCategoryID == nil && a.discardSyncID == nil && (a.page != "sync" || (!comparing && a.reauthPassword == "")) {
+					if ctx.Err() == nil && a.client != nil && !a.busy && !a.syncing && !a.quickDraftDirty() && a.aiPanel == nil && a.aiConfigDraft == nil && a.aiPromptDraft == nil && a.aiDelete == nil && !a.accountEditing && !a.categoryEditing && !a.caldavEditing && !a.notifyEditing && a.deleteNotify == nil && a.deleteCaldav == nil && a.deleteTask == nil && a.deleteCategory == nil && !a.discardProfile && a.discardCategoryID == nil && a.discardSyncID == nil && (a.page != "sync" || (!comparing && a.reauthPassword == "")) {
 						a.refresh()
 					}
 				})

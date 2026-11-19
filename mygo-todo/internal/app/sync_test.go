@@ -179,3 +179,35 @@ func TestUnreadableCacheCannotBeOverwrittenOrRemoved(t *testing.T) {
 		t.Fatal("unreadable outbox was overwritten or removed")
 	}
 }
+
+func TestOfflineStatusRecoversAfterRemoteCommitEvenWithPriorFailure(t *testing.T) {
+	s := storage.Store{Dir: t.TempDir()}
+	session := api.Session{Server: api.DefaultServer, Token: "cached", User: api.User{ID: 1, Username: "tester"}}
+	if err := s.SaveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	initial := storage.Cache{
+		Server:     api.DefaultServer,
+		UserID:     1,
+		SyncCursor: "v1:10",
+		Tasks:      []api.Task{{ID: 1, Title: "任务一", Status: "pending", Revision: 1}},
+	}
+	if err := s.SaveCache(initial); err != nil {
+		t.Fatal(err)
+	}
+	a := New(s)
+	defer a.Close()
+	a.failure = "无法连接 Todo 服务，请检查网络和服务地址"
+	a.setSyncFailure(errors.New("无法连接 Todo 服务，请检查网络和服务地址"))
+
+	updated := initial
+	updated.SyncCursor = "v1:11"
+	updated.Tasks = []api.Task{{ID: 1, Title: "任务一（已更新）", Status: "pending", Revision: 2}}
+	committed, err := a.commitRemoteChanges(updated, a.cacheGeneration)
+	if err != nil || !committed {
+		t.Fatalf("expected remote changes to commit: committed=%v err=%v", committed, err)
+	}
+	if strings.HasPrefix(a.message, "连接中断") || a.failure != "" {
+		t.Fatalf("expected offline status and prior failure to clear after successful remote commit, got message=%q failure=%q", a.message, a.failure)
+	}
+}

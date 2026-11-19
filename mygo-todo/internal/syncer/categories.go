@@ -268,7 +268,7 @@ func FlushCategories(ctx context.Context, client *api.Client, store storage.Stor
 		var response struct {
 			Category *api.Category `json:"category"`
 		}
-		requestCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		requestCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := client.DoOperation(requestCtx, "POST", "/categories/sync", payload, &response, 0, op.ID)
 		cancel()
 		var apiErr *api.Error

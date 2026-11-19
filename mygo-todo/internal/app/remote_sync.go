@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -19,11 +20,17 @@ func (a *App) pollRemote(ctx context.Context) {
 		return
 	}
 	state, client, generation, epoch, win := syncer.Clone(a.cache), a.client, a.cacheGeneration, a.epoch, a.win
+	wait := 20 * time.Second
+	if strings.HasPrefix(a.message, "连接中断") {
+		// Probe immediately when recovering from an offline / interrupted state
+		// instead of waiting 20s in a server long-poll hold.
+		wait = 0
+	}
 	a.remotePulling = true
 	go func() {
-		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		readCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
-		updated, err := readRemoteChanges(readCtx, client, state)
+		updated, err := readRemoteChangesWithWait(readCtx, client, state, wait)
 		if ctx.Err() != nil || win.IsDestroyed() {
 			return
 		}
@@ -44,6 +51,20 @@ func (a *App) pollRemote(ctx context.Context) {
 				return
 			}
 			if updated.SyncCursor == state.SyncCursor {
+				if strings.HasPrefix(a.message, "连接中断") || a.reauthRequired {
+					a.reauthRequired = false
+					a.failure = ""
+					if a.pendingChanges() > 0 {
+						a.message = "部分修改需要处理，请查看同步页面"
+					} else {
+						a.message = "已同步"
+					}
+					win.Invalidate()
+					if !a.syncing {
+						a.refresh()
+					}
+					return
+				}
 				// No remote changes arrived during long-poll: immediately re-arm
 				// without invalidating or rebuilding the UI tree.
 				a.pollRemote(ctx)
@@ -96,6 +117,10 @@ func (a *App) commitRemoteChanges(updated storage.Cache, generation uint64) (boo
 	externalDiff := !sameTaskRevisions(a.cache.Tasks, updated.Tasks, a.cache.LocalAckRevisions) ||
 		!reflect.DeepEqual(a.cache.Categories, updated.Categories)
 	a.adoptCache(updated)
+	a.reauthRequired = false
+	if strings.HasPrefix(a.message, "连接中断") {
+		a.failure = ""
+	}
 	if a.failure == "" {
 		if externalDiff {
 			a.message = "已接收其他设备的修改"
@@ -127,7 +152,11 @@ func sameTaskRevisions(prev, next []api.Task, ack map[int64]int64) bool {
 }
 
 func readRemoteChanges(ctx context.Context, client *api.Client, state storage.Cache) (storage.Cache, error) {
-	updated, err := syncer.PullTasks(ctx, client, state, 20*time.Second)
+	return readRemoteChangesWithWait(ctx, client, state, 20*time.Second)
+}
+
+func readRemoteChangesWithWait(ctx context.Context, client *api.Client, state storage.Cache, wait time.Duration) (storage.Cache, error) {
+	updated, err := syncer.PullTasks(ctx, client, state, wait)
 	if err != nil {
 		return state, err
 	}

@@ -116,7 +116,7 @@ func (a *App) scheduleTaskSync() {
 		if op.Method == "POST" {
 			path = "/tasks"
 		}
-		requestCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		requestCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		var task api.Task
 		err := client.DoOperation(requestCtx, op.Method, path, op.Body, &task, op.Revision, op.ID)

@@ -183,10 +183,9 @@ func (s Store) SaveSession(v api.Session) error {
 	}
 	key := sessionSecretKey(v.Server, v.User.ID)
 	if err := s.Secrets.Set(key, []byte(v.Token)); err != nil {
-		if errors.Is(err, errors.ErrUnsupported) {
-			return s.write("session.json", v)
-		}
-		return err
+		// Fall back to private 0600 session.json if the OS credential service is
+		// unavailable or rejects an ad-hoc upgraded binary's Keychain update ACL.
+		return s.write("session.json", v)
 	}
 	fileSession := v
 	fileSession.Token = ""
@@ -195,6 +194,21 @@ func (s Store) SaveSession(v api.Session) error {
 		return err
 	}
 	return nil
+}
+
+// SaveSessionMetadata updates non-secret user profile metadata in session.json
+// without re-writing the token in the system credential store when the token is unchanged.
+func (s Store) SaveSessionMetadata(v api.Session) error {
+	if s.Secrets == nil || v.Token == "" || v.Server == "" || v.User.ID == 0 {
+		return s.write("session.json", v)
+	}
+	var existing api.Session
+	if err := s.read("session.json", &existing); err == nil && existing.Token != "" {
+		return s.write("session.json", v)
+	}
+	fileSession := v
+	fileSession.Token = ""
+	return s.write("session.json", fileSession)
 }
 func (s Store) SaveCache(v Cache) error { return s.write("cache.json", v) }
 func (s Store) Cache(server string, userID int64) (Cache, error) {
