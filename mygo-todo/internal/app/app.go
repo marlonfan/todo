@@ -213,12 +213,27 @@ func New(store storage.Store) *App {
 	return a
 }
 
+func (a *App) mainWindowOptions(hidden bool) mygo.WindowOptions {
+	return mygo.WindowOptions{
+		Title:                "Todo Native",
+		Width:                1280,
+		Height:               800,
+		MinWidth:             900,
+		MinHeight:            600,
+		StateKey:             "main",
+		TitleBarStyle:        mygo.TitleBarHiddenInset,
+		TitleBarHeight:       windowTitleBarHeight,
+		TrafficLightPosition: &mygo.Point{X: trafficLightInsetX, Y: trafficLightInsetY},
+		AutoHideMenuBar:      true,
+		BackgroundColor:      windowBackgroundColor,
+		Hidden:               hidden,
+		Content:              ui.View(a.view),
+	}
+}
+
 func (a *App) Start() {
 	mygo.Theme.SetSource(themeSource(a.theme))
-	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: "Todo Native", Width: 1280, Height: 800, MinWidth: 900, MinHeight: 600, StateKey: "main",
-		Hidden: mygo.App.WasOpenedAtLogin(), Content: ui.View(a.view),
-	})
+	a.win = mygo.NewWindow(a.mainWindowOptions(mygo.App.WasOpenedAtLogin()))
 	a.win.OnClose(a.windowClosing)
 	a.setupMenus()
 	a.setupTray()

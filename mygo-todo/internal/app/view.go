@@ -48,7 +48,8 @@ func (a *App) view(c *ui.Context) {
 		ui.Column(c).Fill().MinWidth(0).MinHeight(0).Background(tokensOf(c).BgApp).Children(func() {
 			if a.failure != "" && !a.editing && a.selectedOccurrence == nil {
 				t := tokensOf(c)
-				ui.Row(c).Padding(8, 16).Gap(8).AlignItems(ui.Center).Background(t.Danger.Alpha(0.08)).BorderWidth(0, 0, 1, 0).BorderColor(t.Danger.Alpha(0.20)).Children(func() {
+				bannerChrome := toolbarChromeMetrics(c.TitleBar(), 16, width < sidebarBreakpoint, true)
+				ui.Row(c).Padding(8, bannerChrome.PadRight, 8, bannerChrome.PadLeft).Gap(8).AlignItems(ui.Center).Background(t.Danger.Alpha(0.08)).BorderWidth(0, 0, 1, 0).BorderColor(t.Danger.Alpha(0.20)).DragWindow().Children(func() {
 					ui.Text(c, a.failure).FontSize(12).TextColor(t.Danger).Grow(1).MinWidth(0).MaxLines(3)
 					iconButton(c, "关闭提示", lucide.X()).Size(24, 24).Padding(4).OnClick(func() { a.failure = "" })
 				})
@@ -88,16 +89,16 @@ func (a *App) view(c *ui.Context) {
 			}
 		})
 	}
-	if width >= 1180 {
+	if width >= sidebarBreakpoint {
 		a.sidebarWidth = fittedSidebarWidth(a.sidebarWidth)
-		if ui.Split(c.Key("workspace-navigation"), &a.sidebarWidth, func() { a.sidebar(c) }, content).SplitReset(sidebarDefaultWidth).Fill().Changed() {
+		if ui.Split(c.Key("workspace-navigation"), &a.sidebarWidth, func() { a.sidebarContent(c, false) }, content).SplitReset(sidebarDefaultWidth).Fill().Changed() {
 			a.sidebarWidth = fittedSidebarWidth(a.sidebarWidth)
 			a.rememberWorkspaceLayout()
 		}
 	} else {
 		content()
 	}
-	appDialog(c.Key("navigation-drawer"), &a.sidebarOverlay, func() { a.sidebar(c) }).Label("导航").Width(252).Height(min(680, height-64)).MaxWidthPercent(90).Padding(0)
+	appDialog(c.Key("navigation-drawer"), &a.sidebarOverlay, func() { a.sidebarContent(c, true) }).Label("导航").Width(252).Height(min(680, height-64)).MaxWidthPercent(90).Padding(0)
 	a.taskSearchPanel(c)
 	a.occurrenceView(c)
 	a.editorView(c)
@@ -118,48 +119,66 @@ func (a *App) view(c *ui.Context) {
 
 func (a *App) loginView(c *ui.Context) {
 	t := tokensOf(c)
-	ui.Column(c).Fill().Center().Padding(32).Background(t.BgSidebar).Children(func() {
-		elevateModal(c, ui.Column(c).Width(420).MaxWidthPercent(100).Padding(32).Gap(16).Radius(16).Background(t.BgElevated)).Children(func() {
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "Todo").FontSize(30).FontWeight(700).TextColor(t.TextPrimary)
-				ui.Text(c, "把注意力留给重要的事。").FontSize(14).TextColor(t.TextSecondary)
+	ui.Column(c).Fill().Background(t.BgSidebar).Children(func() {
+		ui.Box(c.Key("login-titlebar")).FillWidth().Height(loginTitleBarHeight(c.TitleBar())).Shrink(0).DragWindow()
+		ui.Column(c).Grow(1).FillWidth().Center().Padding(0, 32, 32, 32).Children(func() {
+			elevateModal(c, ui.Column(c).Width(420).MaxWidthPercent(100).Padding(32).Gap(16).Radius(16).Background(t.BgElevated)).Children(func() {
+				ui.Column(c).Gap(4).Children(func() {
+					ui.Text(c, "Todo").FontSize(30).FontWeight(700).TextColor(t.TextPrimary)
+					ui.Text(c, "把注意力留给重要的事。").FontSize(14).TextColor(t.TextSecondary)
+				})
+				ui.Box(c).Height(1).FillWidth().Margin(2, 0).Background(t.BorderSubtle)
+				ui.Field(c, "Todo 服务地址", func() { appInput(c.Key("server"), &a.server, "Todo 服务地址").Placeholder(api.DefaultServer) }).Description("连接服务端同步任务、日历与提醒。")
+				ui.Field(c, "用户名", func() { appInput(c.Key("username"), &a.username, "用户名").AutoFocus() })
+				if a.register {
+					ui.Field(c, "邮箱", func() { appInput(c.Key("email"), &a.email, "邮箱") })
+				}
+				ui.Field(c, "密码", func() { appInput(c.Key("password"), &a.password, "密码").Password().OnSubmit(a.login) })
+				if a.failure != "" {
+					ui.Text(c, a.failure).FontSize(12).TextColor(t.Danger)
+				}
+				label := "登录"
+				if a.register {
+					label = "注册并登录"
+				}
+				if a.busy {
+					label = "正在连接…"
+				}
+				primaryButton(c, label).Height(38).Disabled(a.busy).OnClick(a.login)
+				link := "创建账户"
+				if a.register {
+					link = "返回登录"
+				}
+				appButton(c, link, "ghost").Disabled(a.busy).OnClick(func() { a.register = !a.register; a.failure = "" })
+				ui.Text(c, "任务、日历与提醒，随时保持同步。").FontSize(12).TextColor(t.TextReadable).TextAlign(ui.Center)
 			})
-			ui.Box(c).Height(1).FillWidth().Margin(2, 0).Background(t.BorderSubtle)
-			ui.Field(c, "Todo 服务地址", func() { appInput(c.Key("server"), &a.server, "Todo 服务地址").Placeholder(api.DefaultServer) }).Description("连接服务端同步任务、日历与提醒。")
-			ui.Field(c, "用户名", func() { appInput(c.Key("username"), &a.username, "用户名").AutoFocus() })
-			if a.register {
-				ui.Field(c, "邮箱", func() { appInput(c.Key("email"), &a.email, "邮箱") })
-			}
-			ui.Field(c, "密码", func() { appInput(c.Key("password"), &a.password, "密码").Password().OnSubmit(a.login) })
-			if a.failure != "" {
-				ui.Text(c, a.failure).FontSize(12).TextColor(t.Danger)
-			}
-			label := "登录"
-			if a.register {
-				label = "注册并登录"
-			}
-			if a.busy {
-				label = "正在连接…"
-			}
-			primaryButton(c, label).Height(38).Disabled(a.busy).OnClick(a.login)
-			link := "创建账户"
-			if a.register {
-				link = "返回登录"
-			}
-			appButton(c, link, "ghost").Disabled(a.busy).OnClick(func() { a.register = !a.register; a.failure = "" })
-			ui.Text(c, "任务、日历与提醒，随时保持同步。").FontSize(12).TextColor(t.TextReadable).TextAlign(ui.Center)
 		})
 	})
 }
 
 func (a *App) sidebar(c *ui.Context) {
+	a.sidebarContent(c, false)
+}
+
+func (a *App) sidebarContent(c *ui.Context, inDrawer bool) {
 	t := tokensOf(c)
+	topH, topDraggable := sidebarTitleBarMetrics(c.TitleBar(), inDrawer)
+	accountTopMargin := float32(0)
+	if inDrawer {
+		accountTopMargin = 6
+	}
 	ui.Column(c).Fill().MinWidth(0).MinHeight(0).Background(t.BgSidebar).Children(func() {
-		// Keep the account in the app, below the native title bar.
+		if topH > 0 {
+			topStrip := ui.Box(c.Key("sidebar-titlebar")).FillWidth().Height(topH).Shrink(0)
+			if topDraggable {
+				topStrip.DragWindow()
+			}
+		}
+		// Keep the account in the app, seamlessly below the title-bar drag strip.
 		profileState := ui.Box(c.Key("profile-state")).Size(0, 0)
 		profileOpen := ui.Local(profileState, "open", func() bool { return false })
 		choice := appDropdown(c, profileOpen, []overlay.MenuItem{{Key: "account", Label: "账户设置", Icon: lucide.User()}, {Divider: true}, {Key: "logout", Label: "退出账户", Icon: lucide.LogOut(), Danger: true, Disabled: a.busy}}, func(trigger ui.Element) {
-			trigger.Label("账户菜单").Height(54).Margin(4, 8, 0, 8).Padding(6, 10).Radius(8).Gap(10).Justify(ui.Start)
+			trigger.Label("账户菜单").Height(54).Margin(accountTopMargin, 8, 0, 8).Padding(6, 10).Radius(8).Gap(10).Justify(ui.Start)
 			if trigger.Hovered() || *profileOpen {
 				trigger.Background(t.BgHover)
 			}
@@ -278,9 +297,10 @@ func (a *App) title() string {
 
 func (a *App) header(c *ui.Context) {
 	t := tokensOf(c)
-	ui.Row(c.Key("view-toolbar")).Height(toolbarHeight).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
+	chrome := a.windowToolbarMetrics(c, 16)
+	ui.Row(c.Key("view-toolbar")).Height(chrome.ToolbarHeight).Shrink(0).Padding(0, chrome.PadRight, 0, chrome.PadLeft).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).DragWindow().Children(func() {
 		width, _ := c.Size()
-		if width < 1180 {
+		if width < sidebarBreakpoint {
 			iconButton(c, "展开导航", lucide.PanelLeft()).OnClick(func() { a.sidebarOverlay = true })
 			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
 		}
@@ -479,6 +499,7 @@ func (a *App) taskDetailPanel(c *ui.Context, compact bool) {
 		} else if a.selectedOccurrence != nil {
 			a.occurrenceContent(c, compact)
 		} else {
+			ui.Box(c.Key("empty-detail-titlebar")).FillWidth().Height(emptyDetailTitleBarHeight(c.TitleBar())).Shrink(0).DragWindow()
 			ui.Column(c).Grow(1).Center().Padding(24).Gap(8).Children(func() {
 				appEmptyState(c, "选择一个任务", "在左侧列表中点击任务，查看或直接编辑内容。", "", nil)
 			})

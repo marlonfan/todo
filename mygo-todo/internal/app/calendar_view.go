@@ -79,7 +79,18 @@ func (a *App) calendarView(c *ui.Context) {
 
 	root := ui.Column(c.Key("calendar-content")).Grow(1).MinHeight(0).MinWidth(0).Background(t.BgApp)
 	effectiveWidth := a.calendarEffectiveWidth(c, root.Bounds())
-	compactToolbar := effectiveWidth < 760
+	bar := c.TitleBar()
+	touchesLeft := windowWidth < sidebarBreakpoint
+	touchesRight := !a.rightDetailPaneVisible(windowWidth)
+	barInsetX := float32(0)
+	if touchesLeft && bar.Left > 0 {
+		barInsetX += bar.Left
+	}
+	if touchesRight && bar.Right > 0 {
+		barInsetX += bar.Right
+	}
+	toolbarAvailWidth := effectiveWidth - barInsetX
+	compactToolbar := toolbarAvailWidth < 760
 
 	root.Children(func() {
 		toolbarPadX := float32(16)
@@ -88,10 +99,11 @@ func (a *App) calendarView(c *ui.Context) {
 			toolbarPadX = 12
 			toolbarGap = 5
 		}
+		chrome := toolbarChromeMetrics(bar, toolbarPadX, touchesLeft, touchesRight)
 
 		// Toolbar: [今天] < > 2026年 11月 v       (- +) [筛选] [日|周|月|日程] | (+)
-		ui.Row(c.Key("calendar-toolbar")).Height(toolbarHeight).Padding(0, toolbarPadX).Gap(toolbarGap).BorderWidth(0, 0, 1, 0).BorderColor(calendarGridLine(c)).AlignItems(ui.Center).Children(func() {
-			if windowWidth < 1180 {
+		ui.Row(c.Key("calendar-toolbar")).Height(chrome.ToolbarHeight).Shrink(0).Padding(0, chrome.PadRight, 0, chrome.PadLeft).Gap(toolbarGap).BorderWidth(0, 0, 1, 0).BorderColor(calendarGridLine(c)).AlignItems(ui.Center).DragWindow().Children(func() {
+			if windowWidth < sidebarBreakpoint {
 				iconButton(c, "展开导航", lucide.PanelLeft()).OnClick(func() { a.sidebarOverlay = true })
 			}
 
@@ -177,7 +189,7 @@ func (a *App) calendarView(c *ui.Context) {
 			ui.Spacer(c)
 
 			// Zoom control pill (Day/Week only when room permits)
-			if a.calendarMode < 2 && effectiveWidth >= 760 {
+			if a.calendarMode < 2 && toolbarAvailWidth >= 760 {
 				zoomStep := func(delta float64) {
 					oldZoom := max(40.0, a.calendarZoom)
 					topHour := float64(a.calendarScroll.Y) / oldZoom
@@ -586,7 +598,7 @@ func (a *App) calendarMonthView(c *ui.Context, events []api.CalendarEvent) {
 	})
 
 	nowStr := time.Now().In(a.location()).Format("2006-01-02")
-	estRowH := max(float32(72), (winHeight-float32(toolbarHeight)-28)/float32(rows))
+	estRowH := max(float32(72), (winHeight-max(float32(toolbarHeight), c.TitleBar().Height)-28)/float32(rows))
 
 	const (
 		monthHeaderH    = float32(24)
