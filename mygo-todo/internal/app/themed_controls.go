@@ -35,14 +35,14 @@ func appSegmented(c *ui.Context, selected *int, options []string, p action.Segme
 	track.Children(func() {
 		for i, option := range options {
 			seg := parts.Segment(i).Label(option).Height(height).PaddingX(padding).Radius(6).
-				FontSize(fontSize).FontWeight(500).Cursor(ui.CursorPointer).
+				FontSize(fontSize).FontWeight(fontWeightRegular).Cursor(ui.CursorPointer).
 				BorderWidth(0).TextColor(t.TextReadable).FocusRingColor(t.Accent)
 			if p.Block {
 				seg.Grow(1).Basis(0)
 			}
 			switch {
 			case i == *selected:
-				seg.Background(t.BgSelected).TextColor(t.TextPrimary).FontWeight(600)
+				elevateSegmentActive(c, seg).TextColor(t.TextPrimary).FontWeight(fontWeightSemibold)
 			case seg.Pressed():
 				seg.Background(t.BgSelected).TextColor(t.TextPrimary)
 			case seg.Hovered():
@@ -117,7 +117,7 @@ func appSearchBar(c *ui.Context, query *string, p field.SearchBarProps) ui.Eleme
 	if p.Variant == field.InputBorderless {
 		root.Background(ui.Transparent).BorderColor(ui.Transparent)
 	} else if input.Focused() {
-		root.Background(t.BgApp).BorderColor(t.Accent)
+		root.Background(t.BgElevated).BorderColor(t.Accent)
 	} else if root.Hovered() {
 		root.Background(t.BgHover)
 	}

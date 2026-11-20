@@ -5,38 +5,46 @@ import "github.com/egoist/mygo/ui"
 // designTokens is the shared semantic palette. Keep appearance-specific colors
 // here so every surface, including native controls, follows the same mapping.
 type designTokens struct {
-	BgApp, BgSidebar, BgList, BgSubtle, BgHover, BgSelected, BgTaskSelected ui.Color
-	TextPrimary, TextSecondary, TextTertiary, TextDecorative, TextReadable  ui.Color
-	BorderDefault, BorderSubtle                                             ui.Color
-	TextOnAccent                                                            ui.Color
-	Accent, AccentHover, Danger, Warning, Success                           ui.Color
+	BgApp, BgSidebar, BgList, BgElevated, BgSubtle, BgHover, BgSelected, BgTaskSelected ui.Color
+	TextPrimary, TextSecondary, TextTertiary, TextDecorative, TextReadable              ui.Color
+	BorderDefault, BorderSubtle, BorderCard, BorderPopup                                ui.Color
+	TextOnAccent                                                                        ui.Color
+	Accent, AccentHover, Danger, Warning, Success                                       ui.Color
+	ShadowContact, ShadowAmbient                                                        ui.Color
 }
 
-// Claude-inspired warm editorial palette: warm parchment ivory + terracotta in
-// light mode, warm espresso charcoal + coral terracotta in dark mode. Every
-// readable token maintains >= 4.5:1 WCAG contrast across all seven surfaces.
+// Warm editorial palette with a crisp three-tier canvas gradient:
+// Light: #F5F3EE (sidebar) -> #FAF9F6 (list) -> #FFFFFF (main canvas & cards).
+// Dark:  #181715 (sidebar) -> #1E1D1B (list) -> #232220 (main canvas).
+// Every readable token maintains >= 4.5:1 WCAG contrast across all surfaces.
 func tokensOf(c *ui.Context) designTokens {
 	if c.Theme().Dark {
 		return designTokens{
-			BgApp: ui.Hex("#21201E"), BgSidebar: ui.Hex("#191816"), BgList: ui.Hex("#21201E"),
-			BgSubtle: ui.Hex("#2A2926"), BgHover: ui.Hex("#33312D"), BgSelected: ui.Hex("#3B342E"), BgTaskSelected: ui.Hex("#2E2C28"),
-			TextPrimary: ui.Hex("#F0EEE6"), TextSecondary: ui.Hex("#B0ABA0"), TextTertiary: ui.Hex("#7E7A71"),
-			TextDecorative: ui.Hex("#7E7A71"), TextReadable: ui.Hex("#B5B0A4"),
-			BorderDefault: ui.Hex("#3A3833"), BorderSubtle: ui.Hex("#2D2B27"),
+			BgApp: ui.Hex("#232220"), BgSidebar: ui.Hex("#181715"), BgList: ui.Hex("#1E1D1B"),
+			BgElevated: ui.Hex("#33312E"), BgSubtle: ui.Hex("#2A2926"),
+			BgHover: ui.RGBA(255, 252, 245, 0.06), BgSelected: ui.RGBA(255, 252, 245, 0.10), BgTaskSelected: ui.Hex("#2A2926"),
+			TextPrimary: ui.Hex("#ECEAE4"), TextSecondary: ui.Hex("#A8A39A"), TextTertiary: ui.Hex("#7D7870"),
+			TextDecorative: ui.Hex("#7D7870"), TextReadable: ui.Hex("#B6B1A7"),
+			BorderDefault: ui.Hex("#3C3A35"), BorderSubtle: ui.Hex("#2F2D29"),
+			BorderCard: ui.RGBA(255, 252, 245, 0.08), BorderPopup: ui.RGBA(255, 252, 245, 0.11),
 			TextOnAccent: ui.Hex("#191816"),
-			Accent:       ui.Hex("#D97757"), AccentHover: ui.Hex("#E38A6C"),
-			Danger: ui.Hex("#E57368"), Warning: ui.Hex("#DFA055"), Success: ui.Hex("#6BBF8A"),
+			Accent:       ui.Hex("#D67E60"), AccentHover: ui.Hex("#E08E72"),
+			Danger: ui.Hex("#DC7C73"), Warning: ui.Hex("#D6A061"), Success: ui.Hex("#72B58D"),
+			ShadowContact: ui.RGBA(0, 0, 0, 0.34), ShadowAmbient: ui.RGBA(0, 0, 0, 0.48),
 		}
 	}
 	return designTokens{
-		BgApp: ui.Hex("#FAF9F5"), BgSidebar: ui.Hex("#F0EEE6"), BgList: ui.Hex("#FAF9F5"),
-		BgSubtle: ui.Hex("#F4F2EB"), BgHover: ui.Hex("#E8E5DC"), BgSelected: ui.Hex("#E5DFD3"), BgTaskSelected: ui.Hex("#EFECE2"),
-		TextPrimary: ui.Hex("#141413"), TextSecondary: ui.Hex("#5F5B53"), TextTertiary: ui.Hex("#858178"),
-		TextDecorative: ui.Hex("#858178"), TextReadable: ui.Hex("#57534C"),
-		BorderDefault: ui.Hex("#DEDAD0"), BorderSubtle: ui.Hex("#EBE8DF"),
-		TextOnAccent: ui.Hex("#FAF9F5"),
-		Accent:       ui.Hex("#C96442"), AccentHover: ui.Hex("#B55333"),
-		Danger: ui.Hex("#C84337"), Warning: ui.Hex("#C4792B"), Success: ui.Hex("#3D7F58"),
+		BgApp: ui.Hex("#FFFFFF"), BgSidebar: ui.Hex("#F5F3EE"), BgList: ui.Hex("#FAF9F6"),
+		BgElevated: ui.Hex("#FFFFFF"), BgSubtle: ui.Hex("#F2F0EA"),
+		BgHover: ui.RGBA(28, 25, 23, 0.04), BgSelected: ui.RGBA(28, 25, 23, 0.06), BgTaskSelected: ui.Hex("#FFFFFF"),
+		TextPrimary: ui.Hex("#2C2A29"), TextSecondary: ui.Hex("#646058"), TextTertiary: ui.Hex("#8B867D"),
+		TextDecorative: ui.Hex("#8B867D"), TextReadable: ui.Hex("#5A564F"),
+		BorderDefault: ui.Hex("#E3DFD6"), BorderSubtle: ui.Hex("#EEECE6"),
+		BorderCard: ui.RGBA(28, 25, 23, 0.08), BorderPopup: ui.RGBA(28, 25, 23, 0.10),
+		TextOnAccent: ui.Hex("#FFFFFF"),
+		Accent:       ui.Hex("#C46849"), AccentHover: ui.Hex("#B0573A"),
+		Danger: ui.Hex("#BE524B"), Warning: ui.Hex("#A46B2F"), Success: ui.Hex("#4A7D62"),
+		ShadowContact: ui.RGBA(28, 25, 23, 0.06), ShadowAmbient: ui.RGBA(28, 25, 23, 0.10),
 	}
 }
 
@@ -53,16 +61,76 @@ func applyAppTheme(c *ui.Context) {
 	palette.AccentText = t.TextOnAccent
 	palette.Inverse, palette.InverseText = t.TextPrimary, t.BgApp
 	palette.Danger, palette.Warning, palette.Success = t.Danger, t.Warning, t.Success
-	palette.Selection, palette.Focus = t.Accent.Alpha(0.18), t.Accent
+	palette.Selection, palette.Focus = t.Accent.Alpha(0.16), t.Accent
 	palette.Radius, palette.Spacing, palette.FontSize, palette.Font = controlRadius, spaceUnit, fontBody, ""
 	c.SetTheme(&palette)
 }
 
-// Flat, architectural surfaces with crisp 1px borders — zero drop shadows.
+// Layered soft elevation for floating popovers, menus, and date/time pickers.
 func elevatePopup(c *ui.Context, e ui.Element) ui.Element {
-	return e.Border(1, tokensOf(c).BorderDefault)
+	t := tokensOf(c)
+	if c.Theme().Dark {
+		return e.Border(1, t.BorderPopup).
+			Shadow(0, 2, 6, 0, t.ShadowContact).
+			Shadow(0, 12, 28, -4, t.ShadowAmbient)
+	}
+	return e.Border(1, t.BorderPopup).
+		Shadow(0, 1, 3, 0, t.ShadowContact).
+		Shadow(0, 8, 20, -4, t.ShadowAmbient).
+		Shadow(0, 18, 36, -8, ui.RGBA(28, 25, 23, 0.07))
 }
 
+// Layered soft elevation for modal dialogs and auth cards.
 func elevateModal(c *ui.Context, e ui.Element) ui.Element {
-	return e.Border(1, tokensOf(c).BorderDefault)
+	t := tokensOf(c)
+	if c.Theme().Dark {
+		return e.Border(1, t.BorderPopup).
+			Shadow(0, 4, 12, 0, ui.RGBA(0, 0, 0, 0.42)).
+			Shadow(0, 20, 48, -8, ui.RGBA(0, 0, 0, 0.56))
+	}
+	return e.Border(1, t.BorderPopup).
+		Shadow(0, 2, 6, 0, t.ShadowContact).
+		Shadow(0, 16, 40, -8, ui.RGBA(28, 25, 23, 0.12)).
+		Shadow(0, 28, 60, -12, ui.RGBA(28, 25, 23, 0.08))
+}
+
+// Subtle floating card elevation for selected task cards and highlighted items.
+func elevateCard(c *ui.Context, e ui.Element) ui.Element {
+	t := tokensOf(c)
+	e.Background(t.BgTaskSelected).Border(1, t.BorderCard)
+	if c.Theme().Dark {
+		return e.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.28))
+	}
+	return e.Shadow(0, 1, 2, 0, ui.RGBA(28, 25, 23, 0.05)).
+		Shadow(0, 3, 8, -2, ui.RGBA(28, 25, 23, 0.04))
+}
+
+// Crisp tactile elevation for active segmented control pills.
+func elevateSegmentActive(c *ui.Context, e ui.Element) ui.Element {
+	t := tokensOf(c)
+	e.Background(t.BgElevated).Border(1, t.BorderCard)
+	if c.Theme().Dark {
+		return e.Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.30))
+	}
+	return e.Shadow(0, 1, 2, 0, ui.RGBA(28, 25, 23, 0.07)).
+		Shadow(0, 0.5, 1, 0, ui.RGBA(28, 25, 23, 0.04))
+}
+
+// Soft leftward ambient separation for side slide-over drawers.
+func elevateDrawer(c *ui.Context, e ui.Element) ui.Element {
+	t := tokensOf(c)
+	e.BorderWidth(0, 0, 0, 1).BorderColor(t.BorderSubtle)
+	if c.Theme().Dark {
+		return e.Shadow(-8, 0, 24, -4, ui.RGBA(0, 0, 0, 0.40))
+	}
+	return e.Shadow(-6, 0, 20, -4, ui.RGBA(28, 25, 23, 0.06))
+}
+
+// softenAccentColor tempers saturated user category colors into warm editorial tones.
+func softenAccentColor(c *ui.Context, raw ui.Color) ui.Color {
+	t := tokensOf(c)
+	if c.Theme().Dark {
+		return raw.Mix(t.TextPrimary, 0.16)
+	}
+	return raw.Mix(t.TextSecondary, 0.22)
 }

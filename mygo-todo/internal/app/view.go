@@ -119,7 +119,7 @@ func (a *App) view(c *ui.Context) {
 func (a *App) loginView(c *ui.Context) {
 	t := tokensOf(c)
 	ui.Column(c).Fill().Center().Padding(32).Background(t.BgSidebar).Children(func() {
-		elevateModal(c, ui.Column(c).Width(420).MaxWidthPercent(100).Padding(32).Gap(16).Radius(16).Background(t.BgApp).Border(1, t.BorderSubtle)).Children(func() {
+		elevateModal(c, ui.Column(c).Width(420).MaxWidthPercent(100).Padding(32).Gap(16).Radius(16).Background(t.BgElevated)).Children(func() {
 			ui.Column(c).Gap(4).Children(func() {
 				ui.Text(c, "Todo").FontSize(30).FontWeight(700).TextColor(t.TextPrimary)
 				ui.Text(c, "把注意力留给重要的事。").FontSize(14).TextColor(t.TextSecondary)
@@ -195,7 +195,7 @@ func (a *App) sidebar(c *ui.Context) {
 			ui.SidebarSection(c, "清单", nil, func() {
 				for _, cat := range a.categories {
 					id := "category:" + strconv.FormatInt(cat.ID, 10)
-					item := a.sidebarEntry(c, id, cat.Name, strings.TrimSpace(cat.Emoji), lucide.Folder())
+					item := a.sidebarCategoryEntry(c, id, cat.Name, strings.TrimSpace(cat.Emoji), strings.TrimSpace(cat.Color), lucide.Folder())
 					item.Children(func() { countBadge(c, a.pageCount(id)) })
 					a.taskCategoryTarget(c, item, cat)
 					item.Label(strings.TrimSpace(cat.Emoji + " " + cat.Name))
@@ -287,14 +287,27 @@ func (a *App) header(c *ui.Context) {
 		ui.Text(c, a.title()).FontSize(15).FontWeight(600).TextColor(t.TextPrimary).SingleLine().MinWidth(0).Grow(1).Tooltip(a.title())
 		if isTaskWorkspacePage(a.page) {
 			count := len(a.searchResults())
-			ui.Text(c, fmt.Sprint(count)).Label(fmt.Sprintf("%d 个任务", count)).FontSize(11).FontFeatures("tnum").
-				TextColor(t.TextSecondary).Background(t.BgSubtle).Padding(2, 7).Radius(10)
-			searchLabel := "搜索任务"
-			if a.search.Return {
-				searchLabel = "返回搜索"
+			if isHistoryPage(a.page) {
+				total := a.pageCount(a.page)
+				badgeText := fmt.Sprint(count)
+				badgeLabel := fmt.Sprintf("%d 个任务", count)
+				if total > 0 && count < total {
+					badgeText = fmt.Sprintf("%d / %d", count, total)
+					badgeLabel = fmt.Sprintf("已筛选 %d / 共 %d 项", count, total)
+				}
+				ui.Text(c, badgeText).Label(badgeLabel).FontSize(fontAux).FontWeight(fontWeightMedium).FontFeatures("tnum").
+					TextColor(t.TextSecondary).Background(t.BgSubtle).Padding(2, 7).Radius(10)
+				iconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
+			} else {
+				ui.Text(c, fmt.Sprint(count)).Label(fmt.Sprintf("%d 个任务", count)).FontSize(fontAux).FontWeight(fontWeightMedium).FontFeatures("tnum").
+					TextColor(t.TextSecondary).Background(t.BgSubtle).Padding(2, 7).Radius(10)
+				searchLabel := "搜索任务"
+				if a.search.Return {
+					searchLabel = "返回搜索"
+				}
+				iconButton(c, searchLabel, lucide.Search()).OnClick(a.openTaskSearch)
+				iconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
 			}
-			iconButton(c, searchLabel, lucide.Search()).OnClick(a.openTaskSearch)
-			iconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
 		}
 	})
 }
@@ -518,7 +531,15 @@ func (a *App) taskListPane(c *ui.Context) {
 			}
 			a.revealTaskID = 0
 		}
+		hasMoreRow := a.history.HasMore
+		rowCount := len(displayRows)
+		if hasMoreRow {
+			rowCount++
+		}
 		a.list.Key = func(i int) any {
+			if hasMoreRow && i == len(displayRows) {
+				return "history-more"
+			}
 			item := displayRows[i]
 			if item.isHeader {
 				return item.headerKey
@@ -526,21 +547,25 @@ func (a *App) taskListPane(c *ui.Context) {
 			return a.stableTaskKey(item.task)
 		}
 		t := tokensOf(c)
-		list = ui.List(c, &a.list, len(displayRows), func(i int) {
+		list = ui.List(c, &a.list, rowCount, func(i int) {
+			if hasMoreRow && i == len(displayRows) {
+				a.historyMoreButton(c)
+				return
+			}
 			item := displayRows[i]
 			if item.isHeader {
-				topPad := float32(10)
+				topPad := float32(8)
 				if i == 0 {
-					topPad = 4
+					topPad = 2
 				}
-				ui.Row(c).FillWidth().Padding(topPad, 10, 4, 10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, item.title).FontSize(11.5).FontWeight(600).TextColor(t.TextSecondary).Grow(1)
-					ui.Text(c, fmt.Sprint(item.count)).FontSize(11).FontFeatures("tnum").TextColor(t.TextTertiary)
+				ui.Row(c).FillWidth().Padding(topPad, 10, 2, 10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, item.title).FontSize(11.5).FontWeight(fontWeightSemibold).TextColor(t.TextSecondary).Grow(1)
+					ui.Text(c, fmt.Sprint(item.count)).FontSize(fontAux).FontFeatures("tnum").TextColor(t.TextTertiary)
 				})
 				return
 			}
 			rowControlOwnsKeys = a.taskListItem(c, item.task, now) || rowControlOwnsKeys
-		}).Label("任务列表").Padding(2, 6).Grow(1).MinHeight(0)
+		}).Label("任务列表").Padding(4, 8).Grow(1).MinHeight(0)
 		scrollTaskIntoView = func(idx int) {
 			if idx >= 0 && idx < len(taskToRow) {
 				a.list.ScrollIntoView(taskToRow[idx])
@@ -559,7 +584,7 @@ func (a *App) taskListPane(c *ui.Context) {
 		a.list.Key = func(i int) any { return a.stableTaskKey(tasks[i]) }
 		list = ui.List(c, &a.list, len(tasks), func(i int) {
 			rowControlOwnsKeys = a.taskListItem(c, tasks[i], now) || rowControlOwnsKeys
-		}).Label("任务列表").Padding(2, 6).Grow(1).MinHeight(0)
+		}).Label("任务列表").Padding(4, 8).Grow(1).MinHeight(0)
 		scrollTaskIntoView = func(idx int) { a.list.ScrollIntoView(idx) }
 	}
 
@@ -587,7 +612,6 @@ func (a *App) taskListPane(c *ui.Context) {
 			a.openTask(tasks[0])
 		})
 	}
-	a.historyMoreButton(c)
 }
 
 func taskPrimaryTime(task api.Task) *time.Time {
@@ -600,15 +624,17 @@ func taskPrimaryTime(task api.Task) *time.Time {
 func (a *App) historyMoreButton(c *ui.Context) {
 	if (a.page == "completed" || a.page == "cancelled" || a.page == "skipped") && a.history.HasMore {
 		t := tokensOf(c)
-		ui.Row(c).Padding(6, 12, 12, 12).Justify(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Padding(8, 12, 12, 12).Justify(ui.Center).Children(func() {
 			more := ui.ButtonBase(c.Key("history-more")).Label("加载更多重复任务历史").
-				Height(28).Padding(0, 12).Radius(14).Center().Cursor(ui.CursorPointer).
-				Background(t.BgSubtle).Border(1, t.BorderSubtle).Disabled(a.busy).OnClick(a.loadMoreHistory)
+				Height(28).Padding(0, 12).Radius(7).Center().Cursor(ui.CursorPointer).
+				Background(ui.Transparent).Border(1, t.BorderSubtle).Disabled(a.busy).OnClick(a.loadMoreHistory)
+			fg := t.TextSecondary
 			if more.Hovered() {
-				more.Background(t.BgHover)
+				more.Background(t.BgHover).BorderColor(t.BorderDefault)
+				fg = t.TextPrimary
 			}
 			more.Children(func() {
-				ui.Text(c, "加载更多重复任务历史").FontSize(11.5).FontWeight(500).TextColor(t.TextSecondary)
+				ui.Text(c, "加载更多重复任务历史").FontSize(11.5).FontWeight(fontWeightRegular).TextColor(fg)
 			})
 		})
 	}

@@ -8,6 +8,9 @@ const (
 	fontBody              = 13
 	fontProperty          = 12
 	fontAux               = 11
+	fontWeightRegular     = 400
+	fontWeightMedium      = 500
+	fontWeightSemibold    = 600
 	spaceUnit             = 4
 	sidebarDefaultWidth   = 248
 	taskListDefaultWidth  = 360

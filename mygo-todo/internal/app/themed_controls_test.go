@@ -51,7 +51,7 @@ func TestSemanticControlsPaintNativeSurfacesAndPreserveInput(t *testing.T) {
 			if !ok {
 				t.Fatal("missing native option")
 			}
-			assertPixel(segment.Bounds.X+4, segment.Bounds.Y+segment.Bounds.H/2, palette.BgSelected)
+			assertPixel(segment.Bounds.X+4, segment.Bounds.Y+segment.Bounds.H/2, palette.BgElevated)
 			if err := tt.Click("问答历史"); err != nil {
 				t.Fatal(err)
 			}

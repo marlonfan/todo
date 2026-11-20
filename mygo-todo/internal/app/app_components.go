@@ -146,15 +146,15 @@ func iconButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
 // A hidden count still returns an element so callers can safely assign refs.
 func countBadge(c *ui.Context, count int) ui.Element {
 	t := tokensOf(c)
-	return ui.Text(c, strconv.Itoa(count)).Hidden(count <= 0).FontSize(11).FontWeight(500).FontFeatures("tnum").
-		TextColor(t.TextReadable).Radius(5).Padding(1, 6).Shrink(0)
+	return ui.Text(c, strconv.Itoa(count)).Hidden(count <= 0).FontSize(fontAux).FontWeight(fontWeightRegular).FontFeatures("tnum").
+		TextColor(t.TextSecondary).Radius(5).Padding(1, 6).Shrink(0)
 }
 
 // Keep SidebarItem's selection, type-to-select and tree semantics.
 func (a *App) sidebarEntry(c *ui.Context, id, title, emoji string, icon *ui.SVG) ui.Element {
 	t := tokensOf(c)
 	selected := a.page == id
-	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(13).FontWeight(400).Label(title)
+	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(fontBody).FontWeight(fontWeightRegular).Label(title)
 	item.OnClick(func() {
 		if selected {
 			a.sidebarOverlay = false
@@ -165,16 +165,69 @@ func (a *App) sidebarEntry(c *ui.Context, id, title, emoji string, icon *ui.SVG)
 	if item.Hovered() {
 		item.Background(t.BgHover)
 	}
-	if a.page == id {
-		item.Background(t.BgSelected).FontWeight(600)
+	if selected {
+		item.Background(t.BgSelected).FontWeight(fontWeightSemibold)
 		iconColor = t.Accent
 	}
 	item.Children(func() {
 		ui.Column(c.Key("identity")).Absolute().Start(11).Top(0).Bottom(0).Width(18).Center().Children(func() {
 			if emoji != "" {
-				ui.Text(c, emoji).FontSize(15).SingleLine()
+				opacity := float32(0.80)
+				if selected {
+					opacity = 0.94
+				}
+				ui.Text(c, emoji).FontSize(12.5).Opacity(opacity).SingleLine()
 			} else if icon != nil {
-				ui.Icon(c, icon).Size(16, 16).TextColor(iconColor)
+				ui.Icon(c, icon).Size(15, 15).TextColor(iconColor)
+			}
+		})
+	})
+	return item
+}
+
+// sidebarCategoryEntry renders category items with a restrained editorial color dot
+// instead of full-saturation system color emoji, keeping visual harmony with the
+// monochrome navigation icons above and below.
+func (a *App) sidebarCategoryEntry(c *ui.Context, id, title, emoji, colorHex string, fallbackIcon *ui.SVG) ui.Element {
+	t := tokensOf(c)
+	selected := a.page == id
+	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(fontBody).FontWeight(fontWeightRegular).Label(title)
+	item.OnClick(func() {
+		if selected {
+			a.sidebarOverlay = false
+		}
+	})
+	item.TextColor(t.TextPrimary).Background(ui.Transparent)
+	if item.Hovered() {
+		item.Background(t.BgHover)
+	}
+	if selected {
+		item.Background(t.BgSelected).FontWeight(fontWeightSemibold)
+	}
+	hasColor := validCategoryColor(colorHex)
+	item.Children(func() {
+		ui.Column(c.Key("identity")).Absolute().Start(11).Top(0).Bottom(0).Width(18).Center().Children(func() {
+			if hasColor {
+				dotColor := softenAccentColor(c, ui.Hex(colorHex))
+				if selected {
+					ui.Box(c).Size(14, 14).Radius(7).Background(dotColor.Alpha(0.16)).Center().AccessHidden(true).Children(func() {
+						ui.Box(c).Size(7.5, 7.5).Radius(3.75).Background(dotColor).AccessHidden(true)
+					})
+				} else {
+					ui.Box(c).Size(7.5, 7.5).Radius(3.75).Background(dotColor).AccessHidden(true)
+				}
+			} else if emoji != "" {
+				opacity := float32(0.78)
+				if selected {
+					opacity = 0.94
+				}
+				ui.Text(c, emoji).FontSize(12.5).Opacity(opacity).SingleLine()
+			} else if fallbackIcon != nil {
+				iconColor := t.TextSecondary
+				if selected {
+					iconColor = t.Accent
+				}
+				ui.Icon(c, fallbackIcon).Size(15, 15).TextColor(iconColor)
 			}
 		})
 	})

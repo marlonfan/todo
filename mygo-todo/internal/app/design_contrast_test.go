@@ -45,7 +45,19 @@ func TestReadableTokenContrast(t *testing.T) {
 				palette, native = tokensOf(c), *c.Theme()
 			}, 200, 100)
 			tt.SetDark(dark)
-			backgrounds := map[string]ui.Color{"app": palette.BgApp, "sidebar": palette.BgSidebar, "list": palette.BgList, "subtle": palette.BgSubtle, "hover": palette.BgHover, "selected": palette.BgSelected, "task-selected": palette.BgTaskSelected}
+			backgrounds := map[string]ui.Color{
+				"app":                 palette.BgApp,
+				"sidebar":             palette.BgSidebar,
+				"list":                palette.BgList,
+				"elevated":            palette.BgElevated,
+				"subtle":              palette.BgSubtle,
+				"task-selected":       palette.BgTaskSelected,
+				"hover-on-app":        palette.BgHover.Over(palette.BgApp),
+				"hover-on-sidebar":    palette.BgHover.Over(palette.BgSidebar),
+				"selected-on-app":     palette.BgSelected.Over(palette.BgApp),
+				"selected-on-sidebar": palette.BgSelected.Over(palette.BgSidebar),
+				"selected-on-subtle":  palette.BgSelected.Over(palette.BgSubtle),
+			}
 			readable := map[string]ui.Color{"primary": palette.TextPrimary, "readable/empty/placeholder": palette.TextReadable, "native placeholder/sync helper": native.TextMuted}
 			for role, fg := range readable {
 				for surface, bg := range backgrounds {
@@ -53,19 +65,23 @@ func TestReadableTokenContrast(t *testing.T) {
 					if ratio < 4.5 {
 						t.Errorf("%s on %s = %.4f:1, want >= 4.5", role, surface, ratio)
 					}
-					if role == "readable/empty/placeholder" && surface == "selected" {
-						t.Logf("readable on selected = %.4f:1", ratio)
+					if role == "readable/empty/placeholder" && surface == "selected-on-sidebar" {
+						t.Logf("readable on selected-on-sidebar = %.4f:1", ratio)
 					}
 				}
 			}
 			if readableContrast(palette.TextSecondary, palette.BgApp) < 4.5 {
 				t.Fatal("secondary text must remain readable on the main surface")
 			}
-			// Weak/decorative color follows the new brief. Reading-required
-			// empty values and placeholders use TextReadable independently.
-			wantDecorative := ui.Hex("#858178")
+			// Verify three-tier canvas gradient: sidebar -> list -> main canvas are distinct and monotonic.
+			if palette.BgSidebar == palette.BgList || palette.BgList == palette.BgApp {
+				t.Fatalf("three-tier canvas surfaces must be visually distinct: sidebar=%+v list=%+v app=%+v", palette.BgSidebar, palette.BgList, palette.BgApp)
+			}
+			// Weak/decorative color follows the latest warm editorial palette.
+			// Reading-required empty values and placeholders use TextReadable independently.
+			wantDecorative := ui.Hex("#8B867D")
 			if dark {
-				wantDecorative = ui.Hex("#7E7A71")
+				wantDecorative = ui.Hex("#7D7870")
 			}
 			if palette.TextDecorative != wantDecorative {
 				t.Fatal("decorative token does not match the latest semantic palette")

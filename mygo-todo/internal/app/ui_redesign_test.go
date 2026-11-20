@@ -192,6 +192,54 @@ func TestUIRedesignEndToEndAndVisuals(t *testing.T) {
 	trayTester := ui.NewTester(a.trayFlyoutView, 328, 420)
 	trayTester.Frame()
 	savePreviewPNG(t, dir, "12-tray-flyout-light.png", trayTester)
+	trayTester.SetDark(true)
+	trayTester.Frame()
+	savePreviewPNG(t, dir, "13-tray-flyout-dark.png", trayTester)
+}
+
+func TestTrayHeaderWeekdayAndTaskTitleAlignment(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	cases := []struct {
+		date    time.Time
+		primary string
+		wantDay string
+	}{
+		{time.Date(2026, 11, 15, 9, 0, 0, 0, loc), "11月15日", "周日"},
+		{time.Date(2026, 11, 16, 9, 0, 0, 0, loc), "11月16日", "周一"},
+		{time.Date(2026, 11, 18, 9, 0, 0, 0, loc), "11月18日", "周三"},
+		{time.Date(2026, 11, 20, 9, 0, 0, 0, loc), "11月20日", "周五"},
+		{time.Date(2026, 11, 21, 9, 0, 0, 0, loc), "11月21日", "周六"},
+	}
+	for _, tc := range cases {
+		primary, secondary := trayHeaderDateParts(tc.date)
+		if primary != tc.primary || !strings.HasPrefix(secondary, tc.wantDay) {
+			t.Fatalf("trayHeaderDateParts(%s) = (%q, %q), want (%q, prefix %q)", tc.date.Format("2006-01-02"), primary, secondary, tc.primary, tc.wantDay)
+		}
+	}
+
+	now := time.Now().In(loc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, loc)
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.client, _ = api.New(api.DefaultServer, "")
+	a.session.User = api.User{ID: 1, Username: "marlon", Timezone: "Asia/Shanghai"}
+	a.adoptCache(storage.Cache{
+		Server: api.DefaultServer, UserID: 1, SavedAt: now,
+		Tasks: []api.Task{
+			{ID: 1, Title: "高优先级对齐测试任务", Status: "pending", Priority: 1, StartTime: &today},
+			{ID: 2, Title: "普通优先级对齐测试任务", Status: "pending", Priority: 0, StartTime: &today},
+		},
+	})
+	tt := ui.NewTester(a.trayFlyoutView, 328, 420)
+	tt.Frame()
+	highTitle, ok1 := tt.Find("高优先级对齐测试任务")
+	normalTitle, ok2 := tt.Find("普通优先级对齐测试任务")
+	if !ok1 || !ok2 {
+		t.Fatalf("missing tray task titles: high=%t normal=%t texts=%v", ok1, ok2, tt.Texts())
+	}
+	if highTitle.X != normalTitle.X {
+		t.Fatalf("tray task titles misaligned by priority indicator: high.X=%.2f normal.X=%.2f", highTitle.X, normalTitle.X)
+	}
 }
 
 func TestAntiFlickerSyncAndStableRowGeometry(t *testing.T) {

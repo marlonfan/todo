@@ -325,6 +325,41 @@ func (a *App) openTaskFromTray(task api.Task) {
 	}
 }
 
+// weekdayLabel maps Go's Sunday-first time.Weekday (0=Sun..6=Sat) onto the
+// Monday-first Chinese weekday table (0=周一..6=周日).
+func weekdayLabel(wd time.Weekday) string {
+	return weekdays[(int(wd)+6)%7]
+}
+
+// trayHeaderDateParts formats the menu bar popover header into primary date
+// (e.g. "11月18日") and secondary weekday + lunar caption (e.g. "周三 · 十月初十").
+func trayHeaderDateParts(now time.Time) (string, string) {
+	primary := now.Format("1月2日")
+	secondary := weekdayLabel(now.Weekday())
+	if l, ok := solarToLunar(now); ok {
+		secondary += " · " + l.MonthLabel() + l.DayLabel()
+	}
+	return primary, secondary
+}
+
+func trayHeaderIconButton(c *ui.Context, key, label string, icon *ui.SVG, disabled bool, onClick func()) {
+	t := tokensOf(c)
+	btn := ui.ButtonBase(c.Key(key)).Label(label).Tooltip(label).
+		Size(26, 26).Radius(6).Center().Cursor(ui.CursorPointer).
+		Disabled(disabled).FocusRingColor(t.Accent).OnClick(onClick)
+	fg := t.TextSecondary
+	if btn.Pressed() {
+		btn.Background(t.BgSelected)
+		fg = t.TextPrimary
+	} else if btn.Hovered() {
+		btn.Background(t.BgHover)
+		fg = t.TextPrimary
+	}
+	btn.Children(func() {
+		ui.Icon(c, icon).Size(14, 14).TextColor(fg).AccessHidden(true)
+	})
+}
+
 func (a *App) trayFlyoutView(c *ui.Context) {
 	applyAppTheme(c)
 	t := tokensOf(c)
@@ -333,15 +368,15 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 		a.trayTab = "today"
 	}
 
-	// Clean, zero-shadow Apple-style popover container with a 1px hairline border
-	root := ui.Column(c.Key("tray-flyout-root")).Label("顶部状态栏任务面板").Fill().Padding(12, 14, 10, 14).Gap(8).Radius(11).
-		Background(t.BgApp).Border(1, t.BorderSubtle).Clip()
+	// Clean Apple-style popover container on bright main surface with hairline rim.
+	root := ui.Column(c.Key("tray-flyout-root")).Label("顶部状态栏任务面板").Fill().Padding(12, 14, 8, 14).Gap(8).Radius(11).
+		Background(t.BgApp).Border(1, t.BorderPopup).Clip()
 
 	root.Children(func() {
 		if a.client == nil {
 			ui.Column(c).Grow(1).Center().Gap(10).Padding(20).Children(func() {
-				ui.Text(c, "Todo").FontSize(15).FontWeight(600).TextColor(t.TextPrimary)
-				ui.Text(c, "登录账户后即可在菜单栏查看并完成今日待办。").FontSize(12).TextColor(t.TextSecondary).TextAlign(ui.Center)
+				ui.Text(c, "Todo").FontSize(15).FontWeight(fontWeightSemibold).TextColor(t.TextPrimary)
+				ui.Text(c, "登录账户后即可在菜单栏查看并完成今日待办。").FontSize(12).FontWeight(fontWeightRegular).TextColor(t.TextSecondary).TextAlign(ui.Center)
 				appButton(c, "打开主窗口", "primary").Height(28).OnClick(func() {
 					a.closeTrayFlyout()
 					a.Show()
@@ -355,23 +390,29 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 		upcomingTasks := a.interactionTasks(projected, "upcoming", "", now)
 		allTasks := a.interactionTasks(projected, "all", "", now)
 
-		// 1. Minimal Apple-style Header: Date & Lunar on the left, quiet icon actions on the right
-		ui.Row(c.Key("tray-header")).Height(24).Shrink(0).AlignItems(ui.Center).Gap(6).Children(func() {
-			dateLine := fmt.Sprintf("%s %s", now.Format("1月2日"), weekdays[int(now.Weekday())])
-			if l, ok := solarToLunar(now); ok {
-				dateLine += " · " + l.MonthLabel() + l.DayLabel()
-			}
-			ui.Text(c, dateLine).FontSize(13).FontWeight(600).TextColor(t.TextPrimary).SingleLine().Grow(1).MinWidth(0)
+		// 1. Editorial Apple-style Header: Date + Weekday/Lunar on left, optically matched linear icons on right.
+		ui.Row(c.Key("tray-header")).Height(26).Shrink(0).AlignItems(ui.Center).Gap(6).Children(func() {
+			primaryDate, secondaryDate := trayHeaderDateParts(now)
+			ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Baseline).Children(func() {
+				ui.Text(c, primaryDate).FontSize(13.5).FontWeight(fontWeightSemibold).FontFeatures("tnum").TextColor(t.TextPrimary).SingleLine().Shrink(0)
+				ui.Text(c, secondaryDate).FontSize(11.5).FontWeight(fontWeightRegular).TextColor(t.TextSecondary).SingleLine().Grow(1).MinWidth(0)
+			})
 
-			iconButton(c, "刷新菜单栏任务", lucide.RefreshCw()).Size(24, 24).Padding(5).Disabled(a.busy || a.syncing).OnClick(a.refresh)
-			iconButton(c, "打开 Todo 主窗口", lucide.ArrowUpRight()).Size(24, 24).Padding(5).OnClick(func() {
-				a.closeTrayFlyout()
-				a.Show()
+			ui.Row(c).Gap(2).AlignItems(ui.Center).Shrink(0).Children(func() {
+				trayHeaderIconButton(c, "tray-refresh", "刷新菜单栏任务", lucide.RefreshCw(), a.busy || a.syncing, a.refresh)
+				trayHeaderIconButton(c, "tray-open-main", "打开 Todo 主窗口", lucide.ExternalLink(), false, func() {
+					a.closeTrayFlyout()
+					a.Show()
+				})
 			})
 		})
 
-		// 2. Native Apple Segmented Pill Switcher: [今日 | 最近7天 | 全部]
-		ui.Row(c.Key("tray-tabs")).Height(28).Shrink(0).Padding(2).Gap(2).Radius(7).Background(t.BgSubtle).AlignItems(ui.Center).Children(func() {
+		// 2. Tactile Apple Segmented Pill Switcher: [今日 | 最近7天 | 全部]
+		trackBg := t.BgSubtle
+		if c.Theme().Dark {
+			trackBg = t.BgSidebar
+		}
+		ui.Row(c.Key("tray-tabs")).Height(30).Shrink(0).Padding(2.5).Gap(2).Radius(8).Background(trackBg).AlignItems(ui.Center).Children(func() {
 			for _, tab := range []struct {
 				id, title string
 				count     int
@@ -383,24 +424,27 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 				active := a.trayTab == tab.id
 				tabID := tab.id
 				btn := ui.ButtonBase(c.Key("tray-tab-" + tab.id)).Label("菜单栏切换" + tab.title).
-					Grow(1).Basis(0).FillHeight().Radius(5.5).Center().Cursor(ui.CursorPointer).
+					Grow(1).Basis(0).FillHeight().Radius(6).Center().Cursor(ui.CursorPointer).
 					OnClick(func() { a.trayTab = tabID })
 				fg := t.TextSecondary
+				countCol := t.TextTertiary
 				if active {
-					btn.Background(t.BgApp)
+					elevateSegmentActive(c, btn)
 					fg = t.TextPrimary
+					countCol = t.TextSecondary
 				} else if btn.Hovered() {
+					btn.Background(t.BgHover)
 					fg = t.TextReadable
 				}
 				btn.Children(func() {
-					ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
-						weight := 500
+					ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+						weight := fontWeightRegular
 						if active {
-							weight = 600
+							weight = fontWeightSemibold
 						}
-						ui.Text(c, tab.title).FontSize(11.5).FontWeight(weight).TextColor(fg)
+						ui.Text(c, tab.title).FontSize(11.5).FontWeight(weight).TextColor(fg).SingleLine()
 						if tab.count > 0 {
-							ui.Text(c, fmt.Sprint(tab.count)).FontSize(10.5).FontFeatures("tnum").TextColor(t.TextTertiary)
+							ui.Text(c, fmt.Sprint(tab.count)).FontSize(10.5).FontWeight(fontWeightRegular).FontFeatures("tnum").TextColor(countCol).SingleLine()
 						}
 					})
 				})
@@ -409,10 +453,10 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 
 		// 3. Understated Single-Line Quick Capture
 		hasTitle := strings.TrimSpace(a.trayQuickTitle) != ""
-		quickRow := ui.Row(c.Key("tray-quick-add")).Label("菜单栏快捷添加区").Height(34).Shrink(0).Padding(0, 8).Gap(6).Radius(7).
-			AlignItems(ui.Center).Background(t.BgSubtle.Alpha(0.75))
+		quickRow := ui.Row(c.Key("tray-quick-add")).Label("菜单栏快捷添加区").Height(34).Shrink(0).Padding(0, 9).Gap(6).Radius(7).
+			AlignItems(ui.Center).Background(t.BgSubtle.Alpha(0.75)).Border(1, ui.Transparent)
 		if a.trayQuickInput.Focused(c) {
-			quickRow.Background(t.BgSubtle).Border(1, t.BorderDefault)
+			quickRow.Background(t.BgElevated).BorderColor(t.BorderDefault)
 		}
 		quickRow.Children(func() {
 			iconCol := t.TextTertiary
@@ -422,10 +466,10 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 			ui.Icon(c, lucide.Plus()).Size(13.5, 13.5).TextColor(iconCol).Shrink(0).AccessHidden(true)
 			ui.TextInputBase(c.Key("tray-quick-input"), &a.trayQuickTitle).Ref(&a.trayQuickInput).
 				Label("菜单栏快捷添加").Placeholder("添加任务…").PlaceholderColor(t.TextTertiary).
-				FontSize(12.5).Grow(1).MinWidth(0).MinHeight(24).Disabled(a.busy).OnSubmit(a.submitTrayQuickTask)
+				FontSize(12.5).FontWeight(fontWeightRegular).Grow(1).MinWidth(0).MinHeight(24).Disabled(a.busy).OnSubmit(a.submitTrayQuickTask)
 			smart := a.previewSmartInput(a.trayQuickTitle)
 			if smart.HasTime || smart.HasPriority {
-				ui.Text(c, smartSummaryText(smart)).FontSize(10.5).FontWeight(500).TextColor(t.Accent).SingleLine().Shrink(0)
+				ui.Text(c, smartSummaryText(smart)).FontSize(10.5).FontWeight(fontWeightMedium).TextColor(t.Accent).SingleLine().Shrink(0)
 			}
 			if hasTitle {
 				addBtn := ui.ButtonBase(c.Key("tray-quick-submit")).Label("菜单栏添加任务").Tooltip("创建任务 (Enter)").
@@ -437,7 +481,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 			}
 		})
 
-		// 4. Airy, Borderless Task List (Apple Reminders / Things 3 aesthetic)
+		// 4. Airy, Borderless Task List with strictly flush left-aligned titles.
 		var visibleTasks []api.Task
 		switch a.trayTab {
 		case "upcoming":
@@ -455,23 +499,23 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 					if a.trayTab != "today" {
 						emptyTitle = "暂无待办任务"
 					}
-					ui.Text(c, emptyTitle).FontSize(12.5).FontWeight(500).TextColor(t.TextSecondary)
+					ui.Text(c, emptyTitle).FontSize(12.5).FontWeight(fontWeightRegular).TextColor(t.TextSecondary)
 				})
 				return
 			}
 			for _, item := range visibleTasks {
 				task := item
 				row := ui.Row(c.Key("tray-row-"+a.stableTaskKey(task))).Label("菜单栏任务行 "+task.Title).
-					Height(36).Shrink(0).Padding(0, 6).Gap(6).Radius(6).AlignItems(ui.Center)
+					Height(36).Shrink(0).Padding(0, 6).Gap(7).Radius(6).AlignItems(ui.Center)
 				if row.Hovered() {
 					row.Background(t.BgHover)
 				}
 				row.Children(func() {
 					done := task.Status == "completed"
-					ui.Checkbox(c.Key("tray-done-"+a.stableTaskKey(task)), &done, "").
-						Size(22, 22).Justify(ui.Center).AlignItems(ui.Center).
-						Label("菜单栏完成 " + task.Title).
-						Disabled(task.ReadOnly || (task.Recurring() && task.InstanceID == "")).
+					disabled := task.ReadOnly || (task.Recurring() && task.InstanceID == "")
+					cb := ui.CheckboxBase(c.Key("tray-done-"+a.stableTaskKey(task)), &done).
+						Size(22, 22).Center().Cursor(ui.CursorPointer).FocusRingColor(t.Accent).
+						Label("菜单栏完成 " + task.Title).Disabled(disabled).
 						OnChange(func() {
 							status := "pending"
 							if done {
@@ -482,6 +526,31 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 								a.win.Invalidate()
 							}
 						})
+					cb.Children(func() {
+						boxBg := t.BgApp
+						boxBorder := t.TextTertiary.Alpha(0.55)
+						var borderW float32 = 1.35
+						if done {
+							boxBg, boxBorder = t.Accent, t.Accent
+							borderW = 1.4
+						} else if task.Priority > 0 {
+							boxBg = t.Accent.Alpha(0.08)
+							boxBorder = t.Accent
+							borderW = 1.5
+							if cb.Hovered() {
+								boxBg = t.Accent.Alpha(0.16)
+							}
+						} else if task.Priority < 0 {
+							boxBorder = t.TextTertiary.Alpha(0.45)
+						} else if cb.Hovered() {
+							boxBorder = t.TextSecondary
+						}
+						ui.Box(c).Size(15, 15).Radius(4.5).Center().Background(boxBg).Border(borderW, boxBorder).AccessHidden(true).Children(func() {
+							if done {
+								ui.Icon(c, lucide.Check()).Size(10, 10).TextColor(t.TextOnAccent).AccessHidden(true)
+							}
+						})
+					})
 
 					openBtn := ui.ButtonBase(c.Key("tray-open-"+a.stableTaskKey(task))).
 						Label("菜单栏打开 "+task.Title).Tooltip(task.Title).
@@ -489,10 +558,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 						OnClick(func() { a.openTaskFromTray(task) })
 					openBtn.Children(func() {
 						ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
-							if task.Priority > 0 {
-								ui.Box(c).Size(5, 5).Radius(2.5).Background(t.Accent).Shrink(0).AccessHidden(true)
-							}
-							titleTxt := ui.Text(c, task.Title).FontSize(12.5).TextColor(t.TextPrimary).SingleLine().Grow(1).MinWidth(0)
+							titleTxt := ui.Text(c, task.Title).FontSize(12.5).FontWeight(fontWeightRegular).TextColor(t.TextPrimary).SingleLine().Grow(1).MinWidth(0)
 							if done {
 								titleTxt.Strikethrough().TextColor(t.TextTertiary)
 							}
@@ -513,7 +579,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 								if overdue {
 									timeCol = t.Danger
 								}
-								ui.Text(c, timeLabel).FontSize(11).FontFeatures("tnum").TextColor(timeCol).Shrink(0)
+								ui.Text(c, timeLabel).FontSize(11).FontWeight(fontWeightRegular).FontFeatures("tnum").TextColor(timeCol).Shrink(0)
 							}
 						})
 					})
@@ -521,47 +587,52 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 			}
 		})
 
-		// 5. Whisper-Quiet Footer
-		ui.Row(c.Key("tray-footer")).Height(24).Shrink(0).Padding(2, 2, 0, 2).AlignItems(ui.Center).Gap(6).
-			BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle.Alpha(0.6)).Children(func() {
+		// 5. Balanced, Quiet Footer with clear action hierarchy.
+		ui.Row(c.Key("tray-footer")).Height(30).Shrink(0).Padding(6, 2, 0, 2).AlignItems(ui.Center).Gap(4).
+			BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle).Children(func() {
 			modeBtn := ui.ButtonBase(c.Key("tray-title-mode")).Label("切换顶部状态栏显示模式").
 				Tooltip("点击切换状态栏文字：下一项任务 / 今日数量 / 仅图标").
-				Height(20).Padding(0, 4).Radius(4).Center().Cursor(ui.CursorPointer).
+				Height(22).Padding(0, 6).Radius(5).Center().Cursor(ui.CursorPointer).
 				OnClick(a.cycleTrayTitleMode)
 			modeCol := t.TextTertiary
 			if modeBtn.Hovered() {
+				modeBtn.Background(t.BgHover)
 				modeCol = t.TextSecondary
 			}
 			modeBtn.Children(func() {
-				ui.Text(c, "状态栏: "+trayTitleModeLabel(a.trayTitleMode)).FontSize(10.5).TextColor(modeCol).SingleLine()
+				ui.Text(c, "状态栏 · "+trayTitleModeLabel(a.trayTitleMode)).FontSize(10.5).FontWeight(fontWeightRegular).TextColor(modeCol).SingleLine()
 			})
 
 			ui.Spacer(c)
 
-			mainBtn := ui.ButtonBase(c.Key("tray-main-win")).Label("显示主窗口").Height(20).Padding(0, 5).Radius(4).Center().Cursor(ui.CursorPointer).
+			mainBtn := ui.ButtonBase(c.Key("tray-main-win")).Label("显示主窗口").Height(22).Padding(0, 7).Radius(5).Center().Cursor(ui.CursorPointer).
 				OnClick(func() {
 					a.closeTrayFlyout()
 					a.Show()
 				})
 			mainCol := t.TextSecondary
 			if mainBtn.Hovered() {
+				mainBtn.Background(t.BgHover)
 				mainCol = t.TextPrimary
 			}
 			mainBtn.Children(func() {
-				ui.Text(c, "打开 Todo").FontSize(11).FontWeight(500).TextColor(mainCol)
+				ui.Text(c, "打开 Todo").FontSize(11.5).FontWeight(fontWeightMedium).TextColor(mainCol).SingleLine()
 			})
 
-			quitBtn := ui.ButtonBase(c.Key("tray-quit")).Label("退出应用").Height(20).Padding(0, 4).Radius(4).Center().Cursor(ui.CursorPointer).
+			ui.Box(c).Size(1, 11).Background(t.BorderDefault.Alpha(0.75)).Shrink(0).AccessHidden(true)
+
+			quitBtn := ui.ButtonBase(c.Key("tray-quit")).Label("退出应用").Height(22).Padding(0, 6).Radius(5).Center().Cursor(ui.CursorPointer).
 				OnClick(func() {
 					a.closeTrayFlyout()
 					mygo.App.Quit()
 				})
 			quitCol := t.TextTertiary
 			if quitBtn.Hovered() {
-				quitCol = t.TextSecondary
+				quitBtn.Background(t.Danger.Alpha(0.08))
+				quitCol = t.Danger
 			}
 			quitBtn.Children(func() {
-				ui.Text(c, "退出").FontSize(11).TextColor(quitCol)
+				ui.Text(c, "退出").FontSize(11.5).FontWeight(fontWeightRegular).TextColor(quitCol).SingleLine()
 			})
 		})
 	})

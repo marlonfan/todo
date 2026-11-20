@@ -13,10 +13,10 @@ import (
 // can attach Placeholder, OnChange, Error and Ref to the returned element.
 func appInput(c *ui.Context, value *string, label string) ui.Element {
 	t := tokensOf(c)
-	e := ui.TextInput(c, value).Label(label).MinHeight(32).FontSize(13).Radius(controlRadius).
+	e := ui.TextInput(c, value).Label(label).MinHeight(32).FontSize(fontBody).FontWeight(fontWeightRegular).Radius(controlRadius).
 		Background(t.BgSubtle).Border(1, t.BorderSubtle).TextColor(t.TextPrimary).PlaceholderColor(t.TextReadable).FocusRingColor(t.Accent)
 	if e.Focused() {
-		e.Background(t.BgApp).BorderColor(t.Accent)
+		e.Background(t.BgElevated).BorderColor(t.Accent)
 	} else if e.Hovered() {
 		e.BorderColor(t.BorderDefault)
 	}
@@ -24,12 +24,12 @@ func appInput(c *ui.Context, value *string, label string) ui.Element {
 }
 
 func appCheckbox(c *ui.Context, value *bool, label string) ui.Element {
-	return ui.Checkbox(c, value, label).FontSize(13).TextColor(tokensOf(c).TextPrimary).FocusRingColor(tokensOf(c).Accent)
+	return ui.Checkbox(c, value, label).FontSize(fontBody).FontWeight(fontWeightRegular).TextColor(tokensOf(c).TextPrimary).FocusRingColor(tokensOf(c).Accent)
 }
 
 func appBadge(c *ui.Context, label string) ui.Element {
 	t := tokensOf(c)
-	return ui.Text(c, label).SingleLine().FontSize(11).FontWeight(500).Padding(2, 7).
+	return ui.Text(c, label).SingleLine().FontSize(fontAux).FontWeight(fontWeightMedium).FontFeatures("tnum").Padding(2, 7).
 		Radius(5).TextColor(t.TextReadable).Background(t.BgSubtle)
 }
 
@@ -37,9 +37,9 @@ func appBadge(c *ui.Context, label string) ui.Element {
 func appEmptyState(c *ui.Context, title, description, actionLabel string, onClick func()) ui.Element {
 	t := tokensOf(c)
 	return ui.Column(c).Padding(28).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(t.TextPrimary)
+		ui.Text(c, title).FontSize(14).FontWeight(fontWeightSemibold).TextColor(t.TextPrimary)
 		if description != "" {
-			ui.Text(c, description).FontSize(12).TextColor(t.TextSecondary).TextAlign(ui.Center).MaxWidth(280)
+			ui.Text(c, description).FontSize(12).FontWeight(fontWeightRegular).TextColor(t.TextSecondary).TextAlign(ui.Center).MaxWidth(280)
 		}
 		if actionLabel != "" && onClick != nil {
 			appButton(c, actionLabel, "secondary").Margin(4, 0, 0, 0).OnClick(onClick)
@@ -51,7 +51,7 @@ func appEmptyState(c *ui.Context, title, description, actionLabel string, onClic
 func appDialog(c *ui.Context, open *bool, content func()) ui.Element {
 	t := tokensOf(c)
 	return elevateModal(c, ui.Modal(c, open, content).Radius(dialogRadius).Padding(24).Gap(16).
-		Background(t.BgApp).Border(1, t.BorderSubtle).MaxWidthPercent(95))
+		Background(t.BgElevated).MaxWidthPercent(95))
 }
 
 func sameCalendarDay(a, b time.Time) bool {
@@ -148,11 +148,17 @@ func appCalendar(c *ui.Context, date *time.Time, label string) bool {
 							OnClick(func() { *lunarMode = item.isLunar })
 						fg := t.TextSecondary
 						if active {
-							pill.Background(t.BgApp)
+							elevateSegmentActive(c, pill)
 							fg = t.TextPrimary
+						} else if pill.Hovered() {
+							fg = t.TextReadable
 						}
 						pill.Children(func() {
-							ui.Text(c, item.text).FontSize(10.5).FontWeight(500).TextColor(fg).SingleLine()
+							weight := fontWeightRegular
+							if active {
+								weight = fontWeightMedium
+							}
+							ui.Text(c, item.text).FontSize(10.5).FontWeight(weight).TextColor(fg).SingleLine()
 						})
 					}
 				})
@@ -304,7 +310,7 @@ func appDatePickerField(c *ui.Context, date *time.Time, label string, onChange f
 		if *open {
 			ui.PopoverBase(c.Key("pop-"+label), anchor, open, func(panel ui.Element) {
 				panel.AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart)
-				elevatePopup(c, panel.Padding(12).Width(272).Radius(popoverRadius).Background(t.BgApp).Label("选择"+label))
+				elevatePopup(c, panel.Padding(12).Width(272).Radius(popoverRadius).Background(t.BgElevated).Label("选择"+label))
 				panel.Children(func() {
 					if appCalendar(c, date, "日历"+label) {
 						*open = false
