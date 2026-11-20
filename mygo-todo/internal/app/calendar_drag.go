@@ -120,7 +120,12 @@ func calendarDragChange(task api.Task, drag calendarDrag, day time.Time, minute 
 			change.End = &end
 		}
 	case allDayTarget:
-		moved, change.AllDay = dayStart(day), true
+		if drag.Event.AllDay {
+			moved = dayStart(start).AddDate(0, 0, civilDays(day, drag.FromDay))
+		} else {
+			moved = dayStart(day)
+		}
+		change.AllDay = true
 	default:
 		target := dayStart(start).AddDate(0, 0, civilDays(day, drag.FromDay))
 		moved, err = calendarWallTime(target, start.Hour()*60+start.Minute(), start)
@@ -213,6 +218,35 @@ func (a *App) calendarDragSource(e ui.Element, event api.CalendarEvent, day time
 		}
 	}
 	e.Drag(calendarDrag{Event: event, FromDay: day, Revision: task.Revision, Resize: resize, GrabMinutes: grab}).Cursor(ui.CursorGrab)
+	if e.Pressed() || e.Dragging() {
+		a.calendarDragging = true
+	}
+}
+
+func (a *App) calendarSpanDragSource(e ui.Element, span allDaySpan) {
+	task, err := a.calendarTask(span.Event)
+	if err != nil || a.busy {
+		return
+	}
+	fromDay := span.AnchorDay
+	if span.Span > 1 {
+		key := eventKey(span.Event) + "/span/" + span.AnchorDay.Format("20060102")
+		if e.PressedInside() && e.Pressed() {
+			w := e.Bounds().W
+			offset := 0
+			if w > 0 {
+				px, _, _ := e.PointerPosition()
+				offset = int(px / (w / float32(span.Span)))
+				offset = max(0, min(span.Span-1, offset))
+			}
+			a.calendarGrab = calendarGrab{Key: key, Minutes: float64(offset)}
+		}
+		if a.calendarGrab.Key == key {
+			offset := max(0, min(span.Span-1, int(a.calendarGrab.Minutes)))
+			fromDay = span.AnchorDay.AddDate(0, 0, offset)
+		}
+	}
+	e.Drag(calendarDrag{Event: span.Event, FromDay: fromDay, Revision: task.Revision, Resize: false, GrabMinutes: 0}).Cursor(ui.CursorGrab)
 	if e.Pressed() || e.Dragging() {
 		a.calendarDragging = true
 	}

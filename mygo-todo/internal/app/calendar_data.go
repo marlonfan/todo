@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo/ui/markdown/parser"
 	"todo-native/internal/api"
 	"todo-native/internal/storage"
 	"todo-native/internal/syncer"
@@ -453,4 +454,194 @@ func timelineSegments(events []api.CalendarEvent, day time.Time) []calendarSegme
 		group = tail + 1
 	}
 	return result
+}
+
+type allDaySpan struct {
+	Event          api.CalendarEvent
+	StartCol       int
+	Span           int
+	Lane           int
+	ContinuesLeft  bool
+	ContinuesRight bool
+	AnchorDay      time.Time
+	EndDay         time.Time
+}
+
+// allDaySpansForRange packs all-day events overlapping [rowStart, rowStart+cols)
+// into non-overlapping horizontal lanes so multi-day banners render as continuous
+// ribbons across columns in both Month and Week views.
+func allDaySpansForRange(events []api.CalendarEvent, rowStart time.Time, cols int) ([]allDaySpan, int) {
+	if cols <= 0 {
+		return nil, 0
+	}
+	base := dayStart(rowStart)
+	loc := base.Location()
+	var spans []allDaySpan
+	for _, ev := range events {
+		if !ev.AllDay {
+			continue
+		}
+		s, e, err := eventBounds(ev, loc)
+		if err != nil {
+			continue
+		}
+		evStart := dayStart(s)
+		evEnd := dayStart(e)
+		if !e.Equal(evEnd) || !evEnd.After(evStart) {
+			evEnd = evEnd.AddDate(0, 0, 1)
+		}
+		startCol := civilDays(evStart, base)
+		endCol := civilDays(evEnd, base)
+		if endCol <= 0 || startCol >= cols {
+			continue
+		}
+		clampedStart := max(0, startCol)
+		clampedEnd := min(cols, endCol)
+		if clampedEnd <= clampedStart {
+			continue
+		}
+		spans = append(spans, allDaySpan{
+			Event:          ev,
+			StartCol:       clampedStart,
+			Span:           clampedEnd - clampedStart,
+			ContinuesLeft:  startCol < 0,
+			ContinuesRight: endCol > cols,
+			AnchorDay:      base.AddDate(0, 0, clampedStart),
+			EndDay:         base.AddDate(0, 0, clampedEnd-1),
+		})
+	}
+	slices.SortStableFunc(spans, func(a, b allDaySpan) int {
+		if a.StartCol != b.StartCol {
+			return a.StartCol - b.StartCol
+		}
+		if a.Span != b.Span {
+			return b.Span - a.Span
+		}
+		return strings.Compare(eventKey(a.Event), eventKey(b.Event))
+	})
+	var laneEnds []int
+	for i := range spans {
+		lane := 0
+		for lane < len(laneEnds) && laneEnds[lane] > spans[i].StartCol {
+			lane++
+		}
+		endCol := spans[i].StartCol + spans[i].Span
+		if lane == len(laneEnds) {
+			laneEnds = append(laneEnds, endCol)
+		} else {
+			laneEnds[lane] = endCol
+		}
+		spans[i].Lane = lane
+	}
+	return spans, len(laneEnds)
+}
+
+func timedEventsForDay(events []api.CalendarEvent, day time.Time) []api.CalendarEvent {
+	all := eventsForDay(events, day)
+	var result []api.CalendarEvent
+	for _, ev := range all {
+		if !ev.AllDay {
+			result = append(result, ev)
+		}
+	}
+	return result
+}
+
+// multiDayEventInfo returns 1-based day position and inclusive date bounds for
+// multi-day all-day events so Agenda view distinguishes each day clearly.
+func multiDayEventInfo(event api.CalendarEvent, day time.Time) (dayIndex, totalDays int, startDay, endDay time.Time, ok bool) {
+	if !event.AllDay {
+		return 0, 0, time.Time{}, time.Time{}, false
+	}
+	s, e, err := eventBounds(event, day.Location())
+	if err != nil {
+		return 0, 0, time.Time{}, time.Time{}, false
+	}
+	startDay = dayStart(s)
+	endExclusive := dayStart(e)
+	if !e.Equal(endExclusive) || !endExclusive.After(startDay) {
+		endExclusive = endExclusive.AddDate(0, 0, 1)
+	}
+	totalDays = civilDays(endExclusive, startDay)
+	if totalDays < 2 {
+		return 0, 0, time.Time{}, time.Time{}, false
+	}
+	endDay = endExclusive.AddDate(0, 0, -1)
+	dayIndex = civilDays(dayStart(day), startDay) + 1
+	dayIndex = min(totalDays, max(1, dayIndex))
+	return dayIndex, totalDays, startDay, endDay, true
+}
+
+// agendaSummaryText produces a clean single-line summary from Markdown for the
+// Agenda view without concatenating headings, checklists, and table cells with
+// noisy " · " separators. Plain single-paragraph descriptions keep identical
+// plain text so single-line truncation works without altering source data.
+func agendaSummaryText(src string) string {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return ""
+	}
+	d := parser.New(parser.Default)
+	d.Set(src)
+
+	var firstBody, firstFallback string
+	var walk func(parent int, insideList bool)
+	walk = func(parent int, insideList bool) {
+		for idx := range d.Children(parent) {
+			if firstBody != "" {
+				return
+			}
+			b := d.Block(idx)
+			switch b.Kind {
+			case parser.Table:
+				continue
+			case parser.Paragraph:
+				txt := strings.TrimSpace(parser.PlainText(d.Inlines(idx)))
+				if txt == "" {
+					continue
+				}
+				if !insideList {
+					firstBody = txt
+					return
+				}
+				if firstFallback == "" {
+					firstFallback = txt
+				}
+			case parser.Heading:
+				txt := strings.TrimSpace(parser.PlainText(d.Inlines(idx)))
+				if txt != "" && firstFallback == "" {
+					firstFallback = txt
+				}
+			case parser.CodeBlock:
+				if firstFallback == "" {
+					if txt := strings.TrimSpace(d.Lines(idx)); txt != "" {
+						first, _, _ := strings.Cut(txt, "\n")
+						firstFallback = strings.TrimSpace(first)
+					}
+				}
+			case parser.List, parser.Item:
+				walk(idx, true)
+			default:
+				walk(idx, insideList)
+			}
+		}
+	}
+	walk(0, false)
+
+	if firstBody != "" {
+		return firstBody
+	}
+	return firstFallback
+}
+
+func (a *App) calendarEventSelected(event api.CalendarEvent) bool {
+	if event.ExtendedProps.ReadOnly {
+		return a.calendarDetail != nil && eventKey(*a.calendarDetail) == eventKey(event)
+	}
+	if a.selectedOccurrence != nil {
+		return a.selectedOccurrence.ID == event.ExtendedProps.TaskID &&
+			a.selectedOccurrence.InstanceID != "" &&
+			a.selectedOccurrence.InstanceID == event.ExtendedProps.InstanceID
+	}
+	return a.editing && a.draft.Task.ID != 0 && a.draft.Task.ID == event.ExtendedProps.TaskID
 }

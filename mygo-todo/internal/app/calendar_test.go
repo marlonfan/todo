@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -337,5 +338,283 @@ func TestNativeTimelineFillsWorkspaceAfterResize(t *testing.T) {
 	last, lastOK := tt.AccessByRole(ui.RoleButton, "在 2026-11-15 10:00 添加日程")
 	if !ok || !lastOK || last.Bounds.X+last.Bounds.W < 1500 || first.Bounds.W < 149 {
 		t.Fatal("week canvas does not fill wide window", first, last)
+	}
+}
+
+func TestAllDaySpansPackingAndCrossWeekContinuations(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	week1 := time.Date(2026, 11, 9, 0, 0, 0, 0, loc)  // Mon Nov 9
+	week2 := time.Date(2026, 11, 16, 0, 0, 0, 0, loc) // Mon Nov 16
+
+	events := []api.CalendarEvent{
+		{ID: "cross-week", Title: "跨周峰会", Start: "2026-11-13", End: "2026-11-18", AllDay: true}, // Fri–Tue
+		{ID: "mid-week", Title: "周中两日", Start: "2026-11-18", End: "2026-11-20", AllDay: true},   // Wed–Thu
+		{ID: "overlap", Title: "周二单日", Start: "2026-11-17", End: "2026-11-18", AllDay: true},    // Tue
+		{ID: "timed", Title: "普通时段", Start: "2026-11-18T10:00:00+08:00", End: "2026-11-18T11:00:00+08:00", AllDay: false},
+	}
+
+	spans1, lanes1 := allDaySpansForRange(events, week1, 7)
+	if lanes1 != 1 || len(spans1) != 1 {
+		t.Fatalf("week1 spans: lanes=%d spans=%+v", lanes1, spans1)
+	}
+	if spans1[0].StartCol != 4 || spans1[0].Span != 3 || spans1[0].ContinuesLeft || !spans1[0].ContinuesRight {
+		t.Fatalf("unexpected week1 cross-week span: %+v", spans1[0])
+	}
+
+	spans2, lanes2 := allDaySpansForRange(events, week2, 7)
+	if lanes2 != 2 || len(spans2) != 3 {
+		t.Fatalf("week2 spans: lanes=%d spans=%+v", lanes2, spans2)
+	}
+	byID := map[string]allDaySpan{}
+	for _, sp := range spans2 {
+		byID[sp.Event.ID] = sp
+	}
+	if cw := byID["cross-week"]; cw.StartCol != 0 || cw.Span != 2 || !cw.ContinuesLeft || cw.ContinuesRight || cw.Lane != 0 {
+		t.Fatalf("unexpected week2 continuation: %+v", cw)
+	}
+	if ov := byID["overlap"]; ov.StartCol != 1 || ov.Span != 1 || ov.Lane != 1 {
+		t.Fatalf("overlap did not move to lane 1: %+v", ov)
+	}
+	if mw := byID["mid-week"]; mw.StartCol != 2 || mw.Span != 2 || mw.Lane != 0 {
+		t.Fatalf("non-overlapping span did not reuse lane 0: %+v", mw)
+	}
+}
+
+func TestMultiDayAllDayContinuousSpanInMonthAndWeekViews(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	sAll := time.Date(2026, 11, 18, 0, 0, 0, 0, loc)
+	eAll := time.Date(2026, 11, 20, 0, 0, 0, 0, loc)
+	sTimed := time.Date(2026, 11, 18, 10, 0, 0, 0, loc)
+	eTimed := time.Date(2026, 11, 18, 11, 0, 0, 0, loc)
+
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.client, _ = api.New(api.DefaultServer, "")
+	a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+	startRange, endRange := calendarRange(base, 2)
+	a.adoptCache(storage.Cache{
+		Server:  api.DefaultServer,
+		UserID:  1,
+		SavedAt: base,
+		Tasks: []api.Task{
+			{ID: 301, Title: "年度技术架构峰会", Status: "pending", AllDay: true, StartTime: &sAll, EndTime: &eAll, Revision: 1},
+			{ID: 302, Title: "当日技术评审", Status: "pending", StartTime: &sTimed, EndTime: &eTimed, Revision: 1},
+		},
+		Calendar: &storage.CalendarSnapshot{
+			Start: startRange, End: endRange, Timezone: "Asia/Shanghai", SavedAt: base,
+		},
+	})
+	a.page = "calendar"
+	a.selectedDay = base
+	a.calendarMode = 2
+
+	tt := ui.NewTester(a.view, 1440, 900)
+	tt.Frame()
+	tt.Frame()
+
+	// Month View: single continuous bar spanning col 18 and col 19, no duplicate chopped bar on 19
+	cell18, ok18 := tt.Access("日历日期 2026-11-18")
+	if !ok18 {
+		t.Fatal("missing month cell 2026-11-18")
+	}
+	spanBtn, okSpan := tt.AccessByRole(ui.RoleButton, "日程 2026-11-18 年度技术架构峰会")
+	if !okSpan {
+		t.Fatalf("missing spanning all-day bar in month view: %v", tt.Texts())
+	}
+	if _, dup := tt.AccessByRole(ui.RoleButton, "日程 2026-11-19 年度技术架构峰会"); dup {
+		t.Fatal("multi-day all-day event was chopped into a duplicate bar on day 19 in month view")
+	}
+	if spanBtn.Bounds.W < cell18.Bounds.W*1.8 {
+		t.Fatalf("month spanning bar too narrow (not spanning 2 columns): spanW=%.1f colW=%.1f", spanBtn.Bounds.W, cell18.Bounds.W)
+	}
+	timedBtn, okTimed := tt.AccessByRole(ui.RoleButton, "日程 2026-11-18 当日技术评审")
+	if !okTimed {
+		t.Fatal("missing timed event on day 18")
+	}
+	if timedBtn.Bounds.Y < spanBtn.Bounds.Y+spanBtn.Bounds.H {
+		t.Fatalf("timed event overlapped spanning all-day bar: span=%+v timed=%+v", spanBtn.Bounds, timedBtn.Bounds)
+	}
+	// Click spanning bar opens task editor
+	if err := tt.Click("日程 2026-11-18 年度技术架构峰会"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.editing || a.draft.Task.ID != 301 {
+		t.Fatalf("clicking month spanning bar did not open task 301: editing=%v id=%d", a.editing, a.draft.Task.ID)
+	}
+	a.clearTaskSelection()
+
+	// Week View: continuous spanning ribbon in dedicated all-day strip
+	a.calendarMode = 1
+	tt.Frame()
+	tt.Frame()
+	col18, okCol := tt.Access("全天栏 2026-11-18")
+	if !okCol {
+		t.Fatal("missing week all-day drop column 2026-11-18")
+	}
+	wkSpan, okWk := tt.AccessByRole(ui.RoleButton, "日程 2026-11-18 年度技术架构峰会")
+	if !okWk {
+		t.Fatalf("missing spanning all-day bar in week view: %v", tt.Texts())
+	}
+	if _, dup := tt.AccessByRole(ui.RoleButton, "日程 2026-11-19 年度技术架构峰会"); dup {
+		t.Fatal("multi-day all-day event was chopped into duplicate bar on day 19 in week view")
+	}
+	if wkSpan.Bounds.W < col18.Bounds.W*1.8 {
+		t.Fatalf("week spanning bar too narrow (not spanning 2 columns): spanW=%.1f colW=%.1f", wkSpan.Bounds.W, col18.Bounds.W)
+	}
+}
+
+func TestAgendaTypographyWidthCapMultiDayAndInlineExternalBadge(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	s1 := time.Date(2026, 11, 16, 9, 30, 0, 0, loc)
+	e1 := time.Date(2026, 11, 16, 11, 0, 0, 0, loc)
+	sAll := time.Date(2026, 11, 18, 0, 0, 0, 0, loc)
+	eAll := time.Date(2026, 11, 20, 0, 0, 0, 0, loc)
+
+	richMD := "## 核心体验升级清单\n\n本次重构采用温润的纸感配色与轻量图标表达。\n\n- [x] 第一项\n- [ ] 第二项\n\n| 模块 | 状态 |\n| --- | --- |\n| 日历 | 完成 |"
+	if got := agendaSummaryText(richMD); got != "本次重构采用温润的纸感配色与轻量图标表达。" {
+		t.Fatalf("agendaSummaryText leaked markdown or dots: %q", got)
+	}
+	plainLong := strings.Repeat("长摘要 Chinese English\n", 100)
+	if agendaSummaryText(plainLong) != plainMarkdownPreview(plainLong) {
+		t.Fatal("agendaSummaryText diverged from plainMarkdownPreview on single plain paragraph")
+	}
+
+	extEv := api.CalendarEvent{
+		ID:    "ext-agenda-1",
+		Title: "外部团队设计同步会",
+		Start: time.Date(2026, 11, 16, 13, 30, 0, 0, loc).Format(time.RFC3339),
+		End:   time.Date(2026, 11, 16, 14, 30, 0, 0, loc).Format(time.RFC3339),
+	}
+	extEv.ExtendedProps.ReadOnly = true
+	extEv.ExtendedProps.Source = "caldav"
+
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.client, _ = api.New(api.DefaultServer, "")
+	a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+	startRange, endRange := calendarRange(base, 2)
+	a.adoptCache(storage.Cache{
+		Server:  api.DefaultServer,
+		UserID:  1,
+		SavedAt: base,
+		Tasks: []api.Task{
+			{ID: 401, Title: "重构客户端 UI", Description: richMD, Status: "pending", StartTime: &s1, EndTime: &e1, Revision: 1},
+			{ID: 402, Title: "年度技术架构峰会", Description: "压测准备", Status: "pending", AllDay: true, StartTime: &sAll, EndTime: &eAll, Revision: 1},
+		},
+		Calendar: &storage.CalendarSnapshot{
+			Start: startRange, End: endRange, Timezone: "Asia/Shanghai", SavedAt: base,
+			Events: []api.CalendarEvent{extEv},
+		},
+	})
+	a.page = "calendar"
+	a.selectedDay = base
+	a.calendarMode = 3
+
+	// Render Agenda at ultrawide 1600px to verify 840px reading width cap & inline badge placement
+	tt := ui.NewTester(func(c *ui.Context) {
+		applyAppTheme(c)
+		ui.Column(c).Fill().Children(func() { a.calendarView(c) })
+	}, 1600, 900)
+	tt.Frame()
+
+	if !tt.HasText("本次重构采用温润的纸感配色与轻量图标表达。") {
+		t.Fatalf("clean agenda summary missing: %v", tt.Texts())
+	}
+	for _, txt := range tt.Texts() {
+		if strings.Contains(txt, "核心体验升级清单 ·") {
+			t.Fatalf("agenda still rendered noisy dot-concatenated markdown: %q", txt)
+		}
+	}
+	if !tt.HasText("第 1/2 天 · 11/18–11/19") || !tt.HasText("第 2/2 天 · 11/18–11/19") {
+		t.Fatalf("agenda missing clear multi-day indicators: %v", tt.Texts())
+	}
+	extBadge, okBadge := tt.Find("外部")
+	extTitle, okTitle := tt.Find("外部团队设计同步会")
+	if !okBadge || !okTitle {
+		t.Fatalf("missing external badge or title in agenda: %v", tt.Texts())
+	}
+	// External badge must sit right next to the event title (not stranded 800px away at the right window edge)
+	if gap := extBadge.X - (extTitle.X + extTitle.W); gap < 0 || gap > 120 {
+		t.Fatalf("external cloud badge stranded too far from title: title=%+v badge=%+v gap=%.1f", extTitle, extBadge, gap)
+	}
+	// Centered 840px reading stream inside 1600px viewport: right edge must stay <= (1600+840)/2 = 1220
+	if extBadge.X+extBadge.W > 1225 {
+		t.Fatalf("agenda content exceeded 840px reading cap on 1600px screen: badge=%+v", extBadge)
+	}
+}
+
+func TestCalendarResponsiveFlexWithRightDetailDrawerNoClipping(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	s1 := time.Date(2026, 11, 16, 9, 30, 0, 0, loc)
+	e1 := time.Date(2026, 11, 16, 11, 0, 0, 0, loc)
+
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.client, _ = api.New(api.DefaultServer, "")
+	a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+	startRange, endRange := calendarRange(base, 2)
+	task := api.Task{ID: 501, Title: "抽屉联调验证", Status: "pending", StartTime: &s1, EndTime: &e1, Revision: 1}
+	a.adoptCache(storage.Cache{
+		Server:  api.DefaultServer,
+		UserID:  1,
+		SavedAt: base,
+		Tasks:   []api.Task{task},
+		Calendar: &storage.CalendarSnapshot{
+			Start: startRange, End: endRange, Timezone: "Asia/Shanghai", SavedAt: base,
+		},
+	})
+	a.page = "calendar"
+	a.selectedDay = base
+	a.editTaskNow(task)
+
+	// Simulate flex side-by-side layout matching detailDrawerWorkspace:
+	// 1192px workspace (1440 - 248 sidebar) split into flexible calendar + 440px right drawer => 752px calendar
+	const workspaceW = 1192
+	const drawerW = 440
+	const calW = float32(workspaceW - drawerW)
+
+	for _, mode := range []int{2, 1} {
+		a.calendarMode = mode
+		tt := ui.NewTester(func(c *ui.Context) {
+			applyAppTheme(c)
+			ui.Row(c).Fill().MinWidth(0).MinHeight(0).Children(func() {
+				ui.Column(c.Key("sim-cal")).Grow(1).FillHeight().MinWidth(0).MinHeight(0).Children(func() {
+					a.calendarView(c)
+				})
+				ui.Box(c.Key("sim-drawer")).Width(drawerW).FillHeight().Shrink(0)
+			})
+		}, workspaceW, 900)
+		tt.Frame()
+		tt.Frame()
+
+		// All toolbar controls must remain completely unclipped inside [0, calW]
+		for _, label := range []string{"回到今天", "上一段", "下一段", "日历定位日期", "日程来源", "日", "周", "月", "日程", "添加日程"} {
+			node, ok := tt.Access(label)
+			if !ok {
+				t.Fatalf("mode=%d missing toolbar control %q", mode, label)
+			}
+			if node.Bounds.X < 0 || node.Bounds.X+node.Bounds.W > calW+1 {
+				t.Fatalf("mode=%d toolbar control %q clipped by right drawer: bounds=%+v calW=%.0f", mode, label, node.Bounds, calW)
+			}
+		}
+
+		// All 7 days (Mon..Sun) must remain visible with positive width and zero clipping
+		for d := 0; d < 7; d++ {
+			dayStr := base.AddDate(0, 0, d).Format("2006-01-02")
+			target := "日历日期 " + dayStr
+			if mode == 1 {
+				target = "全天栏 " + dayStr
+			}
+			col, ok := tt.Access(target)
+			if !ok {
+				t.Fatalf("mode=%d missing day column %q", mode, target)
+			}
+			if col.Bounds.W < 60 || col.Bounds.X < 0 || col.Bounds.X+col.Bounds.W > calW+1 {
+				t.Fatalf("mode=%d day column %q clipped by drawer: bounds=%+v calW=%.0f", mode, target, col.Bounds, calW)
+			}
+		}
 	}
 }

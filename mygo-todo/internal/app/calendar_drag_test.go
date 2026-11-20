@@ -296,3 +296,106 @@ func TestNativeReadOnlyCalendarHasNoResizeOrDragWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeMultiDayAllDaySpanDragAndResize(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	sAll := time.Date(2026, 11, 18, 0, 0, 0, 0, loc)
+	eAll := time.Date(2026, 11, 20, 0, 0, 0, 0, loc)
+
+	for _, tc := range []struct {
+		name   string
+		mode   int
+		resize bool
+	}{
+		{name: "month-move", mode: 2, resize: false},
+		{name: "week-move", mode: 1, resize: false},
+		{name: "week-resize", mode: 1, resize: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := storage.Store{Dir: t.TempDir()}
+			a := New(store)
+			defer a.Close()
+			a.client, _ = api.New(api.DefaultServer, "")
+			a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+			startRange, endRange := calendarRange(base, 2)
+			a.adoptCache(storage.Cache{
+				Server:  api.DefaultServer,
+				UserID:  1,
+				SavedAt: base,
+				Tasks: []api.Task{
+					{ID: 601, Title: "跨天架构峰会", Status: "pending", AllDay: true, StartTime: &sAll, EndTime: &eAll, Revision: 2},
+				},
+				Calendar: &storage.CalendarSnapshot{
+					Start: startRange, End: endRange, Timezone: "Asia/Shanghai", SavedAt: base,
+				},
+			})
+			a.page, a.calendarMode, a.selectedDay = "calendar", tc.mode, base
+			tt := ui.NewTester(a.view, 1440, 900)
+			tt.Frame()
+			tt.Frame()
+
+			srcLabel := "日程 2026-11-18 跨天架构峰会"
+			if tc.resize {
+				srcLabel = "调整结束 2026-11-19 跨天架构峰会"
+			}
+			src, ok := tt.AccessByRole(ui.RoleButton, srcLabel)
+			if !ok {
+				t.Fatalf("missing source %q: %v", srcLabel, tt.Texts())
+			}
+
+			dstLabel := "日历日期 2026-11-20"
+			if tc.mode == 1 {
+				dstLabel = "全天栏 2026-11-20"
+			}
+			dst, ok := tt.Access(dstLabel)
+			if !ok {
+				t.Fatalf("missing target %q", dstLabel)
+			}
+
+			// For move, grab left quarter (day 18) and drop onto day 20 => shifts +2 days (20..22)
+			fromX := src.Bounds.X + src.Bounds.W*0.25
+			if tc.resize {
+				fromX = src.Bounds.X + src.Bounds.W/2
+			}
+			fromY := src.Bounds.Y + src.Bounds.H/2
+			toX := dst.Bounds.X + dst.Bounds.W/2
+			toY := dst.Bounds.Y + dst.Bounds.H/2
+			if tc.mode == 2 {
+				toY = dst.Bounds.Y + dst.Bounds.H - 12
+			}
+
+			nativeDrag(t, tt, fromX, fromY, toX, toY)
+
+			var saved storage.Cache
+			var err error
+			until := time.Now().Add(3 * time.Second)
+			for time.Now().Before(until) {
+				saved, err = store.Cache(api.DefaultServer, 1)
+				if err == nil && len(saved.Outbox) == 1 {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if err != nil || len(saved.Outbox) != 1 {
+				t.Fatalf("drag did not persist outbox: err=%v failure=%q", err, a.failure)
+			}
+			var fields map[string]json.RawMessage
+			_ = json.Unmarshal(saved.Outbox[0].Body, &fields)
+			var gotStart, gotEnd time.Time
+			_ = json.Unmarshal(fields["start_time"], &gotStart)
+			_ = json.Unmarshal(fields["end_time"], &gotEnd)
+			gotStart = gotStart.In(loc)
+			gotEnd = gotEnd.In(loc)
+			if tc.resize {
+				if gotStart.Day() != 18 || gotEnd.Day() != 21 {
+					t.Fatalf("resize expected 18..21, got %s..%s", gotStart, gotEnd)
+				}
+			} else {
+				if gotStart.Day() != 20 || civilDays(gotEnd, gotStart) != 2 {
+					t.Fatalf("move expected start=20 span=2, got %s..%s", gotStart, gotEnd)
+				}
+			}
+		})
+	}
+}
