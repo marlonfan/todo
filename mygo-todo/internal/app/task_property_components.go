@@ -16,7 +16,6 @@ import (
 // border, and layered ambient + lifted shadows.
 func elevateFloatingSurface(c *ui.Context, panel ui.Element) ui.Element {
 	t := tokensOf(c)
-	elevatePopup(c, panel)
 	if c.Theme().Dark {
 		return panel.
 			Background(t.BgSubtle.Mix(ui.Hex("#FFFFFF"), 0.04)).
