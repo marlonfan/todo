@@ -31,9 +31,9 @@ func (a *App) detailWorkspace(c *ui.Context, main func()) {
 	}
 }
 
-// detailDrawerWorkspace renders full-canvas pages (such as Calendar) at 100%
-// width without squeezing or deforming the underlying grid, sliding the task
-// or occurrence inspector in as a right-hand overlay drawer when open.
+// detailDrawerWorkspace renders full-canvas pages (such as Calendar) alongside
+// a responsive right-hand inspector drawer inside a horizontal flex row so the
+// calendar grid and top view switcher resize gracefully without ever clipping.
 func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 	width, _ := c.Size()
 	windowWidth := width
@@ -42,17 +42,22 @@ func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 	}
 	if width >= 1050 || windowWidth >= 1180 {
 		t := tokensOf(c)
-		drawerWidth := min(float32(460), max(float32(detailMinWidth), width*0.40))
-		drawerBox := ui.Box(c.Key("drawer-workspace")).Grow(1).Fill().MinHeight(0).MinWidth(0)
+		drawerWidth := min(float32(440), max(float32(detailMinWidth), width*0.36))
+		drawerRow := ui.Row(c.Key("drawer-workspace")).Grow(1).Fill().MinHeight(0).MinWidth(0)
 		if (a.editing || a.selectedOccurrence != nil) && a.taskMetaOpen == "" {
-			drawerBox.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
+			drawerRow.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
 		}
-		drawerBox.Children(func() {
-			ui.Column(c.Key("drawer-main-canvas")).Fill().MinHeight(0).MinWidth(0).Children(main)
+		drawerRow.Children(func() {
+			ui.Column(c.Key("drawer-main-canvas")).Grow(1).FillHeight().MinHeight(0).MinWidth(0).Children(main)
 			if a.editing || a.selectedOccurrence != nil {
 				drawer := ui.Column(c.Key("detail-side-drawer")).Label("详情侧边抽屉").
-					Absolute().Right(0).Top(0).Bottom(0).Width(drawerWidth).ZIndex(18).
+					Width(drawerWidth).FillHeight().MinHeight(0).Shrink(0).
 					Background(t.BgApp).BorderWidth(0, 0, 0, 1).BorderColor(t.BorderDefault)
+				if c.Theme().Dark {
+					drawer.Shadow(-6, 0, 20, 0, ui.RGBA(0, 0, 0, 0.28))
+				} else {
+					drawer.Shadow(-4, 0, 16, 0, ui.RGBA(28, 25, 23, 0.05))
+				}
 				if a.taskMetaOpen == "" && drawer.OverlayShortcut(0, ui.KeyEscape) {
 					a.requestTaskTransition(func() {})
 				}

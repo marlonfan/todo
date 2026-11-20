@@ -13,7 +13,7 @@ func appDropdown(c *ui.Context, open *bool, items []overlay.MenuItem, trigger fu
 	trigger(menu.Trigger)
 	chosen := ""
 	menu.Popup(func(panel ui.Element) {
-		elevatePopup(c, panel.Padding(5).Radius(popoverRadius).MinWidth(212).MaxWidthPercent(95).Background(t.BgApp).Border(1, t.BorderSubtle))
+		elevateFloatingSurface(c, panel.Padding(5).Radius(10).MinWidth(212).MaxWidthPercent(95))
 		panel.Children(func() {
 			for index, item := range items {
 				if item.Divider {

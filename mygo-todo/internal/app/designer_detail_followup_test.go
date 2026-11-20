@@ -40,16 +40,9 @@ func TestPropertySaveHintMatchesExistingAndNewContext(t *testing.T) {
 		a := &App{taskMetaOpen: "priority"}
 		d := Draft{Task: api.Task{ID: id}, Priority: "普通"}
 		tt := ui.NewTester(func(c *ui.Context) { applyAppTheme(c); a.taskMetadataEditor(c, &d) }, 400, 400)
-		expected := "选择后自动存入本机，联网后同步"
-		if id == 0 {
-			expected = "创建任务后生效"
-		}
-		if _, ok := tt.AccessByRole(ui.RoleText, expected); !ok {
-			t.Fatal(id, expected, tt.Texts())
-		}
 		for _, text := range tt.Texts() {
-			if strings.Contains(text, "保存任务后生效") {
-				t.Fatal("obsolete explicit save instruction", id)
+			if strings.Contains(text, "保存任务后生效") || strings.Contains(text, "选择后自动存入本机") {
+				t.Fatalf("obsolete save boilerplate should be removed from property popover (id=%d): %q", id, text)
 			}
 		}
 	}

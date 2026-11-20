@@ -163,12 +163,17 @@ func TestLunarCalendarAndCalendarOverlayDrawerWithoutSqueezing(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if _, ok := tt.Access("详情侧边抽屉"); !ok {
-		t.Fatal("expected right-hand overlay drawer to open on calendar event click")
+	drawer, ok := tt.Access("详情侧边抽屉")
+	if !ok {
+		t.Fatal("expected right-hand responsive drawer to open on calendar event click")
 	}
 	cellAfter, ok := tt.Access("日历日期 2026-11-11")
-	if !ok || cellAfter.Bounds != cellBefore.Bounds {
-		t.Fatalf("opening calendar detail drawer squeezed/deformed underlying calendar cell: before=%+v after=%+v", cellBefore.Bounds, cellAfter.Bounds)
+	if !ok || cellAfter.Bounds.W < 70 || cellAfter.Bounds.H != cellBefore.Bounds.H {
+		t.Fatalf("calendar cell should resize cleanly beside drawer: before=%+v after=%+v", cellBefore.Bounds, cellAfter.Bounds)
+	}
+	sundayAfter, ok := tt.Access("日历日期 2026-11-15")
+	if !ok || sundayAfter.Bounds.X+sundayAfter.Bounds.W > drawer.Bounds.X+1.5 {
+		t.Fatalf("sunday column was clipped by calendar side drawer: sunday=%+v drawer=%+v", sundayAfter.Bounds, drawer.Bounds)
 	}
 
 	// 3. Pressing Escape immediately after clicking a calendar event closes the side drawer
@@ -397,16 +402,19 @@ func TestLongTaskDetailNeverOverflowsTopOrBottom(t *testing.T) {
 	tt := ui.NewTester(a.view, 1280, 720)
 	tt.Frame()
 
-	footerBefore, ok := tt.Access("任务底部操作")
-	if !ok || footerBefore.Bounds.H != 48 || footerBefore.Bounds.Y+footerBefore.Bounds.H > 720 {
-		t.Fatalf("bottom save bar pushed out of bounds on long description: %+v", footerBefore)
+	if _, ok := tt.Access("任务底部操作"); ok {
+		t.Fatal("clean synced task should not render redundant bottom save bar")
+	}
+	titleBefore, ok := tt.AccessByRole(ui.RoleTextField, "任务标题")
+	if !ok {
+		t.Fatal("missing task title field")
 	}
 	editorNode, ok := tt.AccessByRole(ui.RoleTextField, "备注")
 	if !ok {
 		t.Fatal("missing rich description editor")
 	}
-	if editorNode.Bounds.Y+editorNode.Bounds.H > footerBefore.Bounds.Y+0.5 {
-		t.Fatalf("editor overlapped bottom save bar: editor=%+v footer=%+v", editorNode.Bounds, footerBefore.Bounds)
+	if editorNode.Bounds.Y+editorNode.Bounds.H > 720.5 {
+		t.Fatalf("editor overflowed window bottom: editor=%+v", editorNode.Bounds)
 	}
 
 	// Scroll down inside the rich description editor so top paragraphs have negative relative Y
@@ -414,20 +422,26 @@ func TestLongTaskDetailNeverOverflowsTopOrBottom(t *testing.T) {
 	tt.Scroll(editorNode.Bounds.X+80, editorNode.Bounds.Y+80, 0, -240)
 	tt.Frame()
 
-	footerAfter, ok := tt.Access("任务底部操作")
-	if !ok || footerAfter.Bounds != footerBefore.Bounds {
-		t.Fatalf("scrolling long description shifted bottom save bar: before=%+v after=%+v", footerBefore.Bounds, footerAfter.Bounds)
+	titleAfter, ok := tt.AccessByRole(ui.RoleTextField, "任务标题")
+	if !ok || titleAfter.Bounds != titleBefore.Bounds {
+		t.Fatalf("scrolling long description shifted title: before=%+v after=%+v", titleBefore.Bounds, titleAfter.Bounds)
+	}
+	editorAfter, ok := tt.AccessByRole(ui.RoleTextField, "备注")
+	if !ok || editorAfter.Bounds != editorNode.Bounds {
+		t.Fatalf("scrolling long description shifted editor viewport: before=%+v after=%+v", editorNode.Bounds, editorAfter.Bounds)
 	}
 
-	// Verify the gap strip right above editorNode (between divider and editor) and inside the
-	// footer blank region has zero bled text pixels from the scrolled richtext paragraphs.
+	// Verify the bottom padding strip below editorAfter has zero bled text pixels
+	// from scrolled richtext paragraphs.
 	img := tt.Image()
-	bg := img.RGBAAt(int(editorNode.Bounds.X+10), int(footerAfter.Bounds.Y+8))
-	// Check horizontal strip in the top area of footer (above the 11px status text) across the middle
-	for x := int(editorNode.Bounds.X + 200); x < int(editorNode.Bounds.X+editorNode.Bounds.W-120); x++ {
-		for y := int(footerAfter.Bounds.Y + 4); y < int(footerAfter.Bounds.Y+14); y++ {
-			if got := img.RGBAAt(x, y); got != bg {
-				t.Fatalf("richtext paragraph bled into bottom footer at (%d,%d): got=%+v want bg=%+v", x, y, got, bg)
+	bottomStripY := int(editorAfter.Bounds.Y + editorAfter.Bounds.H + 4)
+	if bottomStripY < 718 {
+		bg := img.RGBAAt(int(editorAfter.Bounds.X+10), bottomStripY)
+		for x := int(editorAfter.Bounds.X + 40); x < int(editorAfter.Bounds.X+editorAfter.Bounds.W-40); x++ {
+			for y := bottomStripY; y < min(720, bottomStripY+6); y++ {
+				if got := img.RGBAAt(x, y); got != bg {
+					t.Fatalf("richtext paragraph bled into bottom margin at (%d,%d): got=%+v want bg=%+v", x, y, got, bg)
+				}
 			}
 		}
 	}

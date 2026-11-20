@@ -286,32 +286,23 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	d := &a.draft
 	t := tokensOf(c)
 
-	// Top Header Bar
-	ui.Row(c.Key("detail-toolbar")).Height(toolbarHeight).Shrink(0).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
+	// Compact Top Action Bar (checkbox moved beside the title for close visual association)
+	ui.Row(c.Key("detail-toolbar")).Height(40).Shrink(0).Padding(0, 14, 0, 16).Gap(6).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle.Alpha(0.65)).AlignItems(ui.Center).Children(func() {
 		if len(compact) > 0 && compact[0] {
 			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
 			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
 		}
-		if d.Task.ID != 0 {
-			done := d.Status == "已完成"
-			ui.Checkbox(c, &done, "").Size(32, 32).Justify(ui.Center).AlignItems(ui.Center).Label("完成任务 " + d.Title).
-				Disabled(d.Task.ReadOnly || a.taskDraftOrphaned || d.Task.Recurring()).
-				OnChange(func() {
-					status := "pending"
-					if done {
-						status = "completed"
-					}
-					a.setTaskStatus(d.Task, status)
-				})
-		}
 		if d.Task.Recurring() {
-			appBadge(c, "重复系列").TextColor(t.Accent).Background(t.Accent.Alpha(0.12))
+			appBadge(c, "重复系列").TextColor(t.Accent).Background(t.Accent.Alpha(0.10))
 		} else if d.Task.ID == 0 {
 			appBadge(c, "新建任务")
 		} else if d.Task.ReadOnly {
 			appBadge(c, "外部只读")
 		}
 		ui.Spacer(c)
+		if !d.Task.ReadOnly && d.Task.ID != 0 {
+			detailTransientStatus(c, a.detailSaveLabel(), a.failure != "" || a.autosave.failure != "")
+		}
 		if d.Task.ID != 0 {
 			iconButton(c, "提醒与活动记录", lucide.BellRing()).Disabled(a.busy).OnClick(func() { a.openTaskCenter(d.Task) })
 		}
@@ -332,8 +323,8 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 		}
 		if len(moreItems) > 0 {
 			choice := appDropdown(c, moreOpen, moreItems, func(trigger ui.Element) {
-				styleAppButton(c, trigger, "", "ghost").Label("更多任务选项").Tooltip("更多选项").Size(32, 32).Padding(8).Children(func() {
-					ui.Icon(c, lucide.Ellipsis()).Size(16, 16).TextColor(t.TextSecondary).AccessHidden(true)
+				styleAppButton(c, trigger, "", "ghost").Label("更多任务选项").Tooltip("更多选项").Size(30, 30).Padding(7).Children(func() {
+					ui.Icon(c, lucide.Ellipsis()).Size(15, 15).TextColor(t.TextSecondary).AccessHidden(true)
 				})
 			})
 			switch choice {
@@ -349,8 +340,8 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 		iconButton(c, "关闭", lucide.X()).Disabled(a.busy).OnClick(func() { a.requestTaskTransition(func() {}) })
 	})
 
-	// Main Detail Workspace: Title + Inline Property Chip Bar + Full-Height WYSIWYG Markdown
-	body := ui.Column(c.Key("task-editor-content")).Label("任务详情内容").Padding(16, 20, 12, 20).Gap(12).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip()
+	// Main Detail Workspace: Checkbox+Title + Ghost Property Bar + Full-Height WYSIWYG Markdown
+	body := ui.Column(c.Key("task-editor-content")).Label("任务详情内容").Padding(18, 20, 14, 20).Gap(10).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip()
 	if a.taskMetaOpen == "" {
 		body.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
 	}
@@ -361,9 +352,21 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	body.Children(func() {
 		titleFocused := ui.Local(body, "title-focused", func() bool { return false })
 		titleEdited := ui.Local(body, "title-edited", func() bool { return false })
-		ui.Column(c.Key("detail-main")).Fill().Gap(12).MinWidth(0).MinHeight(0).Clip().Children(func() {
-			// 1. Direct 1-click editable Title (with smart date/priority auto-recognition on Enter or Blur)
-			ui.Row(c.Key("task-heading")).Shrink(0).MinWidth(0).Children(func() {
+		ui.Column(c.Key("detail-main")).Fill().Gap(10).MinWidth(0).MinHeight(0).Clip().Children(func() {
+			// 1. Completion Checkbox + Direct 1-click editable 23px Title
+			ui.Row(c.Key("task-heading")).Shrink(0).MinWidth(0).Gap(8).AlignItems(ui.Start).Children(func() {
+				if d.Task.ID != 0 {
+					done := d.Status == "已完成"
+					detailCompleteCheckbox(c, &done, "完成任务 "+d.Title, d.Priority,
+						d.Task.ReadOnly || a.taskDraftOrphaned || d.Task.Recurring(),
+						func() {
+							status := "pending"
+							if done {
+								status = "completed"
+							}
+							a.setTaskStatus(d.Task, status)
+						})
+				}
 				var titleEsc func()
 				if !isTaskWorkspacePage(a.page) {
 					titleEsc = func() {
@@ -393,12 +396,12 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 			}
 			*titleFocused = nowFocused
 
-			// 2. Always-visible Horizontal Property Chips (replaces buried vertical table + duplicate toolbar icons)
+			// 2. Always-visible Ghost Property Strip (responsive 1-row or balanced 2-row in narrow drawers)
 			ui.Column(c.Key("detail-properties")).Shrink(0).MinWidth(0).Disabled(d.Task.ReadOnly).Children(func() {
 				a.taskMetadata(c, d)
 			})
 
-			ui.Box(c).Height(1).Shrink(0).FillWidth().Background(t.BorderSubtle)
+			ui.Box(c).Height(1).Shrink(0).FillWidth().Background(t.BorderSubtle.Alpha(0.75))
 
 			// 3. Full-height True WYSIWYG Markdown Description Editor
 			a.wysiwygMarkdownEditor(c, "task-description", fmt.Sprintf("task:%d", d.Task.ID), "备注", "输入任务描述，支持 # 标题、- [ ] 待办、**加粗**、代码块…", &d.Description, d.Task.ReadOnly, &a.taskDescriptionInput, nil, func() {
@@ -412,14 +415,16 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 			feedback.Alert(c, a.failure, feedback.AlertProps{Type: feedback.Error})
 		})
 	}
-	if !d.Task.ReadOnly {
-		ui.Row(c.Key("task-save-bar")).Label("任务底部操作").Height(48).Shrink(0).Padding(0, 20).Gap(8).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle).Children(func() {
+	// Render the bottom action bar only when an explicit user action is required
+	// (creating a new task, recovering an orphaned draft, or retrying a failed save).
+	// Clean synced tasks reclaim this 48px for the editor canvas.
+	needsFooterAction := !d.Task.ReadOnly && (d.Task.ID == 0 || a.taskDraftOrphaned || a.failure != "" || a.autosave.failure != "")
+	if needsFooterAction {
+		ui.Row(c.Key("task-save-bar")).Label("任务底部操作").Height(44).Shrink(0).Padding(0, 20).Gap(8).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle).Children(func() {
 			saveLabel := a.detailSaveLabel()
-			dot := t.Success
+			dot := t.Accent
 			if strings.Contains(saveLabel, "失败") || a.autosave.failure != "" {
 				dot = t.Danger
-			} else if strings.Contains(saveLabel, "待") {
-				dot = t.Accent
 			}
 			ui.Box(c).Size(6, 6).Radius(3).Background(dot).Shrink(0).AccessHidden(true)
 			ui.Text(c, saveLabel).FontSize(fontAux).TextColor(t.TextSecondary).Grow(1).MinWidth(0).SingleLine()
@@ -506,18 +511,22 @@ func (a *App) taskMetaChip(c *ui.Context, key, label, value string, accent ui.Co
 	}
 }
 
+func estimateMetaChipWidth(value string, active bool) float32 {
+	if !active {
+		return 28
+	}
+	w, _ := ui.ShapeText(value, ui.Font{Size: 12, Weight: 400}, 0).Size()
+	return min(float32(168), w) + 34
+}
+
 func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 	t := tokensOf(c)
 	now := time.Now().In(a.location())
 
 	categoryNames := []string{}
-	var firstCatColor ui.Color
 	for _, cat := range a.categories {
 		if d.Categories[cat.ID] {
 			categoryNames = append(categoryNames, strings.TrimSpace(cat.Emoji+" "+cat.Name))
-			if firstCatColor.A == 0 && strings.HasPrefix(cat.Color, "#") && len(cat.Color) == 7 {
-				firstCatColor = ui.Hex(cat.Color)
-			}
 		}
 	}
 	categorySummary := "分类"
@@ -561,36 +570,54 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 		}
 	}
 
-	ui.Row(c.Key("task-metadata")).Label("任务属性").Gap(4).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
-		if d.Task.ID != 0 {
-			statusAccent := ui.Color{}
-			if d.Status == "已完成" {
-				statusAccent = t.Success
-			}
-			a.taskMetaChip(c, "status", "状态", d.Status, statusAccent, d.Status != "待办")
-		}
-		var schedAccent ui.Color
-		if d.HasStart && d.Status == "待办" && d.Start.Before(dayStart(now)) {
-			schedAccent = t.Danger
-		}
-		a.taskMetaChip(c, "start", "开始", draftScheduleChipText(d, now), schedAccent, d.HasStart)
-		if d.HasDue {
-			a.taskMetaChip(c, "due", "截止", "截止 "+d.Due.Format("01/02"), ui.Color{}, true)
-		}
-		a.taskMetaChip(c, "priority", "优先级", priorityLabel, priorityAccent, effectivePriority != "普通")
-		a.taskMetaChip(c, "categories", "分类", categorySummary, firstCatColor, len(categoryNames) > 0)
-		a.taskMetaChip(c, "repeat", "重复", recurrenceSummary(d), ui.Color{}, d.Repeat != "不重复")
-		a.taskMetaChip(c, "reminder", "提醒", reminderLabel, ui.Color{}, d.Reminder != "跟随账户")
+	statusAccent := ui.Color{}
+	if d.Status == "已完成" {
+		statusAccent = t.Success
+	}
+	var schedAccent ui.Color
+	if d.HasStart && d.Status == "待办" && d.Start.Before(dayStart(now)) {
+		schedAccent = t.Danger
+	}
+	var dueAccent ui.Color
+	if d.HasDue && d.Status == "待办" && d.Due.Before(dayStart(now)) {
+		dueAccent = t.Danger
+	}
 
+	schedText := draftScheduleChipText(d, now)
+	dueText := "截止 " + d.Due.Format("01/02")
+	repeatText := recurrenceSummary(d)
+	statusActive := d.Status != "待办"
+	priorityActive := effectivePriority != "普通"
+	catActive := len(categoryNames) > 0
+	repeatActive := d.Repeat != "不重复"
+	reminderActive := d.Reminder != "跟随账户"
+
+	// Estimate natural single-row width so narrow drawers (e.g. Calendar side
+	// drawer) intentionally split into 2 balanced rows instead of stranding a
+	// lone tiny chip like "15m" on row 2.
+	estW := float32(0)
+	if d.Task.ID != 0 {
+		estW += estimateMetaChipWidth(d.Status, statusActive)
+	}
+	estW += estimateMetaChipWidth(schedText, d.HasStart)
+	if d.HasDue {
+		estW += estimateMetaChipWidth(dueText, true)
+	}
+	estW += estimateMetaChipWidth(priorityLabel, priorityActive)
+	estW += estimateMetaChipWidth(categorySummary, catActive)
+	estW += estimateMetaChipWidth(repeatText, repeatActive)
+	estW += estimateMetaChipWidth(reminderLabel, reminderActive)
+
+	renderSmartPill := func() {
 		if !d.Task.ReadOnly && (smart.HasTime || smart.HasPriority) {
 			hintText := "已识别：" + smartSummaryText(smart)
 			smartPill := ui.ButtonBase(c.Key("smart-parse-pill")).Label("应用智能识别属性").Tooltip("点击立即应用识别出的日期或优先级并清理标题").
 				Height(26).Padding(0, 8).Radius(6).Cursor(ui.CursorPointer).
-				Background(t.Accent.Alpha(0.12)).OnClick(func() {
+				Background(t.Accent.Alpha(0.10)).OnClick(func() {
 				a.applySmartTitleToDraft(d)
 			})
 			if smartPill.Hovered() {
-				smartPill.Background(t.Accent.Alpha(0.20))
+				smartPill.Background(t.Accent.Alpha(0.16))
 			}
 			smartPill.Children(func() {
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
@@ -599,6 +626,46 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 				})
 			})
 		}
+	}
+
+	metaBox := ui.Column(c.Key("task-metadata")).Label("任务属性").Gap(2).FillWidth().MinWidth(0)
+	availW := metaBox.Bounds().W
+	splitTwoRows := availW > 120 && estW > availW-2
+
+	metaBox.Children(func() {
+		if splitTwoRows {
+			ui.Row(c.Key("task-metadata-primary")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
+				if d.Task.ID != 0 {
+					a.taskMetaChip(c, "status", "状态", d.Status, statusAccent, statusActive)
+				}
+				a.taskMetaChip(c, "start", "开始", schedText, schedAccent, d.HasStart)
+				if d.HasDue {
+					a.taskMetaChip(c, "due", "截止", dueText, dueAccent, true)
+				}
+				renderSmartPill()
+			})
+			ui.Row(c.Key("task-metadata-secondary")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
+				a.taskMetaChip(c, "priority", "优先级", priorityLabel, priorityAccent, priorityActive)
+				a.taskMetaChip(c, "categories", "分类", categorySummary, ui.Color{}, catActive)
+				a.taskMetaChip(c, "repeat", "重复", repeatText, ui.Color{}, repeatActive)
+				a.taskMetaChip(c, "reminder", "提醒", reminderLabel, ui.Color{}, reminderActive)
+			})
+			return
+		}
+		ui.Row(c.Key("task-metadata-single")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
+			if d.Task.ID != 0 {
+				a.taskMetaChip(c, "status", "状态", d.Status, statusAccent, statusActive)
+			}
+			a.taskMetaChip(c, "start", "开始", schedText, schedAccent, d.HasStart)
+			if d.HasDue {
+				a.taskMetaChip(c, "due", "截止", dueText, dueAccent, true)
+			}
+			a.taskMetaChip(c, "priority", "优先级", priorityLabel, priorityAccent, priorityActive)
+			a.taskMetaChip(c, "categories", "分类", categorySummary, ui.Color{}, catActive)
+			a.taskMetaChip(c, "repeat", "重复", repeatText, ui.Color{}, repeatActive)
+			a.taskMetaChip(c, "reminder", "提醒", reminderLabel, ui.Color{}, reminderActive)
+			renderSmartPill()
+		})
 	})
 }
 
@@ -699,11 +766,6 @@ func (a *App) taskMetadataEditor(c *ui.Context, d *Draft) {
 				})
 			}
 		}
-		saveHint := "选择后自动存入本机，联网后同步"
-		if d.Task.ID == 0 {
-			saveHint = "创建任务后生效"
-		}
-		ui.Text(c, saveHint).FontSize(fontAux).TextColor(t.TextReadable)
 	})
 }
 
@@ -721,7 +783,7 @@ func dateRow(c *ui.Context, label string, enabled *bool, date *time.Time, showTi
 			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				appDatePickerField(c, date, label+"日期", nil)
 				if showTime {
-					ui.TimeInput(c, date).Label(label + "时刻")
+					task24TimeField(c, "date-row-time-"+label, label+"时刻", date, 15, nil)
 				}
 			})
 		}

@@ -10,7 +10,8 @@ const (
 	taskListMinWidth      = 240
 	detailMinWidth        = 360
 	detailMaxWidth        = 1600
-	detailTitleLineHeight = 26
+	detailTitleFontSize   = 23
+	detailTitleLineHeight = 32
 )
 
 // Allow flexible user-driven split resizing: the task list can shrink down to
@@ -32,7 +33,7 @@ func detailTitle(c *ui.Context, key, label, placeholder string, value *string, a
 	ui.Column(c.Key(key + "-slot")).Grow(1).MinWidth(0).Children(func() {
 		if disabled {
 			ui.Text(c.Key(key+"-readonly"), *value).Label(label).
-				FontSize(fontTitle).FontWeight(600).FixedLineHeight(detailTitleLineHeight).
+				FontSize(detailTitleFontSize).FontWeight(600).FixedLineHeight(detailTitleLineHeight).
 				TextColor(t.TextPrimary).FillWidth().MinWidth(0).MaxLines(5)
 			return
 		}
@@ -45,8 +46,8 @@ func detailTitle(c *ui.Context, key, label, placeholder string, value *string, a
 			escHandler = onEscape[0]
 		}
 		input := ui.TextAreaBase(c.Key(key), value).Label(label).Placeholder(placeholder).
-			FontSize(fontTitle).FontWeight(600).FixedLineHeight(detailTitleLineHeight).
-			TextColor(t.TextPrimary).PlaceholderColor(t.TextReadable).
+			FontSize(detailTitleFontSize).FontWeight(600).FixedLineHeight(detailTitleLineHeight).
+			TextColor(t.TextPrimary).PlaceholderColor(t.TextTertiary).
 			Lines(1, 5).FillWidth().MinWidth(0).Padding(0).BorderWidth(0).
 			FocusRing(false).Background(ui.Transparent).
 			OnTextKey(func(k ui.TextKey) bool {

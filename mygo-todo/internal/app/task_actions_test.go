@@ -44,16 +44,19 @@ func TestNativeTaskMenuKeepsInstanceScopeAndCanonicalSeries(t *testing.T) {
 	if !a.editing || !a.draft.Start.Equal(*state.Tasks[0].StartTime) || a.draft.Task.InstanceID != "" {
 		t.Fatal("projected occurrence replaced series anchor", a.draft)
 	}
-	if _, ok := tt.AccessByRole(ui.RoleButton, "保存任务"); ok || !tt.HasText("已同步") {
-		t.Fatal("unchanged series must expose sync status without a save button")
+	if _, ok := tt.AccessByRole(ui.RoleButton, "保存任务"); ok {
+		t.Fatal("unchanged series must not expose a persistent save button")
+	}
+	if _, ok := tt.Access("任务底部操作"); ok {
+		t.Fatal("clean synced series should not occupy space with redundant bottom sync bar")
 	}
 	// Preserve the minimum-window action visibility assertion for a real edit.
 	a.draft.Description += "\n新增系列备注"
 	tt.Frame() // The unfocused edit flushes after rendering this frame.
-	tt.Frame() // Render the durable local status.
-	footer, ok := tt.Access("任务底部操作")
-	if !ok || footer.Offscreen || footer.Bounds.Y < 0 || footer.Bounds.Y+footer.Bounds.H > 600 || !tt.HasText("已存本机 · 待同步") || a.taskDraftDirty() || len(a.cache.Outbox) != 1 {
-		t.Fatal("autosave status outside minimum window", footer)
+	tt.Frame() // Render the durable local status in the top toolbar.
+	statusNode, ok := tt.AccessByRole(ui.RoleText, "已存本机 · 待同步")
+	if !ok || statusNode.Offscreen || statusNode.Bounds.Y < 0 || statusNode.Bounds.Y+statusNode.Bounds.H > 600 || a.taskDraftDirty() || len(a.cache.Outbox) != 1 {
+		t.Fatal("autosave status outside minimum window", statusNode)
 	}
 	for _, label := range []string{"关闭"} {
 		n, ok := tt.AccessByRole(ui.RoleButton, label)

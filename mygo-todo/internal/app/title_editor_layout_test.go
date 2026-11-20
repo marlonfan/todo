@@ -30,7 +30,17 @@ func TestTaskTitleEditorUsesAvailableHeadingWidth(t *testing.T) {
 			if !ok {
 				t.Fatal("missing direct 1-click title editor")
 			}
-			wantWidth := pane.Bounds.W - 40
+			cb, ok := tt.AccessByRole(ui.RoleCheckBox, "完成任务 "+task.Title)
+			if !ok {
+				t.Fatal("missing completion checkbox beside task title")
+			}
+			if cb.Bounds.Y < editor.Bounds.Y-4 || cb.Bounds.Y > editor.Bounds.Y+detailTitleLineHeight {
+				t.Fatalf("completion checkbox should align with first line of title: cb=%+v title=%+v", cb.Bounds, editor.Bounds)
+			}
+			if editor.Bounds.X < cb.Bounds.X+cb.Bounds.W+4 {
+				t.Fatalf("title should sit right of completion checkbox: cb=%+v title=%+v", cb.Bounds, editor.Bounds)
+			}
+			wantWidth := pane.Bounds.W - 40 - cb.Bounds.W - 8
 			if editor.Bounds.W < wantWidth-2 || editor.Bounds.W > wantWidth+2 {
 				t.Fatalf("native title width %.1f does not span available heading width %.1f", editor.Bounds.W, wantWidth)
 			}
