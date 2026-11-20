@@ -50,9 +50,32 @@ func detailCompleteCheckbox(c *ui.Context, checked *bool, label, priority string
 	return cb
 }
 
+// detailTopStrip renders a borderless, canvas-blended top window-drag strip.
+// On wide macOS/fullscreen panes (bar.Right == 0 and !compact) it stays a slim
+// 16px breathing/drag band so the title sits immediately at the top without a
+// 40px blank toolbar or divider line. When bar.Right > 0 (Windows/Linux caption
+// buttons) or compact mode is active, it clears the system window controls.
+func detailTopStrip(c *ui.Context, key, label string, m detailTopChromeMetrics, leftContent, rightContent func()) {
+	row := ui.Row(c.Key(key)).Height(m.Height).Shrink(0).FillWidth().
+		Padding(0, m.PadRight, 0, m.PadLeft).Gap(6).AlignItems(ui.Center).DragWindow()
+	if label != "" {
+		row.Label(label)
+	}
+	row.Children(func() {
+		if leftContent != nil {
+			leftContent()
+		}
+		ui.Spacer(c)
+		if rightContent != nil {
+			rightContent()
+		}
+	})
+}
+
 // detailTransientStatus shows a whisper-quiet inline sync/save hint in the top
-// toolbar only while an edit is in flight, queued locally, or failed. Clean
-// synced tasks render nothing so vertical and visual space stay completely calm.
+// drag strip only while an edit is in flight, queued locally, or failed. Clean
+// synced tasks render nothing so vertical and visual space stay completely calm
+// and title wrapping never shifts while typing.
 func detailTransientStatus(c *ui.Context, saveLabel string, failed bool) {
 	if saveLabel == "" || saveLabel == "已同步" || saveLabel == "新任务 · 待创建" {
 		return
@@ -64,9 +87,9 @@ func detailTransientStatus(c *ui.Context, saveLabel string, failed bool) {
 		dot = t.Danger
 		fg = t.Danger
 	}
-	ui.Row(c.Key("detail-transient-status")).Gap(5).Padding(0, 6).Height(24).Radius(5).AlignItems(ui.Center).Shrink(0).Children(func() {
+	ui.Row(c.Key("detail-transient-status")).Gap(5).Padding(0, 4).Height(16).AlignItems(ui.Center).Shrink(0).Children(func() {
 		ui.Box(c).Size(5, 5).Radius(2.5).Background(dot).Shrink(0).AccessHidden(true)
-		ui.Text(c, saveLabel).FontSize(fontAux).FontWeight(400).TextColor(fg).SingleLine()
+		ui.Text(c, saveLabel).FontSize(10.5).FontWeight(400).TextColor(fg).SingleLine()
 	})
 }
 

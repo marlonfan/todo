@@ -164,44 +164,56 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 		}
 	}
 
-	// Top Toolbar
-	ui.Row(c.Key("occurrence-toolbar")).Label("本次任务工具栏").Height(toolbarHeight).Shrink(0).Padding(0, 16).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).Children(func() {
-		if len(compact) > 0 && compact[0] {
+	isCompact := len(compact) > 0 && compact[0]
+	m := computeDetailTopChrome(c.TitleBar(), isCompact)
+
+	// Borderless canvas-blended top drag / platform window-button clearance strip
+	detailTopStrip(c, "occurrence-top-strip", "", m, func() {
+		if isCompact {
 			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
 			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
 		}
-		done := task.Status == "completed"
-		ui.Checkbox(c, &done, "").Size(32, 32).Justify(ui.Center).AlignItems(ui.Center).Label("完成本次 " + task.Title).Disabled(blocked || a.busy).OnChange(func() {
-			status := "pending"
-			if done {
-				status = "completed"
-			}
-			a.setTaskStatus(task, status)
-		})
-		appBadge(c, "本次实例").TextColor(t.Accent).Background(t.Accent.Alpha(0.12))
-		ui.Spacer(c)
-		iconButton(c, "编辑整个系列", lucide.Layers()).Disabled(blocked || a.busy).OnClick(func() { a.openOccurrenceSeries(task) })
-		iconButton(c, "整个系列提醒与活动记录", lucide.BellRing()).Disabled(a.busy || blocked).OnClick(func() { a.openTaskCenter(task) })
-		iconButton(c, "关闭", lucide.X()).Disabled(a.busy || a.aiPanel != nil).OnClick(func() { a.requestTaskTransition(func() {}) })
-	})
+	}, nil)
 
 	// Body Container
-	body := ui.Column(c.Key("occurrence-content")).Label("本次任务详情内容").Padding(16, 20, 12, 20).Gap(12).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip().Disabled(a.aiPanel != nil).
+	body := ui.Column(c.Key("occurrence-content")).Label("本次任务详情内容").Padding(m.BodyPadTop, detailBodySidePadding, 12, detailBodySidePadding).Gap(12).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip().Disabled(a.aiPanel != nil).
 		OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
 
 	body.Children(func() {
 		ui.Column(c.Key("occurrence-main")).Label("本次任务正文").Fill().MaxWidth(960).Gap(12).MinWidth(0).MinHeight(0).Clip().Children(func() {
-			// 1. Direct 1-click editable Instance Title
+			// 1. Completion Checkbox + Direct 1-click editable Instance Title + Inline Action Cluster
 			ui.Column(c.Key("occurrence-heading")).Shrink(0).Gap(4).MinWidth(0).Children(func() {
-				var occEsc func()
-				if !isTaskWorkspacePage(a.page) {
-					occEsc = func() { a.requestTaskTransition(func() {}) }
-				}
-				detailTitle(c, "occurrence-title", "本次标题", "本次标题（留空恢复系列标题）", &a.occurrenceTitle, false, blocked, &a.taskTitleInput,
-					markEditing,
-					func() { a.taskDescriptionInput.Focus() },
-					occEsc)
-				ui.Text(c, "仅影响本次实例 · 原始日期 "+task.OccurrenceDate).FontSize(11).TextColor(t.TextSecondary)
+				ui.Row(c.Key("occurrence-heading-row")).Shrink(0).MinWidth(0).Gap(detailHeadingGap).AlignItems(ui.Start).Children(func() {
+					done := task.Status == "completed"
+					occPriority := "普通"
+					if task.Priority > 0 {
+						occPriority = "高"
+					}
+					detailCompleteCheckbox(c, &done, "完成本次 "+task.Title, occPriority, blocked || a.busy, func() {
+						status := "pending"
+						if done {
+							status = "completed"
+						}
+						a.setTaskStatus(task, status)
+					})
+					var occEsc func()
+					if !isTaskWorkspacePage(a.page) {
+						occEsc = func() { a.requestTaskTransition(func() {}) }
+					}
+					detailTitle(c, "occurrence-title", "本次标题", "本次标题（留空恢复系列标题）", &a.occurrenceTitle, false, blocked, &a.taskTitleInput,
+						markEditing,
+						func() { a.taskDescriptionInput.Focus() },
+						occEsc)
+					ui.Row(c.Key("occurrence-heading-actions")).Shrink(0).Gap(2).Margin(1, 0, 0, 2).AlignItems(ui.Center).Children(func() {
+						iconButton(c, "编辑整个系列", lucide.Layers()).Disabled(blocked || a.busy).OnClick(func() { a.openOccurrenceSeries(task) })
+						iconButton(c, "整个系列提醒与活动记录", lucide.BellRing()).Disabled(a.busy || blocked).OnClick(func() { a.openTaskCenter(task) })
+						iconButton(c, "关闭", lucide.X()).Disabled(a.busy || a.aiPanel != nil).OnClick(func() { a.requestTaskTransition(func() {}) })
+					})
+				})
+				ui.Row(c.Key("occurrence-subtitle")).Shrink(0).Gap(6).Wrap().AlignItems(ui.Center).Padding(0, 0, 0, 34).Children(func() {
+					appBadge(c, "本次实例").TextColor(t.Accent).Background(t.Accent.Alpha(0.10))
+					ui.Text(c, "仅影响本次实例 · 原始日期 "+task.OccurrenceDate).FontSize(11).TextColor(t.TextSecondary)
+				})
 			})
 
 			// 2. Upfront Iconic Instance Actions & Schedule Chip

@@ -176,20 +176,27 @@ func TestLinearOccurrenceInlineSectionsAndCompactToolbar(t *testing.T) {
 			a.selectedOccurrence.Description = "## 本次说明\n\n保留实例操作"
 			a.occurrenceDescription = a.selectedOccurrence.Description
 			tt := ui.NewTester(a.view, width, 900)
-			var lastToolbar, lastProperty ui.Rect
+			var lastContent, lastProperty ui.Rect
+			wantTopHeight := float32(detailDragStripHeight)
+			if width < 1050 {
+				wantTopHeight = detailTopBarMinHeight
+			}
 			for frame := 0; frame < 5; frame++ {
 				tt.Frame()
-				toolbar, ok := tt.Access("本次任务工具栏")
-				if !ok || toolbar.Bounds.H != toolbarHeight {
-					t.Fatalf("occurrence toolbar must be 52px: %+v", toolbar)
+				if _, obsolete := tt.Access("本次任务工具栏"); obsolete {
+					t.Fatal("obsolete fixed 50px occurrence toolbar should be removed")
 				}
 				content, ok := tt.Access("本次任务详情内容")
-				if !ok || content.Bounds.X != toolbar.Bounds.X || content.Bounds.W != toolbar.Bounds.W || content.Bounds.Y != toolbar.Bounds.Y+toolbarHeight {
-					t.Fatalf("nested inset or extra navigation row: toolbar=%+v content=%+v", toolbar.Bounds, content.Bounds)
+				if !ok || content.Bounds.Y != wantTopHeight {
+					t.Fatalf("unexpected occurrence content top offset: got=%+v wantY=%.0f", content.Bounds, wantTopHeight)
 				}
 				main, ok := tt.Access("本次任务正文")
-				if !ok || main.Bounds.X != toolbar.Bounds.X+20 || main.Bounds.W > 960 {
+				if !ok || main.Bounds.X != content.Bounds.X+detailBodySidePadding || main.Bounds.W > 960 {
 					t.Fatalf("detail should have one 20px inset and width <=960: %+v", main.Bounds)
+				}
+				title, ok := tt.AccessByRole(ui.RoleTextField, "本次标题")
+				if !ok {
+					t.Fatal("missing occurrence title editor")
 				}
 				property, ok := tt.AccessByRole(ui.RoleButton, "编辑本次开始")
 				if !ok || property.Bounds.X < main.Bounds.X || property.Bounds.W > 480 {
@@ -206,20 +213,26 @@ func TestLinearOccurrenceInlineSectionsAndCompactToolbar(t *testing.T) {
 				if !ok || footer.Bounds.H != 48 {
 					t.Fatalf("footer must retain 48px height: %+v", footer)
 				}
-				if frame > 0 && (lastToolbar != toolbar.Bounds || lastProperty != property.Bounds) {
+				if frame > 0 && (lastContent != content.Bounds || lastProperty != property.Bounds) {
 					t.Fatal("responsive geometry oscillated between frames")
 				}
-				lastToolbar, lastProperty = toolbar.Bounds, property.Bounds
+				lastContent, lastProperty = content.Bounds, property.Bounds
 				completion, ok := tt.AccessByRole(ui.RoleCheckBox, "完成本次 "+a.selectedOccurrence.Title)
-				if !ok || completion.Disabled || completion.Bounds.X < toolbar.Bounds.X || completion.Bounds.X+completion.Bounds.W > toolbar.Bounds.X+toolbar.Bounds.W || completion.Bounds.Y < toolbar.Bounds.Y || completion.Bounds.Y+completion.Bounds.H > toolbar.Bounds.Y+toolbar.Bounds.H {
-					t.Fatalf("completion control escaped fixed toolbar: %+v", completion)
+				if !ok || completion.Disabled || completion.Bounds.X < main.Bounds.X || completion.Bounds.Y < title.Bounds.Y-4 || completion.Bounds.Y > title.Bounds.Y+detailTitleLineHeight {
+					t.Fatalf("completion control must align with occurrence title first line: cb=%+v title=%+v", completion, title.Bounds)
+				}
+				for _, label := range []string{"编辑整个系列", "整个系列提醒与活动记录", "关闭"} {
+					btn, ok := tt.AccessByRole(ui.RoleButton, label)
+					if !ok || btn.Bounds.Y < title.Bounds.Y-2 || btn.Bounds.Y > title.Bounds.Y+6 {
+						t.Fatalf("inline occurrence action %q must align with title first line: btn=%+v title=%+v", label, btn.Bounds, title.Bounds)
+					}
 				}
 				back, compact := tt.AccessByRole(ui.RoleButton, "‹ 返回任务列表")
 				if compact != (width < 1050) {
 					t.Fatalf("unexpected compact Back at %d", width)
 				}
-				if compact && (back.Bounds.Y < toolbar.Bounds.Y || back.Bounds.Y+back.Bounds.H > toolbar.Bounds.Y+toolbar.Bounds.H) {
-					t.Fatal("Back is outside the shared toolbar")
+				if compact && (back.Bounds.Y < 0 || back.Bounds.Y+back.Bounds.H > wantTopHeight) {
+					t.Fatalf("Back is outside the compact top strip: back=%+v topH=%.0f", back.Bounds, wantTopHeight)
 				}
 			}
 			if width < 1050 {

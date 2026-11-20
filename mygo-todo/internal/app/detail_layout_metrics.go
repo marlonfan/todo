@@ -12,7 +12,54 @@ const (
 	detailMaxWidth        = 1600
 	detailTitleFontSize   = 23
 	detailTitleLineHeight = 32
+	detailDragStripHeight = 16
+	detailTopBarMinHeight = 38
+	detailHeadingGap      = 8
+	detailBodySidePadding = 20
+	detailBodyTopPadding  = 4
 )
+
+type detailTopChromeMetrics struct {
+	ShowNavBar bool
+	Height     float32
+	PadLeft    float32
+	PadRight   float32
+	BodyPadTop float32
+}
+
+// computeDetailTopChrome determines the borderless top drag/clearance strip
+// above detail content across macOS, Windows, Linux, fullscreen, and compact
+// narrow layouts without hardcoding any OS.
+func computeDetailTopChrome(bar ui.TitleBar, isCompact bool) detailTopChromeMetrics {
+	if isCompact || bar.Right > 0 {
+		h := max(bar.Height, float32(detailTopBarMinHeight))
+		padLeft := float32(detailBodySidePadding)
+		if isCompact {
+			padLeft = 14
+			if bar.Left > 0 {
+				padLeft = bar.Left + 8
+			}
+		}
+		padRight := float32(14)
+		if bar.Right > 0 {
+			padRight = bar.Right + 14
+		}
+		return detailTopChromeMetrics{
+			ShowNavBar: true,
+			Height:     h,
+			PadLeft:    padLeft,
+			PadRight:   padRight,
+			BodyPadTop: 4,
+		}
+	}
+	return detailTopChromeMetrics{
+		ShowNavBar: false,
+		Height:     detailDragStripHeight,
+		PadLeft:    detailBodySidePadding,
+		PadRight:   detailBodySidePadding,
+		BodyPadTop: detailBodyTopPadding,
+	}
+}
 
 // Allow flexible user-driven split resizing: the task list can shrink down to
 // 240px and the task detail can expand all the way across wide screens, while

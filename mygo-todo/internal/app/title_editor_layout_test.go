@@ -34,15 +34,26 @@ func TestTaskTitleEditorUsesAvailableHeadingWidth(t *testing.T) {
 			if !ok {
 				t.Fatal("missing completion checkbox beside task title")
 			}
+			bell, ok := tt.AccessByRole(ui.RoleButton, "提醒与活动记录")
+			if !ok {
+				t.Fatal("missing inline reminder action beside task title")
+			}
+			closeBtn, ok := tt.AccessByRole(ui.RoleButton, "关闭")
+			if !ok {
+				t.Fatal("missing inline close action beside task title")
+			}
 			if cb.Bounds.Y < editor.Bounds.Y-4 || cb.Bounds.Y > editor.Bounds.Y+detailTitleLineHeight {
 				t.Fatalf("completion checkbox should align with first line of title: cb=%+v title=%+v", cb.Bounds, editor.Bounds)
+			}
+			if bell.Bounds.Y < editor.Bounds.Y-2 || bell.Bounds.Y > editor.Bounds.Y+6 || closeBtn.Bounds.Y != bell.Bounds.Y {
+				t.Fatalf("inline header actions should align with first line of title: bell=%+v close=%+v title=%+v", bell.Bounds, closeBtn.Bounds, editor.Bounds)
 			}
 			if editor.Bounds.X < cb.Bounds.X+cb.Bounds.W+4 {
 				t.Fatalf("title should sit right of completion checkbox: cb=%+v title=%+v", cb.Bounds, editor.Bounds)
 			}
-			wantWidth := pane.Bounds.W - 40 - cb.Bounds.W - 8
+			wantWidth := bell.Bounds.X - 10 - (cb.Bounds.X + cb.Bounds.W + detailHeadingGap)
 			if editor.Bounds.W < wantWidth-2 || editor.Bounds.W > wantWidth+2 {
-				t.Fatalf("native title width %.1f does not span available heading width %.1f", editor.Bounds.W, wantWidth)
+				t.Fatalf("native title width %.1f does not span available heading width %.1f (pane=%.1f bellX=%.1f)", editor.Bounds.W, wantWidth, pane.Bounds.W, bell.Bounds.X)
 			}
 			if err := tt.Click("任务标题"); err != nil {
 				t.Fatal(err)

@@ -285,13 +285,11 @@ func (a *App) editorView(c *ui.Context) {
 func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	d := &a.draft
 	t := tokensOf(c)
+	isCompact := len(compact) > 0 && compact[0]
+	m := computeDetailTopChrome(c.TitleBar(), isCompact)
 
-	// Compact Top Action Bar (checkbox moved beside the title for close visual association)
-	ui.Row(c.Key("detail-toolbar")).Height(40).Shrink(0).Padding(0, 14, 0, 16).Gap(6).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle.Alpha(0.65)).AlignItems(ui.Center).Children(func() {
-		if len(compact) > 0 && compact[0] {
-			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
-			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
-		}
+	hasContextBadge := d.Task.Recurring() || d.Task.ID == 0 || d.Task.ReadOnly
+	renderContextBadge := func() {
 		if d.Task.Recurring() {
 			appBadge(c, "重复系列").TextColor(t.Accent).Background(t.Accent.Alpha(0.10))
 		} else if d.Task.ID == 0 {
@@ -299,49 +297,25 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 		} else if d.Task.ReadOnly {
 			appBadge(c, "外部只读")
 		}
-		ui.Spacer(c)
+	}
+
+	// Borderless canvas-blended top drag / platform window-button clearance strip
+	detailTopStrip(c, "detail-top-strip", "", m, func() {
+		if isCompact {
+			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
+			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
+		}
+		if m.ShowNavBar && hasContextBadge {
+			renderContextBadge()
+		}
+	}, func() {
 		if !d.Task.ReadOnly && d.Task.ID != 0 {
 			detailTransientStatus(c, a.detailSaveLabel(), a.failure != "" || a.autosave.failure != "")
 		}
-		if d.Task.ID != 0 {
-			iconButton(c, "提醒与活动记录", lucide.BellRing()).Disabled(a.busy).OnClick(func() { a.openTaskCenter(d.Task) })
-		}
-		moreHolder := ui.Box(c.Key("detail-more-holder")).Size(0, 0)
-		moreOpen := ui.Local(moreHolder, "open", func() bool { return false })
-		var moreItems []overlay.MenuItem
-		if !d.Task.ReadOnly {
-			moreItems = append(moreItems, overlay.MenuItem{Key: "ai", Label: "AI 生成描述", Icon: lucide.Sparkles(), Disabled: a.busy})
-		}
-		if d.Task.ID != 0 {
-			moreItems = append(moreItems, overlay.MenuItem{Key: "activity", Label: "提醒与活动记录", Icon: lucide.History(), Disabled: a.busy})
-		}
-		if d.Task.ID > 0 && !d.Task.ReadOnly {
-			if len(moreItems) > 0 {
-				moreItems = append(moreItems, overlay.MenuItem{Divider: true})
-			}
-			moreItems = append(moreItems, overlay.MenuItem{Key: "delete", Label: "删除任务…", Icon: lucide.Trash2(), Danger: true})
-		}
-		if len(moreItems) > 0 {
-			choice := appDropdown(c, moreOpen, moreItems, func(trigger ui.Element) {
-				styleAppButton(c, trigger, "", "ghost").Label("更多任务选项").Tooltip("更多选项").Size(30, 30).Padding(7).Children(func() {
-					ui.Icon(c, lucide.Ellipsis()).Size(15, 15).TextColor(t.TextSecondary).AccessHidden(true)
-				})
-			})
-			switch choice {
-			case "ai":
-				a.openDescriptionAI(false)
-			case "activity":
-				a.openTaskCenter(d.Task)
-			case "delete":
-				task := d.Task
-				a.deleteTask = &task
-			}
-		}
-		iconButton(c, "关闭", lucide.X()).Disabled(a.busy).OnClick(func() { a.requestTaskTransition(func() {}) })
 	})
 
-	// Main Detail Workspace: Checkbox+Title + Ghost Property Bar + Full-Height WYSIWYG Markdown
-	body := ui.Column(c.Key("task-editor-content")).Label("任务详情内容").Padding(18, 20, 14, 20).Gap(10).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip()
+	// Main Detail Workspace: Checkbox+Title+InlineActions + Ghost Property Bar + Full-Height WYSIWYG Markdown
+	body := ui.Column(c.Key("task-editor-content")).Label("任务详情内容").Padding(m.BodyPadTop, detailBodySidePadding, 14, detailBodySidePadding).Gap(10).MinWidth(0).Grow(1).Basis(0).MinHeight(0).Clip()
 	if a.taskMetaOpen == "" {
 		body.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
 	}
@@ -353,8 +327,14 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 		titleFocused := ui.Local(body, "title-focused", func() bool { return false })
 		titleEdited := ui.Local(body, "title-edited", func() bool { return false })
 		ui.Column(c.Key("detail-main")).Fill().Gap(10).MinWidth(0).MinHeight(0).Clip().Children(func() {
-			// 1. Completion Checkbox + Direct 1-click editable 23px Title
-			ui.Row(c.Key("task-heading")).Shrink(0).MinWidth(0).Gap(8).AlignItems(ui.Start).Children(func() {
+			if !m.ShowNavBar && hasContextBadge {
+				ui.Row(c.Key("detail-context-eyebrow")).Shrink(0).AlignItems(ui.Center).Gap(6).Margin(0, 0, -4, 0).Children(func() {
+					renderContextBadge()
+				})
+			}
+
+			// 1. Completion Checkbox + Direct 1-click editable 23px Title + Inline Action Cluster
+			ui.Row(c.Key("task-heading")).Shrink(0).MinWidth(0).Gap(detailHeadingGap).AlignItems(ui.Start).Children(func() {
 				if d.Task.ID != 0 {
 					done := d.Status == "已完成"
 					detailCompleteCheckbox(c, &done, "完成任务 "+d.Title, d.Priority,
@@ -388,6 +368,44 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 						a.taskDescriptionInput.Focus()
 					},
 					titleEsc)
+
+				headingActions := ui.Row(c.Key("detail-heading-actions")).Shrink(0).Gap(2).Margin(1, 0, 0, 2).AlignItems(ui.Center)
+				moreOpen := ui.Local(headingActions, "more-open", func() bool { return false })
+				headingActions.Children(func() {
+					if d.Task.ID != 0 {
+						iconButton(c, "提醒与活动记录", lucide.BellRing()).Disabled(a.busy).OnClick(func() { a.openTaskCenter(d.Task) })
+					}
+					var moreItems []overlay.MenuItem
+					if !d.Task.ReadOnly {
+						moreItems = append(moreItems, overlay.MenuItem{Key: "ai", Label: "AI 生成描述", Icon: lucide.Sparkles(), Disabled: a.busy})
+					}
+					if d.Task.ID != 0 {
+						moreItems = append(moreItems, overlay.MenuItem{Key: "activity", Label: "提醒与活动记录", Icon: lucide.History(), Disabled: a.busy})
+					}
+					if d.Task.ID > 0 && !d.Task.ReadOnly {
+						if len(moreItems) > 0 {
+							moreItems = append(moreItems, overlay.MenuItem{Divider: true})
+						}
+						moreItems = append(moreItems, overlay.MenuItem{Key: "delete", Label: "删除任务…", Icon: lucide.Trash2(), Danger: true})
+					}
+					if len(moreItems) > 0 {
+						choice := appDropdown(c, moreOpen, moreItems, func(trigger ui.Element) {
+							styleAppButton(c, trigger, "", "ghost").Label("更多任务选项").Tooltip("更多选项").Size(30, 30).Padding(7).Children(func() {
+								ui.Icon(c, lucide.Ellipsis()).Size(15, 15).TextColor(t.TextSecondary).AccessHidden(true)
+							})
+						})
+						switch choice {
+						case "ai":
+							a.openDescriptionAI(false)
+						case "activity":
+							a.openTaskCenter(d.Task)
+						case "delete":
+							task := d.Task
+							a.deleteTask = &task
+						}
+					}
+					iconButton(c, "关闭", lucide.X()).Disabled(a.busy).OnClick(func() { a.requestTaskTransition(func() {}) })
+				})
 			})
 			nowFocused := a.taskTitleInput.Focused(c)
 			if *titleFocused && !nowFocused && *titleEdited {
