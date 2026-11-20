@@ -534,11 +534,11 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 							boxBg, boxBorder = t.Accent, t.Accent
 							borderW = 1.4
 						} else if task.Priority > 0 {
-							boxBg = t.Accent.Alpha(0.08)
-							boxBorder = t.Accent
+							boxBg = t.Warning.Alpha(0.10)
+							boxBorder = t.Warning
 							borderW = 1.5
 							if cb.Hovered() {
-								boxBg = t.Accent.Alpha(0.16)
+								boxBg = t.Warning.Alpha(0.18)
 							}
 						} else if task.Priority < 0 {
 							boxBorder = t.TextTertiary.Alpha(0.45)
