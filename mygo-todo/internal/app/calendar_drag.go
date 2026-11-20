@@ -352,7 +352,7 @@ func (a *App) calendarCompactEvent(c *ui.Context, event api.CalendarEvent, day t
 	box.Children(func() {
 		e := a.calendarEventButton(c.Key("event"), event, day).Fill().Height(height)
 		if event.AllDay {
-			e.Padding(0, 14, 0, 6)
+			e.Padding(0, 14, 0, 9)
 			a.calendarResizeHandle(c, event, day, 0, cardHover || box.Hovered())
 		}
 	})

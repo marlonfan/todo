@@ -433,6 +433,7 @@ func (a *App) calendarEventButton(c *ui.Context, event api.CalendarEvent, day ti
 		OnClick(func() { a.openCalendarEvent(event) })
 
 	if event.AllDay {
+		e.Padding(0, 6, 0, 9)
 		mixAmt := float32(0.13)
 		if c.Theme().Dark {
 			mixAmt = 0.23
