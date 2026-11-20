@@ -565,7 +565,7 @@ func (a *App) taskListPane(c *ui.Context) {
 				return
 			}
 			rowControlOwnsKeys = a.taskListItem(c, item.task, now) || rowControlOwnsKeys
-		}).Label("任务列表").Padding(4, 8).Grow(1).MinHeight(0)
+		}).Label("任务列表").Padding(4, 8).Gap(3).Grow(1).MinHeight(0)
 		scrollTaskIntoView = func(idx int) {
 			if idx >= 0 && idx < len(taskToRow) {
 				a.list.ScrollIntoView(taskToRow[idx])
@@ -584,7 +584,7 @@ func (a *App) taskListPane(c *ui.Context) {
 		a.list.Key = func(i int) any { return a.stableTaskKey(tasks[i]) }
 		list = ui.List(c, &a.list, len(tasks), func(i int) {
 			rowControlOwnsKeys = a.taskListItem(c, tasks[i], now) || rowControlOwnsKeys
-		}).Label("任务列表").Padding(4, 8).Grow(1).MinHeight(0)
+		}).Label("任务列表").Padding(4, 8).Gap(3).Grow(1).MinHeight(0)
 		scrollTaskIntoView = func(idx int) { a.list.ScrollIntoView(idx) }
 	}
 
