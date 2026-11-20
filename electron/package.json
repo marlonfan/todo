@@ -1,6 +1,6 @@
 {
   "name": "todo-electron",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "private": true,
   "description": "Electron desktop shell for Todo.",
   "author": "marlon",
