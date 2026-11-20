@@ -89,28 +89,30 @@ func TestDenseQuickAddAndStableDetailFooter(t *testing.T) {
 	if tt.HasText("本次实例") || tt.HasText("整个系列提醒与活动记录") {
 		t.Fatal("ordinary task exposes fake instance/series content")
 	}
-	footer, _ := tt.Access("任务底部操作")
+	_, hasFooter := tt.Access("任务底部操作")
 	_, hasSave := tt.AccessByRole(ui.RoleButton, "保存任务")
-	if footer.Bounds.H != 48 || hasSave || !tt.HasText("已同步") {
-		t.Fatal("clean task requires stable footer and lightweight sync status", footer)
+	if hasFooter || hasSave || !tt.HasText("已同步") {
+		t.Fatal("clean task must reclaim detail footer and rely on single sidebar sync status", hasFooter, hasSave)
 	}
 	if err := tt.Click("任务标题"); err != nil {
 		t.Fatal(err)
 	}
 	a.draft.Title += "更改"
 	tt.Frame()
-	changedFooter, _ := tt.Access("任务底部操作")
+	_, changedFooter := tt.Access("任务底部操作")
 	_, hasSave = tt.AccessByRole(ui.RoleButton, "保存任务")
-	if changedFooter.Bounds != footer.Bounds || hasSave || !tt.HasText("待保存…") || !a.taskDraftDirty() {
-		t.Fatal("dirty task must show pending status without moving footer", changedFooter)
+	changedDesc, _ := tt.AccessByRole(ui.RoleTextField, "备注")
+	if changedFooter || hasSave || changedDesc.Bounds != descField.Bounds || !tt.HasText("待保存…") || !a.taskDraftDirty() {
+		t.Fatal("dirty task must show transient toolbar status without shifting editor layout", changedFooter, changedDesc.Bounds, descField.Bounds)
 	}
 	if !a.flushDetailAutosave() {
 		t.Fatal(a.autosave.failure)
 	}
 	tt.Frame()
-	savedFooter, _ := tt.Access("任务底部操作")
-	if savedFooter.Bounds != footer.Bounds || !tt.HasText("已存本机 · 待同步") || a.taskDraftDirty() || len(a.cache.Outbox) != 1 {
-		t.Fatal("autosave must keep the stable footer and expose durable local state", savedFooter)
+	_, savedFooter := tt.Access("任务底部操作")
+	savedDesc, _ := tt.AccessByRole(ui.RoleTextField, "备注")
+	if savedFooter || savedDesc.Bounds != descField.Bounds || !tt.HasText("已存本机 · 待同步") || a.taskDraftDirty() || len(a.cache.Outbox) != 1 {
+		t.Fatal("autosave must keep calm layout without bottom bar and expose durable local state", savedFooter, savedDesc.Bounds)
 	}
 }
 

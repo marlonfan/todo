@@ -322,7 +322,7 @@ func (a *App) historyToolbar(c *ui.Context, now time.Time) {
 						if f.Range == "自定义日期" {
 							popWidth = 296
 						}
-						elevatePopup(c, panel.Width(popWidth).Padding(12).Gap(10).Radius(popoverRadius).Background(t.BgApp).Label("选择历史时间范围"))
+						elevatePopup(c, panel.Width(popWidth).Padding(12).Gap(10).Radius(popoverRadius).Background(t.BgElevated).Label("选择历史时间范围"))
 						panel.Children(func() {
 							ui.Text(c, "时间范围").FontSize(12.5).FontWeight(600).TextColor(t.TextPrimary)
 							ui.Row(c.Key("history-range-pills")).Gap(5).Wrap().AlignItems(ui.Center).Children(func() {
@@ -484,7 +484,7 @@ func (a *App) historyToolbar(c *ui.Context, now time.Time) {
 				if *filterOpen {
 					ui.PopoverBase(c.Key("history-filter-popover"), filterAnchor, filterOpen, func(panel ui.Element) {
 						panel.AttachTo(filterAnchor, ui.AnchorBottomEnd, ui.AnchorBottomStart)
-						elevatePopup(c, panel.Width(284).Padding(12).Gap(12).Radius(popoverRadius).Background(t.BgApp).Label("历史筛选面板"))
+						elevatePopup(c, panel.Width(284).Padding(12).Gap(12).Radius(popoverRadius).Background(t.BgElevated).Label("历史筛选面板"))
 						panel.Children(func() {
 							ui.Row(c).AlignItems(ui.Center).Children(func() {
 								ui.Text(c, "筛选条件").FontSize(13).FontWeight(600).TextColor(t.TextPrimary).Grow(1)

@@ -162,7 +162,7 @@ func (a *App) calendarView(c *ui.Context) {
 				if *jumpOpen {
 					ui.PopoverBase(c.Key("cal-jump-popover"), titleAnchor, jumpOpen, func(panel ui.Element) {
 						panel.AttachTo(titleAnchor, ui.AnchorBottomStart, ui.AnchorTopStart)
-						elevatePopup(c, panel.Padding(12).Width(268).Radius(popoverRadius).Background(t.BgApp).Label("选择跳转日期"))
+						elevatePopup(c, panel.Padding(12).Width(268).Radius(popoverRadius).Background(t.BgElevated).Label("选择跳转日期"))
 						panel.Children(func() {
 							if appCalendar(c, &a.selectedDay, "跳转日历日期") {
 								a.selectedDay = a.selectedDay.In(a.location())
@@ -780,7 +780,7 @@ func (a *App) calendarMonthView(c *ui.Context, events []api.CalendarEvent) {
 								if *moreOpen {
 									ui.PopoverBase(c.Key("day-more-pop-"+dayStr), cell, moreOpen, func(panel ui.Element) {
 										panel.AttachTo(cell, ui.AnchorBottomStart, ui.AnchorTopStart)
-										elevatePopup(c, panel.Width(248).Padding(10).Gap(6).Radius(popoverRadius).Background(t.BgApp).Label(dayStr+" 全部日程"))
+										elevatePopup(c, panel.Width(248).Padding(10).Gap(6).Radius(popoverRadius).Background(t.BgElevated).Label(dayStr+" 全部日程"))
 										panel.Children(func() {
 											wk := "周" + []string{"日", "一", "二", "三", "四", "五", "六"}[day.Weekday()]
 											ui.Row(c).AlignItems(ui.Center).Children(func() {

@@ -40,12 +40,14 @@ func TestLinearDetailReadEditAndVerticalProperties(t *testing.T) {
 						t.Fatalf("missing toolbar action %q: %v", label, tt.Texts())
 					}
 				}
-				if _, ok := tt.AccessByRole(ui.RoleButton, "保存任务"); ok || tt.HasText("未修改") || !tt.HasText("已同步") {
-					t.Fatal("clean detail must show lightweight sync status without a save button")
+				if _, ok := tt.AccessByRole(ui.RoleButton, "保存任务"); ok || tt.HasText("未修改") {
+					t.Fatal("clean detail must stay quiet without a save button or dirty hint")
 				}
-				footer, ok := tt.Access("任务底部操作")
-				if !ok || footer.Bounds.H != 48 {
-					t.Fatalf("detail footer must remain 48px high: %+v", footer)
+				if width >= 1180 && !tt.HasText("已同步") {
+					t.Fatal("sidebar must retain the single sync status indicator on wide windows")
+				}
+				if footer, ok := tt.Access("任务底部操作"); ok {
+					t.Fatalf("clean synced detail must not render redundant bottom status bar: %+v", footer)
 				}
 
 				// Horizontal wrapped property chips sit between Title and WYSIWYG Description
@@ -80,8 +82,11 @@ func TestLinearDetailReadEditAndVerticalProperties(t *testing.T) {
 				if _, ok := tt.AccessByRole(ui.RoleButton, "保存任务"); ok || !a.taskDraftDirty() || !tt.HasText("待保存…") {
 					t.Fatal("dirty draft must show pending autosave status")
 				}
-				if dirtyFooter, ok := tt.Access("任务底部操作"); !ok || dirtyFooter.Bounds != footer.Bounds {
-					t.Fatalf("editing moved the stable footer: before=%+v after=%+v", footer, dirtyFooter)
+				if dirtyFooter, ok := tt.Access("任务底部操作"); ok {
+					t.Fatalf("dirty existing task should use transient toolbar status, not bottom bar: %+v", dirtyFooter)
+				}
+				if dirtyDesc, ok := tt.AccessByRole(ui.RoleTextField, "备注"); !ok || dirtyDesc.Bounds != description.Bounds {
+					t.Fatalf("editing shifted description layout: before=%+v after=%+v", description.Bounds, dirtyDesc.Bounds)
 				}
 				if len(a.cache.Outbox) != 0 || a.tasks[0].Description != task.Description {
 					t.Fatal("reading/editing wrote task before autosave flush")
