@@ -25,16 +25,17 @@ func notificationStatus(status string) string {
 }
 func (a *App) taskCenterView(c *ui.Context) {
 	open := a.taskCenter != nil
-	ui.Modal(c, &open, func() {
+	appDialog(c, &open, func() {
 		p := a.taskCenter
 		if p == nil {
 			return
 		}
-		ui.Text(c, "提醒与活动记录").FontSize(fontTitle).FontWeight(600)
-		ui.Text(c, p.Task.Title).TextColor(c.Theme().TextMuted)
-		ui.Text(c, "显示服务器已保存的数据，不含尚未同步或编辑中的修改。").FontSize(12).TextColor(c.Theme().TextMuted)
+		t := tokensOf(c)
+		ui.Text(c, "提醒与活动记录").FontSize(fontTitle).FontWeight(600).TextColor(t.TextPrimary)
+		ui.Text(c, p.Task.Title).FontSize(fontTask).TextColor(t.TextSecondary)
+		ui.Text(c, "显示服务器已保存的数据，不含尚未同步或编辑中的修改。").FontSize(12).TextColor(t.TextTertiary)
 		if p.Task.Recurring() {
-			ui.Text(c, "服务端提醒针对整个重复系列；此处不是单次实例提醒。").TextColor(c.Theme().TextMuted)
+			ui.Text(c, "服务端提醒针对整个重复系列；此处不是单次实例提醒。").FontSize(12).TextColor(t.TextSecondary)
 		}
 		appSegmented(c, &p.Tab, []string{"服务端提醒", "活动记录"}, action.SegmentedProps{}).Disabled(a.busy || p.Editing)
 		_, height := c.Size()

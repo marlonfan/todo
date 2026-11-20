@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +11,8 @@ import (
 )
 
 func TestTaskRowTrailingHandleAndPointerPreview(t *testing.T) {
+	now := time.Now()
+	due := now.Add(2 * time.Hour)
 	for _, dark := range []bool{false, true} {
 		for _, page := range []string{"all", "completed", "category:2", "search"} {
 			for _, readOnly := range []bool{false, true} {
@@ -19,12 +20,25 @@ func TestTaskRowTrailingHandleAndPointerPreview(t *testing.T) {
 					a := New(storage.Store{Dir: t.TempDir()})
 					defer a.Close()
 					a.page = page
-					task := api.Task{ID: 1, InstanceID: "instance", Title: "任务布局", Status: "pending", Priority: 1, ReadOnly: readOnly}
+					task := api.Task{
+						ID:         1,
+						InstanceID: "instance",
+						Title:      "任务布局",
+						Status:     "pending",
+						Priority:   1,
+						ReadOnly:   readOnly,
+						StartTime:  &due,
+						Categories: []api.Category{{ID: 2, Name: "产品研发", Emoji: "🚀"}},
+					}
+					if page == "completed" {
+						task.Status = "completed"
+						task.CompletedAt = &now
+					}
 					var background ui.Color
 					tt := ui.NewTester(func(c *ui.Context) {
 						applyAppTheme(c)
 						background = tokensOf(c).BgList
-						ui.Column(c).Width(420).Children(func() { a.taskListItem(c, task, time.Now()) })
+						ui.Column(c).Width(420).Children(func() { a.taskListItem(c, task, now) })
 					}, 600, 260)
 					tt.SetDark(dark)
 					tt.Frame()
@@ -38,16 +52,13 @@ func TestTaskRowTrailingHandleAndPointerPreview(t *testing.T) {
 					if !foundTitle || titleText.X != title.Bounds.X {
 						t.Fatal("title text origin", titleText, title.Bounds)
 					}
-					summaryText := "高优先级"
-					for _, text := range tt.Texts() {
-						if strings.HasPrefix(text, "高优先级") {
-							summaryText = text
-							break
-						}
+					if tt.HasText("高优先级") {
+						t.Fatalf("high priority text should be conveyed by checkbox border, not verbose text: %v", tt.Texts())
 					}
-					summary, ok := tt.Find(summaryText)
+					timeText, _ := taskRowTimeLabel(task, now, a.location(), page == "completed")
+					summary, ok := tt.Find(timeText)
 					if !ok || summary.X != title.Bounds.X {
-						t.Fatal("summary/title origins", summary, title.Bounds)
+						t.Fatal("summary/title origins", summary, title.Bounds, tt.Texts())
 					}
 					handle, hasHandle := tt.Access("拖动归类 " + task.Title)
 					if readOnly {
@@ -102,5 +113,82 @@ func TestTaskRowTrailingHandleAndPointerPreview(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestTaskRowPriorityCheckboxGapAndNoCategoryTruncation(t *testing.T) {
+	now := time.Now()
+	past := dayStart(now).AddDate(0, 0, -2).Add(9 * time.Hour)
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.page = "all"
+	tasks := []api.Task{
+		{
+			ID:             1,
+			InstanceID:     "1_20261118",
+			Title:          "高优逾期重复任务",
+			Status:         "pending",
+			Priority:       1,
+			StartTime:      &past,
+			RecurrenceRule: []byte(`{"freq":"daily"}`),
+			Categories:     []api.Category{{ID: 1, Name: "产品研发", Emoji: "🚀"}},
+		},
+		{
+			ID:        2,
+			Title:     "普通任务左对齐基准",
+			Status:    "pending",
+			Priority:  0,
+			StartTime: &now,
+		},
+	}
+	a.editing, a.draft.Task.ID = true, 1
+	var warnCol ui.Color
+	tt := ui.NewTester(func(c *ui.Context) {
+		applyAppTheme(c)
+		warnCol = tokensOf(c).Warning
+		ui.Column(c).Width(taskListDefaultWidth - 12).Gap(3).Children(func() {
+			for _, task := range tasks {
+				tItem := task
+				ui.Box(c.Key(tItem.ID)).FillWidth().Children(func() {
+					a.taskListItem(c, tItem, now)
+				})
+			}
+		})
+	}, 420, 200)
+	tt.Frame()
+
+	// 1. Strict left alignment of titles across priority levels
+	t1, ok1 := tt.Find("高优逾期重复任务")
+	t2, ok2 := tt.Find("普通任务左对齐基准")
+	if !ok1 || !ok2 || t1.X != t2.X {
+		t.Fatalf("titles misaligned across priorities: t1=%+v t2=%+v", t1, t2)
+	}
+	// 2. Clean vertical gap between adjacent rows (no border clash)
+	r1, _ := tt.Access("任务行 高优逾期重复任务")
+	r2, _ := tt.Access("任务行 普通任务左对齐基准")
+	if r2.Bounds.Y <= r1.Bounds.Y+r1.Bounds.H {
+		t.Fatalf("expected clean vertical gap between rows, got r1=%+v r2=%+v", r1.Bounds, r2.Bounds)
+	}
+	// 3. Verbose "高优先级" text removed; full category name renders cleanly without "🚀..." truncation
+	if tt.HasText("高优先级") {
+		t.Fatalf("unexpected verbose 高优先级 text in row: %v", tt.Texts())
+	}
+	if !tt.HasText("🚀 产品研发") {
+		t.Fatalf("category label missing or truncated at default list width: %v", tt.Texts())
+	}
+	// 4. High priority checkbox draws warning border pixels
+	chk, _ := tt.Access("完成 高优逾期重复任务")
+	img := tt.Image()
+	warnPixels := 0
+	for y := int(chk.Bounds.Y); y < int(chk.Bounds.Y+chk.Bounds.H); y++ {
+		for x := int(chk.Bounds.X); x < int(chk.Bounds.X+chk.Bounds.W); x++ {
+			p := img.RGBAAt(x, y)
+			if p.R == warnCol.R && p.G == warnCol.G && p.B == warnCol.B && p.A == 255 {
+				warnPixels++
+			}
+		}
+	}
+	if warnPixels == 0 {
+		t.Fatal("high-priority checkbox did not render warning highlight border")
 	}
 }

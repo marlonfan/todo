@@ -135,12 +135,15 @@ func TestNativeHistoryToolbarEmptyPaginationAndSmallWindow(t *testing.T) {
 			t.Fatalf("expected grouped date headers (今天 / 昨天), got %v", tt.Texts())
 		}
 
-		// 2. Verify all 1-click range pills fit inside bounds
+		// 2. Verify compact single-row default toolbar fits inside bounds without multi-row bloat
+		if tb, ok := tt.Access("历史工具栏"); !ok || tb.Bounds.H > 48 {
+			t.Fatalf("default history toolbar should stay a compact single row (<=48px), got %+v", tb)
+		}
 		for _, dark := range []bool{false, true} {
 			tt.SetDark(dark)
 			tt.Frame()
 			if size[0] >= 1180 {
-				for _, label := range []string{"历史排序", "历史筛选条件", "历史范围 全部时间", "历史范围 今天", "历史范围 昨天", "历史范围 最近7天", "历史范围 最近30天", "自定义日期范围"} {
+				for _, label := range []string{"历史日期范围", "历史筛选条件", "历史排序"} {
 					n, ok := tt.AccessByRole(ui.RoleButton, label)
 					if !ok || n.Bounds.Y < 0 || n.Bounds.Y+n.Bounds.H > float32(size[1]) || n.Bounds.X+n.Bounds.W > float32(size[0]) {
 						t.Fatalf("history control %q out of bounds: %+v", label, n)
@@ -164,6 +167,27 @@ func TestNativeHistoryToolbarEmptyPaginationAndSmallWindow(t *testing.T) {
 		tt.Frame()
 
 		if size[0] == 1280 {
+			// Test compact range dropdown popover (all 1-click range options + custom date range)
+			if err := tt.Click("历史日期范围"); err != nil {
+				t.Fatal(err)
+			}
+			for _, label := range []string{"历史范围 全部时间", "历史范围 今天", "历史范围 昨天", "历史范围 最近7天", "历史范围 最近30天", "自定义日期范围"} {
+				n, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || n.Bounds.Y < 0 || n.Bounds.Y+n.Bounds.H > float32(size[1]) || n.Bounds.X+n.Bounds.W > float32(size[0]) {
+					t.Fatalf("range popover option %q out of bounds: %+v", label, n)
+				}
+			}
+			if err := tt.Click("历史范围 最近7天"); err != nil || a.historyFilter.Range != "最近7天" {
+				t.Fatalf("1-click range selection failed: err=%v range=%q", err, a.historyFilter.Range)
+			}
+			// Active range chip + reset button appear conditionally
+			if _, ok := tt.AccessByRole(ui.RoleButton, "移除时间筛选"); !ok {
+				t.Fatal("missing removable range chip when range filter active")
+			}
+			if err := tt.Click("移除时间筛选"); err != nil || a.historyFilter.Range != "全部时间" {
+				t.Fatalf("removable range chip did not clear: err=%v range=%q", err, a.historyFilter.Range)
+			}
+
 			// Test 1-click sort toggle, filter popover, and preview export
 			if err := tt.Click("历史排序"); err != nil || a.historyFilter.Order != "最早在前" {
 				t.Fatalf("1-click sort toggle failed: err=%v order=%q", err, a.historyFilter.Order)
@@ -199,7 +223,10 @@ func TestNativeHistoryToolbarEmptyPaginationAndSmallWindow(t *testing.T) {
 				tt.SetDark(false)
 			}
 
-			// Test custom date range popover
+			// Test custom date range inside range popover
+			if err := tt.Click("历史日期范围"); err != nil {
+				t.Fatal(err)
+			}
 			if err := tt.Click("自定义日期范围"); err != nil {
 				t.Fatal(err)
 			}
