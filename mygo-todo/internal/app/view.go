@@ -51,7 +51,7 @@ func (a *App) view(c *ui.Context) {
 				bannerChrome := toolbarChromeMetrics(c.TitleBar(), 16, width < sidebarBreakpoint, true)
 				ui.Row(c).Padding(8, bannerChrome.PadRight, 8, bannerChrome.PadLeft).Gap(8).AlignItems(ui.Center).Background(t.Danger.Alpha(0.08)).BorderWidth(0, 0, 1, 0).BorderColor(t.Danger.Alpha(0.20)).DragWindow().Children(func() {
 					ui.Text(c, a.failure).FontSize(12).TextColor(t.Danger).Grow(1).MinWidth(0).MaxLines(3)
-					iconButton(c, "关闭提示", lucide.X()).Size(24, 24).Padding(4).OnClick(func() { a.failure = "" })
+					headerIconButton(c, "关闭提示", lucide.X()).Size(24, 24).Padding(4).OnClick(func() { a.failure = "" })
 				})
 			}
 			pageContent := func() {
@@ -178,17 +178,14 @@ func (a *App) sidebarContent(c *ui.Context, inDrawer bool) {
 		profileState := ui.Box(c.Key("profile-state")).Size(0, 0)
 		profileOpen := ui.Local(profileState, "open", func() bool { return false })
 		choice := appDropdown(c, profileOpen, []overlay.MenuItem{{Key: "account", Label: "账户设置", Icon: lucide.User()}, {Divider: true}, {Key: "logout", Label: "退出账户", Icon: lucide.LogOut(), Danger: true, Disabled: a.busy}}, func(trigger ui.Element) {
-			trigger.Label("账户菜单").Height(54).Margin(accountTopMargin, 8, 0, 8).Padding(6, 10).Radius(8).Gap(10).Justify(ui.Start)
+			trigger.Label("账户菜单").Height(56).Margin(accountTopMargin, 8, 0, 8).Padding(8, 10).Radius(8).Gap(10).Justify(ui.Start).AlignItems(ui.Center)
 			if trigger.Hovered() || *profileOpen {
 				trigger.Background(t.BgHover)
 			}
 			trigger.Children(func() {
-				display.Avatar(c, a.session.User.Username, display.AvatarProps{Size: 28, Shape: display.AvatarCircle, Image: avatarImage(a.avatar), Fallback: display.AvatarText}).Label("账户头像")
-				ui.Column(c).MinWidth(0).Grow(1).Gap(1).Children(func() {
-					ui.Text(c, "Todo").FontSize(13).FontWeight(600).TextColor(t.TextPrimary)
-					ui.Text(c, a.session.User.Username).FontSize(11).TextColor(t.TextReadable).SingleLine().Tooltip(a.session.User.Username)
-				})
-				ui.Icon(c, lucide.ChevronsUpDown()).Size(14, 14).TextColor(t.TextTertiary)
+				display.Avatar(c, a.session.User.Username, display.AvatarProps{Size: 40, Shape: display.AvatarCircle, Image: avatarImage(a.avatar), Fallback: display.AvatarText}).Shrink(0).Label("账户头像")
+				ui.Text(c, a.session.User.Username).FontSize(14).FontWeight(fontWeightSemibold).TextColor(t.TextPrimary).SingleLine().Grow(1).MinWidth(0)
+				ui.Icon(c, lucide.ChevronsUpDown()).Size(14, 14).TextColor(t.TextTertiary).Shrink(0)
 			})
 		})
 		if choice == "account" {
@@ -295,16 +292,31 @@ func (a *App) title() string {
 	return "任务"
 }
 
+func headerIconButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
+	t := tokensOf(c)
+	button := styleAppButton(c, ui.ButtonBase(c).Label(label), "", "ghost").Size(30, 30).Padding(7)
+	iconColor := t.TextSecondary
+	if button.Hovered() || button.Pressed() {
+		iconColor = t.TextPrimary
+	}
+	button.Children(func() {
+		if icon != nil {
+			ui.Icon(c, icon).Size(15, 15).TextColor(iconColor).AccessHidden(true)
+		}
+	})
+	return button
+}
+
 func (a *App) header(c *ui.Context) {
 	t := tokensOf(c)
 	chrome := a.windowToolbarMetrics(c, 16)
 	ui.Row(c.Key("view-toolbar")).Height(chrome.ToolbarHeight).Shrink(0).Padding(0, chrome.PadRight, 0, chrome.PadLeft).Gap(8).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).DragWindow().Children(func() {
 		width, _ := c.Size()
 		if width < sidebarBreakpoint {
-			iconButton(c, "展开导航", lucide.PanelLeft()).OnClick(func() { a.sidebarOverlay = true })
-			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
+			headerIconButton(c, "展开导航", lucide.PanelLeft()).OnClick(func() { a.sidebarOverlay = true })
+			headerIconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
 		}
-		ui.Text(c, a.title()).FontSize(15).FontWeight(600).TextColor(t.TextPrimary).SingleLine().MinWidth(0).Grow(1).Tooltip(a.title())
+		ui.Text(c, a.title()).FontSize(15).FontWeight(600).TextColor(t.TextPrimary).SingleLine().MinWidth(0).Grow(1)
 		if isTaskWorkspacePage(a.page) {
 			count := len(a.searchResults())
 			if isHistoryPage(a.page) {
@@ -317,7 +329,7 @@ func (a *App) header(c *ui.Context) {
 				}
 				ui.Text(c, badgeText).Label(badgeLabel).FontSize(fontAux).FontWeight(fontWeightMedium).FontFeatures("tnum").
 					TextColor(t.TextSecondary).Background(t.BgSubtle).Padding(2, 7).Radius(10)
-				iconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
+				headerIconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
 			} else {
 				ui.Text(c, fmt.Sprint(count)).Label(fmt.Sprintf("%d 个任务", count)).FontSize(fontAux).FontWeight(fontWeightMedium).FontFeatures("tnum").
 					TextColor(t.TextSecondary).Background(t.BgSubtle).Padding(2, 7).Radius(10)
@@ -325,8 +337,8 @@ func (a *App) header(c *ui.Context) {
 				if a.search.Return {
 					searchLabel = "返回搜索"
 				}
-				iconButton(c, searchLabel, lucide.Search()).OnClick(a.openTaskSearch)
-				iconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
+				headerIconButton(c, searchLabel, lucide.Search()).OnClick(a.openTaskSearch)
+				headerIconButton(c, "＋ 新建任务", lucide.Plus()).Disabled(a.busy).OnClick(a.newTask)
 			}
 		}
 	})

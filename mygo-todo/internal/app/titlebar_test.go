@@ -343,3 +343,116 @@ func TestLoginViewTitleBarDragBandClearance(t *testing.T) {
 		}
 	}
 }
+
+func TestSidebarAccountHeaderAvatarEnlargedWithoutRedundantTodoTitle(t *testing.T) {
+	macBar := ui.TitleBar{Height: 38, Left: 78, Right: 0}
+	winBar := ui.TitleBar{Height: 40, Left: 0, Right: 138}
+
+	a := titleBarTestApp(t)
+	tt := ui.NewTester(a.view, 1440, 900)
+	tt.SetTitleBar(macBar)
+
+	if tt.HasText("Todo") {
+		t.Fatalf("authenticated sidebar should not display redundant 'Todo' title: texts=%v", tt.Texts())
+	}
+	if !tt.HasText("marlon") {
+		t.Fatalf("sidebar account header missing username: texts=%v", tt.Texts())
+	}
+	avatar, ok := tt.Find("账户头像")
+	if !ok {
+		t.Fatal("missing sidebar account avatar")
+	}
+	if avatar.W < 40 || avatar.H < 40 {
+		t.Fatalf("sidebar avatar too small: got %.1fx%.1f, want at least 40x40", avatar.W, avatar.H)
+	}
+	accountMac, ok := tt.Access("账户菜单")
+	if !ok {
+		t.Fatal("missing sidebar account menu")
+	}
+	if accountMac.Bounds.Y < macBar.Height {
+		t.Fatalf("macOS sidebar account menu overlaps traffic lights: Y=%v < %v", accountMac.Bounds.Y, macBar.Height)
+	}
+	if avatar.Y < accountMac.Bounds.Y || avatar.Y+avatar.H > accountMac.Bounds.Y+accountMac.Bounds.H+0.5 {
+		t.Fatalf("enlarged avatar overflows account menu row: avatar=%+v menu=%+v", avatar, accountMac.Bounds)
+	}
+
+	// Verify long username never shrinks the 40x40 avatar.
+	a.session.User.Username = "very-long-desktop-username-for-sidebar-truncation"
+	tt.SetTitleBar(winBar)
+	avatarLong, ok := tt.Find("账户头像")
+	if !ok || avatarLong.W < 40 || avatarLong.H < 40 {
+		t.Fatalf("long username shrank avatar: %+v", avatarLong)
+	}
+	accountWin, ok := tt.Access("账户菜单")
+	if !ok || accountWin.Bounds.Y != sidebarCompactTopDrag {
+		t.Fatalf("Windows sidebar account menu Y=%v, want %v", accountWin.Bounds.Y, sidebarCompactTopDrag)
+	}
+
+	// Clicking the enlarged account header still opens the account dropdown cleanly.
+	if err := tt.Click("账户菜单"); err != nil {
+		t.Fatalf("clicking account menu failed: %v", err)
+	}
+	if !tt.HasText("账户设置") || !tt.HasText("退出账户") {
+		t.Fatalf("account dropdown items missing after click: texts=%v", tt.Texts())
+	}
+}
+
+func TestHeaderAndSidebarAccountSuppressHoverTooltips(t *testing.T) {
+	hasTooltip := func(tt *ui.Tester) (ui.AccessInfo, bool) {
+		for _, n := range tt.AccessAll() {
+			if n.Role == ui.RoleTooltip {
+				return n, true
+			}
+		}
+		return ui.AccessInfo{}, false
+	}
+
+	a := titleBarTestApp(t)
+	a.failure = "示例顶部提示"
+	tt := ui.NewTester(a.view, 1440, 900)
+	tt.SetTitleBar(ui.TitleBar{Height: 38, Left: 78, Right: 0})
+
+	// Wide window: top-left account header, username text, header title, search/new buttons, failure dismiss.
+	for _, label := range []string{"账户菜单", "全部任务", "搜索任务", "＋ 新建任务", "关闭提示"} {
+		node, ok := tt.Access(label)
+		if !ok {
+			t.Fatalf("missing control %q", label)
+		}
+		if node.Description != "" {
+			t.Fatalf("top control %q still exposes tooltip description %q", label, node.Description)
+		}
+		tt.Move(node.Bounds.X+node.Bounds.W/2, node.Bounds.Y+node.Bounds.H/2)
+		tt.Advance(2 * time.Second)
+		if tip, found := hasTooltip(tt); found {
+			t.Fatalf("hovering top control %q rendered unexpected dark tooltip: %+v", label, tip)
+		}
+	}
+	if usernameRect, ok := tt.Find("marlon"); !ok {
+		t.Fatal("missing username text in sidebar account header")
+	} else {
+		tt.Move(usernameRect.X+usernameRect.W/2, usernameRect.Y+usernameRect.H/2)
+		tt.Advance(2 * time.Second)
+		if tip, found := hasTooltip(tt); found {
+			t.Fatalf("hovering sidebar username rendered unexpected dark tooltip: %+v", tip)
+		}
+	}
+
+	// Narrow window: drawer trigger and refresh button in top toolbar must also stay tooltip-free.
+	a.failure = ""
+	tt.SetSize(960, 720)
+	tt.Frame()
+	for _, label := range []string{"展开导航", "刷新"} {
+		node, ok := tt.Access(label)
+		if !ok {
+			t.Fatalf("missing narrow header control %q", label)
+		}
+		if node.Description != "" {
+			t.Fatalf("narrow top control %q still exposes tooltip description %q", label, node.Description)
+		}
+		tt.Move(node.Bounds.X+node.Bounds.W/2, node.Bounds.Y+node.Bounds.H/2)
+		tt.Advance(2 * time.Second)
+		if tip, found := hasTooltip(tt); found {
+			t.Fatalf("hovering narrow top control %q rendered unexpected dark tooltip: %+v", label, tip)
+		}
+	}
+}
