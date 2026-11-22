@@ -1,4 +1,4 @@
-.PHONY: dense-ui-smoke dev test build preview cross-build-check native-window-smoke designer-fixes-smoke title-editor-smoke linear-smoke empty-state-smoke smoke caldav-smoke notify-smoke account-smoke ai-smoke occurrence-smoke history-smoke calendar-drag-smoke task-actions-smoke sync-smoke incremental-smoke profile-offline-smoke category-offline-smoke category-backend-check calendar-export-check
+.PHONY: dense-ui-smoke dev test build build-windows-installer preview cross-build-check native-window-smoke designer-fixes-smoke title-editor-smoke linear-smoke empty-state-smoke smoke caldav-smoke notify-smoke account-smoke ai-smoke occurrence-smoke history-smoke calendar-drag-smoke task-actions-smoke sync-smoke incremental-smoke profile-offline-smoke category-offline-smoke category-backend-check calendar-export-check
 CALENDAR_VALIDATOR_PYTHON ?= python3
 dev:
 	go tool mygo dev
@@ -6,6 +6,9 @@ test:
 	go test -race ./...
 build:
 	go tool mygo build
+build-windows-installer:
+	go tool mygo build -platform windows/amd64
+	@ls build/windows-amd64/mygo-todo-setup-*-amd64.exe >/dev/null
 preview:
 	go tool mygo build -debug -skip-dmg
 cross-build-check:

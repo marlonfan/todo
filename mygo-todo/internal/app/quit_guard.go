@@ -25,6 +25,17 @@ func (a *App) guardTaskExit(next func()) bool {
 	return false
 }
 
+func (a *App) shouldHideOnClose() bool {
+	return !a.quitting && (a.tray != nil || a.trayAvailable)
+}
+
+func (a *App) WindowAllClosed() {
+	if a.shouldHideOnClose() {
+		return
+	}
+	mygo.App.Quit()
+}
+
 func (a *App) Quitting(e *mygo.QuitEvent) {
 	a.quitting = false
 	if !a.guardTaskExit(mygo.App.Quit) {
@@ -39,10 +50,13 @@ func (a *App) windowClosing(e *mygo.CloseEvent) {
 	if a.quitting {
 		return // OnBeforeQuit already checked the same UI-thread state.
 	}
-	if a.tray != nil {
+	if a.shouldHideOnClose() {
 		a.flushDetailAutosave()
 		e.PreventDefault()
-		a.win.Hide() // Unsaved input stays in this process for the next Show.
+		a.closeTrayFlyout()
+		if a.win != nil {
+			a.win.Hide() // Unsaved input stays in this process for the next Show.
+		}
 		return
 	}
 	if !a.guardTaskExit(func() { a.win.Close() }) {

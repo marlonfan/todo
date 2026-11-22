@@ -186,3 +186,42 @@ func TestQuitGuardOccurrenceScheduleNeedsConfirmation(t *testing.T) {
 		t.Fatal("quit bypassed explicit occurrence scheduling")
 	}
 }
+
+func TestWindowClosingHidesToTrayInsteadOfQuitting(t *testing.T) {
+	a := autosaveFixture(t)
+	a.trayAvailable = true
+	a.draft.Title = "关闭到托盘前保存"
+
+	if !a.shouldHideOnClose() {
+		t.Fatal("expected shouldHideOnClose to be true when tray is available and app is not quitting")
+	}
+
+	closeEvent := &mygo.CloseEvent{}
+	a.windowClosing(closeEvent)
+	if !closeEvent.DefaultPrevented() {
+		t.Fatal("expected window close to be prevented so the window hides to tray")
+	}
+	if a.taskDiscardConfirm {
+		t.Fatal("hiding to tray should not prompt to discard drafts")
+	}
+	cache, err := a.store.Cache("", 0)
+	if err != nil || len(cache.Outbox) != 1 {
+		t.Fatalf("expected autosave flush when hiding to tray, err=%v outbox=%d", err, len(cache.Outbox))
+	}
+
+	// Explicit quit (e.g., from tray Quit menu or shortcut) must allow closing.
+	quitEvent := &mygo.QuitEvent{}
+	a.Quitting(quitEvent)
+	if quitEvent.DefaultPrevented() || !a.quitting {
+		t.Fatal("explicit quit was unexpectedly prevented")
+	}
+	if a.shouldHideOnClose() {
+		t.Fatal("shouldHideOnClose must be false once app is explicitly quitting")
+	}
+
+	finalClose := &mygo.CloseEvent{}
+	a.windowClosing(finalClose)
+	if finalClose.DefaultPrevented() {
+		t.Fatal("expected window close to proceed once app is quitting")
+	}
+}
