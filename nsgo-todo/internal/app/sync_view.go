@@ -61,18 +61,14 @@ func syncPage(cx *core.Scope, state *AppState) base.NavPage {
 		}
 	}
 
-	booster := newScrollFrameBooster(cx)
-
 	page := base.NavPage{
 		TestID: "sync-page",
 		Children: []core.Node{
-			core.Scroll{
-				OnRefresh:       func() { state.Refresh(true) },
-				Refreshing:      state.refreshing.Get,
-				OnMomentumStart: booster.onStart,
-				OnMomentumEnd:   booster.onEnd,
-				OnScrollEnd:     booster.onEnd,
-				Style:           core.Style{FlexGrow: 1, FlexShrink: 1, MinHeight: core.Pt(0)},
+			smoothRefreshScroll(cx, smoothRefreshScrollOptions{
+				RefreshTestID: "sync-refresh",
+				ScrollTestID:  "sync-scroll",
+				OnRefresh:     func() { state.Refresh(true) },
+				Refreshing:    state.refreshing.Get,
 				Children: []core.Node{
 					core.View{
 						Style: core.Style{
@@ -285,8 +281,7 @@ func syncPage(cx *core.Scope, state *AppState) base.NavPage {
 						},
 					},
 				},
-			},
-			booster.node,
+			}),
 		},
 	}
 

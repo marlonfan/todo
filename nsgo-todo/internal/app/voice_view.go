@@ -1494,7 +1494,7 @@ func voicePreviewSheet(cx *core.Scope, vc *voiceController) core.Node {
 					},
 
 					// Scrollable Parsed Task Cards
-					core.Scroll{
+					smoothScroll(core.Scroll{
 						Style: core.Style{MaxHeight: core.Pt(400)},
 						Children: []core.Node{
 							core.View{
@@ -1816,7 +1816,7 @@ func voicePreviewSheet(cx *core.Scope, vc *voiceController) core.Node {
 								},
 							},
 						},
-					},
+					}),
 
 					// Footer Confirmation Buttons
 					core.View{
@@ -1936,7 +1936,7 @@ func voiceAISettingsSheet(cx *core.Scope, state *AppState) core.Node {
 						Style:     core.Style{FontSize: 16.5, FontWeight: ui.Semibold},
 						StyleFunc: ui.Colored(colors.Text),
 					},
-					core.Scroll{
+					smoothScroll(core.Scroll{
 						Style: core.Style{MaxHeight: core.Pt(500)},
 						Children: []core.Node{
 							core.View{
@@ -2191,7 +2191,7 @@ func voiceAISettingsSheet(cx *core.Scope, state *AppState) core.Node {
 								},
 							},
 						},
-					},
+					}),
 				},
 			},
 		},

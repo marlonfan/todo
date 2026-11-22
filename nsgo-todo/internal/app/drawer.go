@@ -306,7 +306,7 @@ func leftNavDrawer(cx *core.Scope, state *AppState) core.Node {
 							},
 
 							// Scrollable Navigation Lists
-							core.Scroll{
+							smoothScroll(core.Scroll{
 								OnMomentumStart: booster.onStart,
 								OnMomentumEnd:   booster.onEnd,
 								OnScrollEnd:     booster.onEnd,
@@ -491,7 +491,7 @@ func leftNavDrawer(cx *core.Scope, state *AppState) core.Node {
 										},
 									},
 								},
-							},
+							}),
 							booster.node,
 						},
 					},

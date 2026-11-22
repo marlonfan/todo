@@ -1,7 +1,7 @@
 name: Todo
 id: life.marlon.todo.nsgo
-version: 0.3.5
-build_number: 17
+version: 0.3.6
+build_number: 18
 
 icon:
   png: assets/Icon.png

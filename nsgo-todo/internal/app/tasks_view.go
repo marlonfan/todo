@@ -68,28 +68,8 @@ func taskListPage(cx *core.Scope, state *AppState, nav *base.Nav[taskRoute]) bas
 	quickDatePreset := core.NewSignal(cx, "today") // none | today | tomorrow | next_week
 	quickPriority := core.NewSignal(cx, 0)
 	quickCatIDs := core.NewSignalFunc(cx, []int64(nil), nil)
-	listBoost := newScrollFrameBooster(cx)
 	vc := newVoiceController(cx, state)
 	fabScale := core.NewAnimatedValue(cx, 1)
-
-	// Pull-to-refresh host state (see the list below): the outer scroll view
-	// only takes pulls while the inner list is at its top, and only shows its
-	// spinner for refreshes the user pulled (not background syncs).
-	viewportH := core.NewSignal(cx, 0.0)
-	listAtTop := core.NewSignal(cx, true)
-	pullRefreshing := core.NewSignal(cx, false)
-	startPullRefresh := func() {
-		pullRefreshing.Set(true)
-		state.Refresh(true)
-		if !state.refreshing.GetUntracked() {
-			pullRefreshing.Set(false)
-		}
-	}
-	cx.Effect(func() {
-		if !state.refreshing.Get() && pullRefreshing.GetUntracked() {
-			pullRefreshing.Set(false)
-		}
-	})
 
 	fabRotate := core.NewAnimatedValue(cx, 0)
 	cx.Effect(func() {
@@ -349,91 +329,46 @@ func taskListPage(cx *core.Scope, state *AppState, nav *base.Nav[taskRoute]) bas
 						},
 					},
 
-					// Smooth fling + virtualization + pull-to-refresh, all from
-					// stock NSGo components:
-					//   outer core.Scroll: NSGo's regular scroll view, used only
-					//     for its native pull-to-refresh; it never scrolls (its
-					//     content is exactly one viewport) and is enabled only
-					//     while the list rests at its very top.
-					//   inner core.Scroll: "zoomable" with zoom locked at 1, so
-					//     NSGo uses its ZoomScroll whose flings run on Android's
-					//     VSync-timed OverScroller (NSGo's VScroll glide() loop
-					//     samples uptimeMillis per callback and judders).
-					//   core.List with ListViewportParent: still virtualized,
-					//     rendering the rows near the inner scroll's viewport.
-					core.View{
-						Style: core.Style{FlexGrow: 1, FlexShrink: 1, MinHeight: core.Pt(0)},
-						OnLayout: func(b core.Bounds) {
-							if h := float64(b.Size.Height); h > 0 && h != viewportH.GetUntracked() {
-								viewportH.Set(h)
-							}
-						},
+					// Smooth fling + virtualization + pull-to-refresh via smoothRefreshScroll.
+					smoothRefreshScroll(cx, smoothRefreshScrollOptions{
+						RefreshTestID: "tasks-refresh",
+						ScrollTestID:  "tasks-scroll",
+						OnRefresh:     func() { state.Refresh(true) },
+						Refreshing:    state.refreshing.Get,
 						Children: []core.Node{
-							core.Scroll{
-								TestID:     "tasks-refresh",
-								OnRefresh:  startPullRefresh,
-								Refreshing: pullRefreshing.Get,
-								BehaviorFunc: func() core.ScrollBehavior {
-									return core.ScrollBehavior{NoScroll: !listAtTop.Get(), NoBounces: true}
+							core.List{
+								Viewport:      core.ListViewportParent,
+								EstimatedSize: 92,
+								Gap:           8,
+								Count:         func() int { return len(state.filteredTasks.Get()) },
+								Key: func(i int) any {
+									tasks := state.filteredTasks.Get()
+									if i >= 0 && i < len(tasks) {
+										if tasks[i].InstanceID != "" {
+											return fmt.Sprintf("%d:%s", tasks[i].ID, tasks[i].InstanceID)
+										}
+										return tasks[i].ID
+									}
+									return i
 								},
-								Style: core.Style{FlexGrow: 1, FlexShrink: 1, MinHeight: core.Pt(0)},
-								Children: []core.Node{
-									core.Scroll{
-										TestID:          "tasks-scroll",
-										MinZoomScale:    1,
-										MaxZoomScale:    1.0001,
-										ZoomScale:       1,
-										NoPinchZoom:     true,
-										NoBouncesZoom:   true,
-										OnMomentumStart: listBoost.onStart,
-										OnMomentumEnd:   listBoost.onEnd,
-										OnScrollEnd:     listBoost.onEnd,
-										OnScroll: func(e core.ScrollEvent) {
-											if top := e.Offset.Y <= 0.5; top != listAtTop.GetUntracked() {
-												listAtTop.Set(top)
-											}
-										},
-										StyleFunc: func() core.Style {
-											return core.Style{Width: core.Pct(100), Height: core.Pt(core.Points(viewportH.Get()))}
-										},
-										Children: []core.Node{
-											core.List{
-												Viewport:      core.ListViewportParent,
-												EstimatedSize: 92,
-												Gap:           8,
-												Count:         func() int { return len(state.filteredTasks.Get()) },
-												Key: func(i int) any {
-													tasks := state.filteredTasks.Get()
-													if i >= 0 && i < len(tasks) {
-														if tasks[i].InstanceID != "" {
-															return fmt.Sprintf("%d:%s", tasks[i].ID, tasks[i].InstanceID)
-														}
-														return tasks[i].ID
-													}
-													return i
-												},
-												Empty: emptyTasksCard(cx, state, openQuickAdd),
-												Style: core.Style{
-													Padding: core.Edges{Top: 10, Right: 14, Bottom: 96, Left: 14},
-												},
-												Row: func(cx *core.Scope, row core.ListRow) core.Node {
-													item := func() api.Task {
-														tasks := state.filteredTasks.Get()
-														idx := row.Index()
-														if idx >= 0 && idx < len(tasks) {
-															return tasks[idx]
-														}
-														return api.Task{}
-													}
-													return swipeableTaskRow(cx, state, nav, item)
-												},
-											},
-										},
-									},
+								Empty: emptyTasksCard(cx, state, openQuickAdd),
+								Style: core.Style{
+									Padding: core.Edges{Top: 10, Right: 14, Bottom: 96, Left: 14},
+								},
+								Row: func(cx *core.Scope, row core.ListRow) core.Node {
+									item := func() api.Task {
+										tasks := state.filteredTasks.Get()
+										idx := row.Index()
+										if idx >= 0 && idx < len(tasks) {
+											return tasks[idx]
+										}
+										return api.Task{}
+									}
+									return swipeableTaskRow(cx, state, nav, item)
 								},
 							},
 						},
-					},
+					}),
 
 					// Sleek 50pt Terracotta FAB:
 					//   - Short tap (<260ms): opens Quick-Add Sheet
@@ -586,7 +521,6 @@ func taskListPage(cx *core.Scope, state *AppState, nav *base.Nav[taskRoute]) bas
 						quickOpen.Set(true)
 					}),
 					voicePreviewSheet(cx, vc),
-					listBoost.node,
 				},
 			},
 		},

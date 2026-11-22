@@ -594,16 +594,7 @@ func taskDetailPage(
 	page := base.NavPage{
 		TestID: "task-detail-page",
 		Children: []core.Node{
-			core.Scroll{
-				// A/B experiment: a "zoomable" Scroll (pinch disabled, zoom
-				// locked at 1) makes NSGo use its ZoomScroll, which flings
-				// with Android's native OverScroller instead of NSGo's own
-				// uptimeMillis-driven glide() loop in Scrolling.java.
-				MinZoomScale:    1,
-				MaxZoomScale:    1.0001,
-				ZoomScale:       1,
-				NoPinchZoom:     true,
-				NoBouncesZoom:   true,
+			smoothScroll(core.Scroll{
 				OnMomentumStart: detailBoost.onStart,
 				OnMomentumEnd:   detailBoost.onEnd,
 				OnScrollEnd:     detailBoost.onEnd,
@@ -1164,7 +1155,7 @@ func taskDetailPage(
 						},
 					},
 				},
-			},
+			}),
 
 			// BOTTOM SHEETS FOR EFFORTLESS ONE-HANDED EDITING
 			detailBoost.node,

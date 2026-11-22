@@ -89,7 +89,7 @@ func authView(cx *core.Scope, state *AppState) core.Node {
 		Padding:      core.Symmetric(0, 12),
 	}
 
-	return core.Scroll{
+	return smoothScroll(core.Scroll{
 		TestID: "auth-scroll",
 		Style: core.Style{
 			FlexGrow:   1,
@@ -270,5 +270,5 @@ func authView(cx *core.Scope, state *AppState) core.Node {
 				},
 			},
 		},
-	}
+	})
 }

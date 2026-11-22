@@ -108,7 +108,7 @@ func settingsPage(cx *core.Scope, state *AppState) base.NavPage {
 	page := base.NavPage{
 		TestID: "settings-page",
 		Children: []core.Node{
-			core.Scroll{
+			smoothScroll(core.Scroll{
 				OnMomentumStart: booster.onStart,
 				OnMomentumEnd:   booster.onEnd,
 				OnScrollEnd:     booster.onEnd,
@@ -312,7 +312,7 @@ func settingsPage(cx *core.Scope, state *AppState) base.NavPage {
 						},
 					},
 				},
-			},
+			}),
 			booster.node,
 
 			// Logout Confirmation AlertDialog

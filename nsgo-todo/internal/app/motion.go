@@ -302,3 +302,92 @@ func newScrollFrameBooster(cx *core.Scope) scrollFrameBooster {
 		onEnd:   func(core.ScrollEvent) { stop() },
 	}
 }
+
+// smoothScroll configures a core.Scroll onto NSGo's ZoomScroll (with zoom
+// locked at 1 and pinch/bounce-zoom disabled) so Android flings run on the
+// native VSync-timed OverScroller instead of NSGo's uptimeMillis glide() loop.
+func smoothScroll(s core.Scroll) core.Scroll {
+	s.MinZoomScale = 1
+	s.MaxZoomScale = 1.0001
+	s.ZoomScale = 1
+	s.NoPinchZoom = true
+	s.NoBouncesZoom = true
+	return s
+}
+
+type smoothRefreshScrollOptions struct {
+	RefreshTestID string
+	ScrollTestID  string
+	OnRefresh     func()
+	Refreshing    func() bool
+	Style         *core.Style
+	Children      []core.Node
+}
+
+// smoothRefreshScroll combines native pull-to-refresh (outer core.Scroll,
+// enabled only while resting at the top) with native OverScroller fling
+// momentum (inner locked-zoom ZoomScroll sized to the measured viewport).
+func smoothRefreshScroll(cx *core.Scope, opts smoothRefreshScrollOptions) core.Node {
+	atTop := core.NewSignal(cx, true)
+	viewportH := core.NewSignal(cx, 0.0)
+	booster := newScrollFrameBooster(cx)
+
+	pullRefreshing := core.NewSignal(cx, false)
+	startPullRefresh := func() {
+		pullRefreshing.Set(true)
+		if opts.OnRefresh != nil {
+			opts.OnRefresh()
+		}
+		if opts.Refreshing == nil || !opts.Refreshing() {
+			pullRefreshing.Set(false)
+		}
+	}
+	cx.Effect(func() {
+		if opts.Refreshing != nil && !opts.Refreshing() && pullRefreshing.GetUntracked() {
+			pullRefreshing.Set(false)
+		}
+	})
+
+	wrapperStyle := core.Style{FlexGrow: 1, FlexShrink: 1, MinHeight: core.Pt(0)}
+	if opts.Style != nil {
+		wrapperStyle = *opts.Style
+	}
+
+	inner := smoothScroll(core.Scroll{
+		TestID:          opts.ScrollTestID,
+		OnMomentumStart: booster.onStart,
+		OnMomentumEnd:   booster.onEnd,
+		OnScrollEnd:     booster.onEnd,
+		OnScroll: func(e core.ScrollEvent) {
+			if top := e.Offset.Y <= 0.5; top != atTop.GetUntracked() {
+				atTop.Set(top)
+			}
+		},
+		StyleFunc: func() core.Style {
+			return core.Style{Width: core.Pct(100), Height: core.Pt(core.Points(viewportH.Get()))}
+		},
+		Children: opts.Children,
+	})
+
+	return core.View{
+		Style: wrapperStyle,
+		OnLayout: func(b core.Bounds) {
+			if h := float64(b.Size.Height); h > 0 && h != viewportH.GetUntracked() {
+				viewportH.Set(h)
+			}
+		},
+		Children: []core.Node{
+			core.Scroll{
+				TestID:     opts.RefreshTestID,
+				OnRefresh:  startPullRefresh,
+				Refreshing: pullRefreshing.Get,
+				BehaviorFunc: func() core.ScrollBehavior {
+					return core.ScrollBehavior{NoScroll: !atTop.Get(), NoBounces: true}
+				},
+				Style:    core.Style{FlexGrow: 1, FlexShrink: 1, MinHeight: core.Pt(0)},
+				Children: []core.Node{inner},
+			},
+			booster.node,
+		},
+	}
+}
