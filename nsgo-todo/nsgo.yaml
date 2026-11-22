@@ -1,0 +1,19 @@
+name: Todo
+id: life.marlon.todo.nsgo
+version: 0.3.4
+build_number: 16
+
+icon:
+  png: assets/Icon.png
+
+android:
+  recording: true
+
+dev:
+  target: native
+  hot_reload: true
+
+build:
+  output: dist
+  tags: [timetzdata]
+  targets: [android_arm64]
