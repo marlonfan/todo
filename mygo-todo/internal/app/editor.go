@@ -333,7 +333,7 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 				})
 			}
 
-			// 1. Completion Checkbox + Direct 1-click editable 23px Title + Inline Action Cluster
+			// 1. Completion Checkbox + Direct 1-click editable single-line Title + Inline Action Cluster
 			ui.Row(c.Key("task-heading")).Shrink(0).MinWidth(0).Gap(detailHeadingGap).AlignItems(ui.Start).Children(func() {
 				if d.Task.ID != 0 {
 					done := d.Status == "已完成"
@@ -369,7 +369,7 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 					},
 					titleEsc)
 
-				headingActions := ui.Row(c.Key("detail-heading-actions")).Shrink(0).Gap(2).Margin(1, 0, 0, 2).AlignItems(ui.Center)
+				headingActions := ui.Row(c.Key("detail-heading-actions")).Shrink(0).Gap(2).Margin(0, 0, 0, 2).AlignItems(ui.Center)
 				moreOpen := ui.Local(headingActions, "more-open", func() bool { return false })
 				headingActions.Children(func() {
 					if d.Task.ID != 0 {

@@ -10,8 +10,8 @@ const (
 	taskListMinWidth      = 240
 	detailMinWidth        = 360
 	detailMaxWidth        = 1600
-	detailTitleFontSize   = 23
-	detailTitleLineHeight = 32
+	detailTitleFontSize   = 18
+	detailTitleLineHeight = 28
 	detailDragStripHeight = 16
 	detailTopBarMinHeight = 38
 	detailHeadingGap      = 8
@@ -72,16 +72,16 @@ func fittedDetailListWidth(workspace, preferred float32) float32 {
 	return max(float32(taskListMinWidth), workspace-detail-1)
 }
 
-// Direct 1-click inline heading editor: eliminates the awkward 2-click
-// read->edit swap, keeps exact heading typography at all times, and treats
-// Enter (without Shift) as commit rather than inserting newlines in titles.
+// Direct 1-click inline heading editor: keeps a refined single-line heading
+// height across Windows and macOS without awkward multi-line wrapping, and
+// treats Enter (without Shift) as commit.
 func detailTitle(c *ui.Context, key, label, placeholder string, value *string, autoFocus, disabled bool, ref *ui.Handle, onChange, onCommit func(), onEscape ...func()) {
 	t := tokensOf(c)
 	ui.Column(c.Key(key + "-slot")).Grow(1).MinWidth(0).Children(func() {
 		if disabled {
 			ui.Text(c.Key(key+"-readonly"), *value).Label(label).
 				FontSize(detailTitleFontSize).FontWeight(600).FixedLineHeight(detailTitleLineHeight).
-				TextColor(t.TextPrimary).FillWidth().MinWidth(0).MaxLines(5)
+				TextColor(t.TextPrimary).FillWidth().MinWidth(0).SingleLine()
 			return
 		}
 		escHandler := func() {
@@ -92,10 +92,11 @@ func detailTitle(c *ui.Context, key, label, placeholder string, value *string, a
 		if len(onEscape) > 0 && onEscape[0] != nil {
 			escHandler = onEscape[0]
 		}
-		input := ui.TextAreaBase(c.Key(key), value).Label(label).Placeholder(placeholder).
+		input := ui.TextInputBase(c.Key(key), value).Label(label).Placeholder(placeholder).
 			FontSize(detailTitleFontSize).FontWeight(600).FixedLineHeight(detailTitleLineHeight).
+			Height(detailTitleLineHeight).
 			TextColor(t.TextPrimary).PlaceholderColor(t.TextTertiary).
-			Lines(1, 5).FillWidth().MinWidth(0).Padding(0).BorderWidth(0).
+			FillWidth().MinWidth(0).Padding(0).BorderWidth(0).
 			FocusRing(false).Background(ui.Transparent).
 			OnTextKey(func(k ui.TextKey) bool {
 				if k.Key == ui.KeyEnter && k.Mods&ui.Shift == 0 {
