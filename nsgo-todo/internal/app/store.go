@@ -142,7 +142,7 @@ func newAppState(cx *core.Scope, opts Options) *AppState {
 
 	st.projectedTasks = core.NewMemoFunc(cx, func() []api.Task {
 		vc := st.viewCache.Get()
-		return domain.ProjectTasks(vc.Tasks, vc.Next)
+		return domain.ProjectTasks(vc.Tasks, vc.Next, vc.History.Items)
 	}, nil)
 
 	st.counts = core.NewMemoFunc(cx, func() domain.FilterCounts {
@@ -461,6 +461,9 @@ func (s *AppState) Refresh(pullToRefresh bool) {
 			s.finishSyncFailure(epoch, state, nextErr)
 			return
 		}
+		if hist, histErr := client.OccurrenceHistory(reqCtx, 0); histErr == nil {
+			pulled.History = hist
+		}
 
 		now := time.Now()
 		pulled.Server = sess.Server
@@ -566,6 +569,7 @@ func (s *AppState) flushOutboxAsync() {
 		reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 
+		hadTaskOps := len(state.Outbox) > 0
 		var flushErr error
 		if len(state.CategoryOutbox) > 0 {
 			var err error
@@ -586,6 +590,14 @@ func (s *AppState) flushOutboxAsync() {
 			state, err = syncer.FlushCategories(reqCtx, client, syncStore, state, true)
 			if err != nil && flushErr == nil {
 				flushErr = err
+			}
+		}
+		if hadTaskOps && flushErr == nil {
+			if next, err := client.NextOccurrences(reqCtx); err == nil {
+				state.Next = next
+			}
+			if hist, err := client.OccurrenceHistory(reqCtx, 0); err == nil {
+				state.History = hist
 			}
 		}
 		_ = s.persist.SaveCache(state)

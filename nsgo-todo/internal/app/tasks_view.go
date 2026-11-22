@@ -405,6 +405,9 @@ func taskListPage(cx *core.Scope, state *AppState, nav *base.Nav[taskRoute]) bas
 												Key: func(i int) any {
 													tasks := state.filteredTasks.Get()
 													if i >= 0 && i < len(tasks) {
+														if tasks[i].InstanceID != "" {
+															return fmt.Sprintf("%d:%s", tasks[i].ID, tasks[i].InstanceID)
+														}
 														return tasks[i].ID
 													}
 													return i

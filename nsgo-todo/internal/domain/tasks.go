@@ -47,31 +47,59 @@ func Location(tz string) *time.Location {
 	return loc
 }
 
-// ProjectTasks overlays next occurrence dates onto recurring tasks so mobile
-// list rows display the next pending occurrence accurately.
-func ProjectTasks(tasks []api.Task, next []api.Occurrence) []api.Task {
-	nextByTask := make(map[int64]api.Occurrence, len(next))
-	for _, occ := range next {
-		if existing, ok := nextByTask[occ.TaskID]; !ok || occ.StartTime.Before(existing.StartTime) {
-			nextByTask[occ.TaskID] = occ
-		}
-	}
-	out := make([]api.Task, 0, len(tasks))
+// ProjectTasks projects synced recurring series exclusively through their server
+// occurrence rows (next pending + history), matching Web and mygo-todo:
+//   - Synced active recurring series (t.Recurring() && t.ID > 0 && IsActive(t.Status))
+//     are never shown directly; if they have no pending occurrence (for example,
+//     when stopped via recurrence_end_date or when all remaining instances were
+//     deleted/skipped/completed), they do not leak into active task lists.
+//   - Local unsynced recurring tasks (t.ID <= 0) remain visible until the server
+//     acknowledges them and generates occurrence rows.
+func ProjectTasks(tasks []api.Task, next, history []api.Occurrence) []api.Task {
+	out := make([]api.Task, 0, len(tasks)+len(history))
+	series := make(map[int64]api.Task)
 	for _, t := range tasks {
 		if t.Recurring() {
-			if occ, ok := nextByTask[t.ID]; ok {
-				t.InstanceID = occ.InstanceID
-				t.OccurrenceDate = occ.OriginalDate.UTC().Format("2006-01-02")
-				st := occ.StartTime
-				t.StartTime = &st
-				t.EndTime = occ.EndTime
-				t.AllDay = occ.AllDay
-				if strings.TrimSpace(occ.Title) != "" {
-					t.Title = occ.Title
-				}
+			series[t.ID] = t
+			if IsActive(t.Status) && t.ID > 0 {
+				continue
 			}
 		}
 		out = append(out, t)
+	}
+	seen := make(map[string]bool)
+	for _, pool := range [][]api.Occurrence{next, history} {
+		for _, occ := range pool {
+			t, ok := series[occ.TaskID]
+			key := fmt.Sprintf("%d:%s", occ.TaskID, occ.InstanceID)
+			if !ok || seen[key] || occ.InstanceID == "" || occ.StartTime.IsZero() || occ.OriginalDate.IsZero() {
+				continue
+			}
+			seen[key] = true
+			t.InstanceID = occ.InstanceID
+			t.OccurrenceDate = occ.OriginalDate.UTC().Format("2006-01-02")
+			st := occ.StartTime
+			t.StartTime = &st
+			t.EndTime = occ.EndTime
+			t.DueDate = nil
+			if occ.Status != "" {
+				t.Status = occ.Status
+			}
+			t.Priority = occ.Priority
+			t.AllDay = occ.AllDay
+			if strings.TrimSpace(occ.Title) != "" {
+				t.Title = occ.Title
+			}
+			if strings.TrimSpace(occ.Description) != "" {
+				t.Description = occ.Description
+			}
+			if !occ.CreatedAt.IsZero() {
+				t.CreatedAt = occ.CreatedAt
+			}
+			t.CompletedAt = occ.CompletedAt
+			t.DeletedAt = occ.DeletedAt
+			out = append(out, t)
+		}
 	}
 	return out
 }

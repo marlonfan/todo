@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -46,5 +47,96 @@ func TestFilterAndSortAndCounts(t *testing.T) {
 	label, overdue := FormatTaskDate(tasks[0], now, loc)
 	if !overdue || label != "昨天 09:00" {
 		t.Fatalf("unexpected overdue date formatting: %q overdue=%v", label, overdue)
+	}
+}
+
+func TestProjectTasksHidesEndedOrDeletedRecurringSeriesWithoutNextOccurrence(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 11, 23, 2, 30, 0, 0, loc)
+	oldAnchor := time.Date(2026, 10, 1, 21, 0, 0, 0, loc)
+	endedAt := time.Date(2026, 11, 10, 20, 59, 59, 0, loc)
+	todayStart := time.Date(2026, 11, 23, 9, 0, 0, 0, loc)
+	todayOrig := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	skippedStart := time.Date(2026, 11, 11, 21, 0, 0, 0, loc)
+	skippedOrig := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+
+	dailyRule := json.RawMessage(`{"freq":"daily","interval":1}`)
+	tasks := []api.Task{
+		{
+			// Stopped/deleted recurring series on Web (recurrence_end_date in past,
+			// base row still status="pending", zero entries in /tasks/next-occurrences).
+			ID:                101,
+			Title:             "obsidian 日报复盘",
+			Status:            "pending",
+			StartTime:         &oldAnchor,
+			DueDate:           &oldAnchor,
+			RecurrenceRule:    dailyRule,
+			RecurrenceEndDate: &endedAt,
+		},
+		{
+			// Active recurring series that DOES have a next pending occurrence today.
+			ID:             102,
+			Title:          "晨会同步",
+			Status:         "pending",
+			StartTime:      &oldAnchor,
+			DueDate:        &oldAnchor, // stale series due date must be cleared by projection
+			RecurrenceRule: dailyRule,
+		},
+		{
+			// Locally created unsynced recurring task (negative ID) must remain visible.
+			ID:             -1,
+			Title:          "本地新建每日背单词",
+			Status:         "pending",
+			StartTime:      &todayStart,
+			RecurrenceRule: dailyRule,
+		},
+	}
+
+	next := []api.Occurrence{
+		{
+			InstanceID:   "102_20261123",
+			TaskID:       102,
+			Title:        "晨会同步",
+			Status:       "pending",
+			Priority:     2,
+			StartTime:    todayStart,
+			OriginalDate: todayOrig,
+		},
+	}
+	history := []api.Occurrence{
+		{
+			InstanceID:   "101_20261111",
+			TaskID:       101,
+			Title:        "obsidian 日报复盘",
+			Status:       "skipped",
+			StartTime:    skippedStart,
+			OriginalDate: skippedOrig,
+		},
+	}
+
+	projected := ProjectTasks(tasks, next, history)
+
+	activeAll := FilterAndSort(projected, FilterAll, 0, "", now, loc)
+	if len(activeAll) != 2 {
+		t.Fatalf("expected 2 active tasks (102 projected + -1 local), got %d: %+v", len(activeAll), activeAll)
+	}
+	for _, item := range activeAll {
+		if item.ID == 101 {
+			t.Fatalf("ended recurring series 101 (obsidian 日报复盘) must NOT appear in active lists: %+v", item)
+		}
+		if item.ID == 102 {
+			if item.DueDate != nil {
+				t.Fatalf("expected projected recurring occurrence 102 to clear stale DueDate, got %v", item.DueDate)
+			}
+			if item.InstanceID != "102_20261123" || item.OccurrenceDate != "2026-11-23" {
+				t.Fatalf("unexpected projected occurrence metadata: %+v", item)
+			}
+		}
+	}
+
+	// Its skipped history occurrence still shows under FilterSkipped, just like Web/mygo-todo.
+	skipped := FilterAndSort(projected, FilterSkipped, 0, "", now, loc)
+	if len(skipped) != 1 || skipped[0].ID != 101 || skipped[0].InstanceID != "101_20261111" {
+		t.Fatalf("expected skipped history occurrence for 101, got %+v", skipped)
 	}
 }
