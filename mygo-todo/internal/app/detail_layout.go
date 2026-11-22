@@ -31,34 +31,63 @@ func (a *App) detailWorkspace(c *ui.Context, main func()) {
 	}
 }
 
-// detailDrawerWorkspace renders full-canvas pages (such as Calendar) alongside
-// a responsive right-hand inspector drawer inside a horizontal flex row so the
-// calendar grid and top view switcher resize gracefully without ever clipping.
+func drawerFloatingWidth(workspaceWidth float32) float32 {
+	return min(float32(440), max(float32(detailMinWidth), workspaceWidth*0.36))
+}
+
+func (a *App) canCloseFloatingDetailOnEscape() bool {
+	return (a.editing || a.selectedOccurrence != nil) &&
+		a.taskMetaOpen == "" &&
+		!a.autosave.composing &&
+		!a.richComposing &&
+		a.aiPanel == nil &&
+		!a.taskDiscardConfirm &&
+		a.deleteTask == nil &&
+		a.taskCenter == nil &&
+		a.calendarDetail == nil &&
+		!a.search.Open &&
+		!a.sidebarOverlay
+}
+
+// detailDrawerWorkspace renders full-canvas pages (such as Calendar) at their
+// full natural size and floats the right-hand task inspector drawer as an
+// elevated overlay above the canvas so opening/closing it never resizes,
+// shifts, or deforms the calendar grid.
 func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 	width, _ := c.Size()
 	windowWidth := width
-	if width >= 1180 {
+	if width >= sidebarBreakpoint {
 		width -= a.sidebarWidth + 1
 	}
-	if width >= 1050 || windowWidth >= 1180 {
+	if width >= splitDetailBreakpoint || windowWidth >= sidebarBreakpoint {
 		t := tokensOf(c)
-		drawerWidth := min(float32(440), max(float32(detailMinWidth), width*0.36))
-		drawerRow := ui.Row(c.Key("drawer-workspace")).Grow(1).Fill().MinHeight(0).MinWidth(0)
-		if (a.editing || a.selectedOccurrence != nil) && a.taskMetaOpen == "" {
-			drawerRow.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
-		}
-		drawerRow.Children(func() {
-			ui.Column(c.Key("drawer-main-canvas")).Grow(1).FillHeight().MinHeight(0).MinWidth(0).Children(main)
+		drawerWidth := drawerFloatingWidth(width)
+		workspace := ui.Box(c.Key("drawer-workspace")).Grow(1).Fill().MinHeight(0).MinWidth(0)
+		workspace.Children(func() {
+			ui.Column(c.Key("drawer-main-canvas")).Fill().MinHeight(0).MinWidth(0).Children(main)
 			if a.editing || a.selectedOccurrence != nil {
-				drawer := ui.Column(c.Key("detail-side-drawer")).Label("详情侧边抽屉").
-					Width(drawerWidth).FillHeight().MinHeight(0).Shrink(0).
-					Background(t.BgApp).BorderWidth(0, 0, 0, 1).BorderColor(t.BorderDefault)
+				scrim := ui.RGBA(28, 25, 23, 0.08)
 				if c.Theme().Dark {
-					drawer.Shadow(-6, 0, 20, 0, ui.RGBA(0, 0, 0, 0.28))
-				} else {
-					drawer.Shadow(-4, 0, 16, 0, ui.RGBA(28, 25, 23, 0.05))
+					scrim = ui.RGBA(0, 0, 0, 0.24)
 				}
-				if a.taskMetaOpen == "" && drawer.OverlayShortcut(0, ui.KeyEscape) {
+				ui.Box(c.Key("detail-side-backdrop")).Label("关闭详情抽屉").
+					Absolute().Fill().ZIndex(30).
+					Background(scrim).
+					OnClick(func() { a.requestTaskTransition(func() {}) })
+
+				drawer := ui.Column(c.Key("detail-side-drawer")).Label("详情侧边抽屉").
+					Absolute().Top(0).Bottom(0).Right(0).Width(drawerWidth).ZIndex(40).
+					MinHeight(0).Background(t.BgApp)
+				if c.Theme().Dark {
+					drawer.BorderWidth(0, 0, 0, 1).BorderColor(t.BorderPopup).
+						Shadow(-4, 0, 12, 0, ui.RGBA(0, 0, 0, 0.36)).
+						Shadow(-16, 0, 40, -6, ui.RGBA(0, 0, 0, 0.48))
+				} else {
+					drawer.BorderWidth(0, 0, 0, 1).BorderColor(t.BorderDefault).
+						Shadow(-2, 0, 8, 0, ui.RGBA(28, 25, 23, 0.06)).
+						Shadow(-14, 0, 36, -6, ui.RGBA(28, 25, 23, 0.12))
+				}
+				if a.canCloseFloatingDetailOnEscape() && drawer.OverlayShortcut(0, ui.KeyEscape) {
 					a.requestTaskTransition(func() {})
 				}
 				drawer.Children(func() {
@@ -68,8 +97,11 @@ func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 		})
 	} else if a.taskDetailOpen && (a.editing || a.selectedOccurrence != nil) {
 		col := ui.Column(c).Grow(1).MinHeight(0).MinWidth(0)
-		if a.taskMetaOpen == "" {
+		if a.canCloseFloatingDetailOnEscape() {
 			col.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
+			if col.OverlayShortcut(0, ui.KeyEscape) {
+				a.requestTaskTransition(func() {})
+			}
 		}
 		col.Children(func() { a.taskDetailPanel(c, true) })
 	} else {

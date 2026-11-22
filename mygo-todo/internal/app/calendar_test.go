@@ -545,10 +545,212 @@ func TestAgendaTypographyWidthCapMultiDayAndInlineExternalBadge(t *testing.T) {
 	}
 }
 
-func TestCalendarResponsiveFlexWithRightDetailDrawerNoClipping(t *testing.T) {
+func TestCalendarFloatingDetailDrawerDoesNotDeformGridOrToolbar(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
 	s1 := time.Date(2026, 11, 16, 9, 30, 0, 0, loc)
+	e1 := time.Date(2026, 11, 16, 11, 0, 0, 0, loc)
+
+	for _, tc := range []struct {
+		name string
+		dark bool
+		bar  ui.TitleBar
+	}{
+		{"macos-light", false, ui.TitleBar{Height: 38, Left: 78, Right: 0}},
+		{"windows-dark", true, ui.TitleBar{Height: 40, Left: 0, Right: 138}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := New(storage.Store{Dir: t.TempDir()})
+			defer a.Close()
+			a.client, _ = api.New(api.DefaultServer, "")
+			a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+			startRange, endRange := calendarRange(base, 2)
+			task := api.Task{ID: 501, Title: "抽屉联调验证", Status: "pending", StartTime: &s1, EndTime: &e1, Revision: 1}
+			a.adoptCache(storage.Cache{
+				Server:  api.DefaultServer,
+				UserID:  1,
+				SavedAt: base,
+				Tasks:   []api.Task{task},
+				Calendar: &storage.CalendarSnapshot{
+					Start: startRange, End: endRange, Timezone: "Asia/Shanghai", SavedAt: base,
+				},
+			})
+			a.page = "calendar"
+			a.selectedDay = base
+
+			for _, mode := range []int{2, 1, 0} {
+				a.calendarMode = mode
+				a.clearTaskSelection()
+				tt := ui.NewTester(a.view, 1440, 900)
+				tt.SetDark(tc.dark)
+				tt.SetTitleBar(tc.bar)
+				tt.Frame()
+				tt.Frame()
+
+				toolbarLabels := []string{"回到今天", "上一段", "下一段", "日历定位日期", "日程来源", "日", "周", "月", "日程", "添加日程"}
+				toolbarBefore := make(map[string]ui.Rect, len(toolbarLabels))
+				for _, label := range toolbarLabels {
+					node, ok := tt.Access(label)
+					if !ok {
+						t.Fatalf("mode=%d missing toolbar control %q before drawer", mode, label)
+					}
+					toolbarBefore[label] = node.Bounds
+				}
+
+				colCount := 7
+				if mode == 0 {
+					colCount = 1
+				}
+				colsBefore := make(map[string]ui.Rect, colCount)
+				for d := 0; d < colCount; d++ {
+					dayStr := base.AddDate(0, 0, d).Format("2006-01-02")
+					target := "日历日期 " + dayStr
+					if mode < 2 {
+						target = "全天栏 " + dayStr
+					}
+					col, ok := tt.Access(target)
+					if !ok {
+						t.Fatalf("mode=%d missing day column %q before drawer", mode, target)
+					}
+					colsBefore[target] = col.Bounds
+				}
+
+				// Open built-in task detail in floating overlay drawer
+				a.editTaskNow(task)
+				tt.Frame()
+				tt.Frame()
+
+				drawer, ok := tt.Access("详情侧边抽屉")
+				if !ok {
+					t.Fatalf("mode=%d floating detail drawer did not open", mode)
+				}
+				if drawer.Bounds.W < detailMinWidth || drawer.Bounds.X+drawer.Bounds.W < 1439 || drawer.Bounds.Y != 0 || drawer.Bounds.H < 899 {
+					t.Fatalf("mode=%d floating drawer geometry unexpected: %+v", mode, drawer.Bounds)
+				}
+
+				// Calendar toolbar & every day column must stay 100% unchanged (0px shift/resize)
+				for label, before := range toolbarBefore {
+					after, ok := tt.Access(label)
+					if !ok || after.Bounds != before {
+						t.Fatalf("mode=%d floating drawer deformed toolbar %q: before=%+v after=%+v", mode, label, before, after.Bounds)
+					}
+				}
+				for target, before := range colsBefore {
+					after, ok := tt.Access(target)
+					if !ok || after.Bounds != before {
+						t.Fatalf("mode=%d floating drawer deformed column %q: before=%+v after=%+v", mode, target, before, after.Bounds)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCalendarEventsHaveNoHoverTooltips(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	sAll := time.Date(2026, 11, 18, 0, 0, 0, 0, loc)
+	eAll := time.Date(2026, 11, 20, 0, 0, 0, 0, loc)
+	sTimed := time.Date(2026, 11, 18, 10, 0, 0, 0, loc)
+	eTimed := time.Date(2026, 11, 18, 11, 0, 0, 0, loc)
+
+	extEv := api.CalendarEvent{
+		ID:    "ext-tooltip-1",
+		Title: "外部只读评审",
+		Start: time.Date(2026, 11, 18, 14, 0, 0, 0, loc).Format(time.RFC3339),
+		End:   time.Date(2026, 11, 18, 15, 0, 0, 0, loc).Format(time.RFC3339),
+	}
+	extEv.ExtendedProps.ReadOnly = true
+	extEv.ExtendedProps.Source = "caldav"
+
+	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
+	a.client, _ = api.New(api.DefaultServer, "")
+	a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
+	startRange, endRange := calendarRange(base, 2)
+	a.adoptCache(storage.Cache{
+		Server:  api.DefaultServer,
+		UserID:  1,
+		SavedAt: base,
+		Tasks: []api.Task{
+			{ID: 601, Title: "跨天全天任务", Status: "pending", AllDay: true, StartTime: &sAll, EndTime: &eAll, Revision: 1},
+			{ID: 602, Title: "时段评审任务", Status: "pending", StartTime: &sTimed, EndTime: &eTimed, Revision: 1},
+		},
+		Calendar: &storage.CalendarSnapshot{
+			Start: startRange, End: endRange, Timezone: "Asia/Shanghai", SavedAt: base,
+			Events: []api.CalendarEvent{extEv},
+		},
+	})
+	a.page = "calendar"
+	a.selectedDay = base
+
+	assertNoTooltipOnHover := func(tt *ui.Tester, targetName string, r ui.Rect) {
+		t.Helper()
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(2 * time.Second)
+		tt.Frame()
+		for _, node := range tt.AccessAll() {
+			if node.Role == ui.RoleTooltip && !node.Offscreen {
+				t.Fatalf("hovering %q rendered dark tooltip overlay: %+v", targetName, node)
+			}
+		}
+	}
+
+	// Month view: all-day span bar, timed event, resize handle, and toolbar controls
+	a.calendarMode = 2
+	tt := ui.NewTester(a.view, 1440, 900)
+	tt.Frame()
+	tt.Frame()
+	for _, label := range []string{
+		"日程 2026-11-18 跨天全天任务",
+		"日程 2026-11-18 时段评审任务",
+		"调整结束 2026-11-19 跨天全天任务",
+		"回到今天",
+		"日历定位日期",
+		"日程来源",
+		"添加日程",
+	} {
+		node, ok := tt.Access(label)
+		if !ok {
+			t.Fatalf("month view missing %q", label)
+		}
+		assertNoTooltipOnHover(tt, label, node.Bounds)
+	}
+
+	// Week view: timeline card, all-day span bar, and timeline resize handle
+	a.calendarMode = 1
+	a.calendarScroll.Y = 8 * float32(a.calendarZoom)
+	tt.Frame()
+	tt.Frame()
+	for _, label := range []string{
+		"日程 2026-11-18 跨天全天任务",
+		"日程 2026-11-18 时段评审任务",
+		"调整结束 2026-11-18 时段评审任务",
+	} {
+		node, ok := tt.Access(label)
+		if !ok {
+			t.Fatalf("week view missing %q", label)
+		}
+		assertNoTooltipOnHover(tt, label, node.Bounds)
+	}
+
+	// Agenda view: multi-day pill and external read-only badge
+	a.calendarMode = 3
+	tt.Frame()
+	tt.Frame()
+	for _, text := range []string{"第 1/2 天 · 11/18–11/19", "外部"} {
+		rect, ok := tt.Find(text)
+		if !ok {
+			t.Fatalf("agenda view missing %q", text)
+		}
+		assertNoTooltipOnHover(tt, text, rect)
+	}
+}
+
+func TestCalendarFloatingDetailDrawerEscapePopoverIMEAndBackdrop(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	s1 := time.Date(2026, 11, 16, 10, 0, 0, 0, loc)
 	e1 := time.Date(2026, 11, 16, 11, 0, 0, 0, loc)
 
 	a := New(storage.Store{Dir: t.TempDir()})
@@ -556,7 +758,7 @@ func TestCalendarResponsiveFlexWithRightDetailDrawerNoClipping(t *testing.T) {
 	a.client, _ = api.New(api.DefaultServer, "")
 	a.session.User = api.User{ID: 1, Timezone: "Asia/Shanghai"}
 	startRange, endRange := calendarRange(base, 2)
-	task := api.Task{ID: 501, Title: "抽屉联调验证", Status: "pending", StartTime: &s1, EndTime: &e1, Revision: 1}
+	task := api.Task{ID: 701, Title: "悬浮抽屉交互验证", Status: "pending", StartTime: &s1, EndTime: &e1, Revision: 1}
 	a.adoptCache(storage.Cache{
 		Server:  api.DefaultServer,
 		UserID:  1,
@@ -568,53 +770,93 @@ func TestCalendarResponsiveFlexWithRightDetailDrawerNoClipping(t *testing.T) {
 	})
 	a.page = "calendar"
 	a.selectedDay = base
-	a.editTaskNow(task)
+	a.calendarMode = 2
 
-	// Simulate flex side-by-side layout matching detailDrawerWorkspace:
-	// 1192px workspace (1440 - 248 sidebar) split into flexible calendar + 440px right drawer => 752px calendar
-	const workspaceW = 1192
-	const drawerW = 440
-	const calW = float32(workspaceW - drawerW)
+	tt := ui.NewTester(a.view, 1440, 900)
+	tt.Frame()
+	tt.Frame()
 
-	for _, mode := range []int{2, 1} {
-		a.calendarMode = mode
-		tt := ui.NewTester(func(c *ui.Context) {
-			applyAppTheme(c)
-			ui.Row(c).Fill().MinWidth(0).MinHeight(0).Children(func() {
-				ui.Column(c.Key("sim-cal")).Grow(1).FillHeight().MinWidth(0).MinHeight(0).Children(func() {
-					a.calendarView(c)
-				})
-				ui.Box(c.Key("sim-drawer")).Width(drawerW).FillHeight().Shrink(0)
-			})
-		}, workspaceW, 900)
-		tt.Frame()
-		tt.Frame()
+	// 1. Click calendar task -> floating drawer opens; Esc closes it immediately.
+	if err := tt.Click("日程 2026-11-16 悬浮抽屉交互验证"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if _, ok := tt.Access("详情侧边抽屉"); !ok || !a.editing {
+		t.Fatal("floating detail drawer did not open")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if _, ok := tt.Access("详情侧边抽屉"); ok || a.editing {
+		t.Fatal("Esc did not close floating detail drawer")
+	}
 
-		// All toolbar controls must remain completely unclipped inside [0, calW]
-		for _, label := range []string{"回到今天", "上一段", "下一段", "日历定位日期", "日程来源", "日", "周", "月", "日程", "添加日程"} {
-			node, ok := tt.Access(label)
-			if !ok {
-				t.Fatalf("mode=%d missing toolbar control %q", mode, label)
-			}
-			if node.Bounds.X < 0 || node.Bounds.X+node.Bounds.W > calW+1 {
-				t.Fatalf("mode=%d toolbar control %q clipped by right drawer: bounds=%+v calW=%.0f", mode, label, node.Bounds, calW)
-			}
-		}
+	// 2. Re-open, open a nested property popover -> first Esc closes ONLY the popover,
+	//    second Esc closes the floating drawer.
+	if err := tt.Click("日程 2026-11-16 悬浮抽屉交互验证"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("编辑优先级"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.taskMetaOpen != "priority" {
+		t.Fatalf("expected priority popover open, got %q", a.taskMetaOpen)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.taskMetaOpen != "" {
+		t.Fatalf("first Esc did not close priority popover: %q", a.taskMetaOpen)
+	}
+	if _, ok := tt.Access("详情侧边抽屉"); !ok || !a.editing {
+		t.Fatal("first Esc closed floating drawer while nested popover was open")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if _, ok := tt.Access("详情侧边抽屉"); ok || a.editing {
+		t.Fatal("second Esc did not close floating drawer after popover closed")
+	}
 
-		// All 7 days (Mon..Sun) must remain visible with positive width and zero clipping
-		for d := 0; d < 7; d++ {
-			dayStr := base.AddDate(0, 0, d).Format("2006-01-02")
-			target := "日历日期 " + dayStr
-			if mode == 1 {
-				target = "全天栏 " + dayStr
-			}
-			col, ok := tt.Access(target)
-			if !ok {
-				t.Fatalf("mode=%d missing day column %q", mode, target)
-			}
-			if col.Bounds.W < 60 || col.Bounds.X < 0 || col.Bounds.X+col.Bounds.W > calW+1 {
-				t.Fatalf("mode=%d day column %q clipped by drawer: bounds=%+v calW=%.0f", mode, target, col.Bounds, calW)
-			}
-		}
+	// 3. Re-open, focus title and start real IME composition -> Esc must NOT close the drawer.
+	if err := tt.Click("日程 2026-11-16 悬浮抽屉交互验证"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("任务标题"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Compose("zhongwen", 8)
+	tt.Frame()
+	if !a.autosave.composing {
+		t.Fatal("expected active IME composition on title input")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if !a.editing {
+		t.Fatal("Esc closed floating drawer during active IME composition")
+	}
+	tt.Compose("", 0)
+	tt.Frame()
+
+	// 4. Clicking empty padding inside the floating drawer keeps it open.
+	drawer, ok := tt.Access("详情侧边抽屉")
+	if !ok {
+		t.Fatal("missing floating drawer")
+	}
+	tt.ClickAt(drawer.Bounds.X+drawer.Bounds.W-6, drawer.Bounds.Y+drawer.Bounds.H-6)
+	tt.Frame()
+	if !a.editing {
+		t.Fatal("clicking inside floating drawer unexpectedly dismissed it")
+	}
+
+	// 5. Clicking outside on the backdrop dismisses the floating drawer cleanly
+	//    without opening a new calendar task underneath.
+	tt.ClickAt(drawer.Bounds.X-80, 420)
+	tt.Frame()
+	if a.editing || a.selectedOccurrence != nil {
+		t.Fatal("clicking outside backdrop did not dismiss floating drawer")
+	}
+	if _, ok := tt.Access("详情侧边抽屉"); ok {
+		t.Fatal("floating drawer remained mounted after backdrop click")
 	}
 }

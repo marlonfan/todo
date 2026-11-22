@@ -264,21 +264,28 @@ func TestCalendarToolbarTitleBarAvoidanceAndDrawerCoordination(t *testing.T) {
 		t.Fatalf("calendar '+' button overlaps Windows caption controls: rightEdge=%v > %v", rightEdge, 1440-winBar.Right)
 	}
 
-	// 2. Wide calendar WITH detail drawer open: right drawer owns bar.Right, so calendar
-	//    toolbar does not reserve duplicate 138px right padding.
+	// 2. Wide calendar WITH floating detail drawer open: calendar toolbar stays
+	//    completely stationary on Windows (never shifts when drawer opens), while
+	//    the floating drawer's top strip still clears Windows caption controls.
 	a.editTaskNow(a.tasks[0])
 	tt.SetTitleBar(fullscreenBar)
-	addDrawerFS, ok := tt.Find("添加日程")
-	if !ok {
-		t.Fatal("missing calendar create button with drawer in fullscreen")
+	if _, ok := tt.Access("详情侧边抽屉"); !ok {
+		t.Fatal("missing floating detail drawer in fullscreen")
 	}
 	tt.SetTitleBar(winBar)
 	addDrawerWin, ok := tt.Find("添加日程")
 	if !ok {
 		t.Fatal("missing calendar create button with drawer on Windows")
 	}
-	if addDrawerWin.X != addDrawerFS.X {
-		t.Fatalf("calendar toolbar reserved duplicate bar.Right when detail drawer was open: win X=%v vs fullscreen X=%v", addDrawerWin.X, addDrawerFS.X)
+	if addDrawerWin.X != addNoDrawerWin.X {
+		t.Fatalf("floating detail drawer shifted calendar toolbar on Windows: open X=%v vs closed X=%v", addDrawerWin.X, addNoDrawerWin.X)
+	}
+	drawerTitle, ok := tt.AccessByRole(ui.RoleTextField, "任务标题")
+	if !ok {
+		t.Fatal("missing floating detail drawer title on Windows")
+	}
+	if drawerTitle.Bounds.Y < winBar.Height {
+		t.Fatalf("floating detail drawer title overlapped Windows caption bar: Y=%v < %v", drawerTitle.Bounds.Y, winBar.Height)
 	}
 	a.clearTaskSelection()
 

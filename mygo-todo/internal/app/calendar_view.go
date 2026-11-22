@@ -61,10 +61,6 @@ func (a *App) calendarEffectiveWidth(c *ui.Context, rootBounds ui.Rect) float32 
 	if windowWidth >= 1180 {
 		width -= a.sidebarWidth + 1
 	}
-	if (a.editing || a.selectedOccurrence != nil) && (width >= 1050 || windowWidth >= 1180) {
-		drawerW := min(float32(440), max(float32(detailMinWidth), width*0.36))
-		width -= drawerW
-	}
 	return max(float32(320), width)
 }
 
@@ -81,7 +77,9 @@ func (a *App) calendarView(c *ui.Context) {
 	effectiveWidth := a.calendarEffectiveWidth(c, root.Bounds())
 	bar := c.TitleBar()
 	touchesLeft := windowWidth < sidebarBreakpoint
-	touchesRight := !a.rightDetailPaneVisible(windowWidth)
+	// The task detail drawer floats above the calendar instead of shrinking it,
+	// so the calendar canvas always extends to the right window edge.
+	touchesRight := true
 	barInsetX := float32(0)
 	if touchesLeft && bar.Left > 0 {
 		barInsetX += bar.Left
@@ -108,7 +106,7 @@ func (a *App) calendarView(c *ui.Context) {
 			}
 
 			// Outlined pill "Today" button
-			todayBtn := ui.ButtonBase(c.Key("cal-today")).Label("回到今天").Tooltip("回到今天").
+			todayBtn := ui.ButtonBase(c.Key("cal-today")).Label("回到今天").
 				Height(28).Padding(0, 12).Radius(14).Center().Shrink(0).Border(1, t.BorderDefault).Background(ui.Transparent).Cursor(ui.CursorPointer).
 				OnClick(func() {
 					a.selectedDay = time.Now().In(a.location())
@@ -124,14 +122,14 @@ func (a *App) calendarView(c *ui.Context) {
 
 			// Grouped Prev / Next circular navigation arrows
 			ui.Row(c.Key("cal-nav-arrows")).Gap(2).Shrink(0).AlignItems(ui.Center).Children(func() {
-				prev := ui.ButtonBase(c.Key("cal-prev")).Label("上一段").Tooltip("上一段").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer).
+				prev := ui.ButtonBase(c.Key("cal-prev")).Label("上一段").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer).
 					OnClick(func() { a.selectedDay = calendarShift(a.selectedDay, a.calendarMode, -1); a.loadCalendar() })
 				if prev.Hovered() {
 					prev.Background(t.BgHover)
 				}
 				prev.Children(func() { ui.Icon(c, lucide.ChevronLeft()).Size(15, 15).TextColor(t.TextSecondary).AccessHidden(true) })
 
-				next := ui.ButtonBase(c.Key("cal-next")).Label("下一段").Tooltip("下一段").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer).
+				next := ui.ButtonBase(c.Key("cal-next")).Label("下一段").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer).
 					OnClick(func() { a.selectedDay = calendarShift(a.selectedDay, a.calendarMode, 1); a.loadCalendar() })
 				if next.Hovered() {
 					next.Background(t.BgHover)
@@ -156,7 +154,7 @@ func (a *App) calendarView(c *ui.Context) {
 			jumpOpen := ui.Local(jumpHolder, "open", func() bool { return false })
 			var titleAnchor ui.Element
 			jumpHolder.Children(func() {
-				titleAnchor = ui.ButtonBase(c.Key("cal-period-title")).Label("日历定位日期").Tooltip("点击快速跳转日期").
+				titleAnchor = ui.ButtonBase(c.Key("cal-period-title")).Label("日历定位日期").
 					Height(30).Padding(0, 8).Radius(8).MinWidth(0).Cursor(ui.CursorPointer).OnClick(func() { *jumpOpen = !*jumpOpen })
 				if titleAnchor.Hovered() || *jumpOpen {
 					titleAnchor.Background(t.BgHover)
@@ -197,7 +195,7 @@ func (a *App) calendarView(c *ui.Context) {
 					a.calendarScroll.Y = float32(topHour * a.calendarZoom)
 				}
 				ui.Row(c.Key("cal-zoom-group")).Height(28).Padding(2).Gap(1).Radius(14).Background(t.BgSubtle).Shrink(0).AlignItems(ui.Center).Children(func() {
-					zOut := ui.ButtonBase(c.Key("zoom-out")).Label("缩小时间轴").Tooltip("缩小时间轴").Size(24, 24).Radius(12).Center().Cursor(ui.CursorPointer).
+					zOut := ui.ButtonBase(c.Key("zoom-out")).Label("缩小时间轴").Size(24, 24).Radius(12).Center().Cursor(ui.CursorPointer).
 						Disabled(a.calendarZoom <= 40).OnClick(func() { zoomStep(-8) })
 					if zOut.Hovered() && a.calendarZoom > 40 {
 						zOut.Background(t.BgApp)
@@ -208,7 +206,7 @@ func (a *App) calendarView(c *ui.Context) {
 					}
 					zOut.Children(func() { ui.Icon(c, lucide.Minus()).Size(13, 13).TextColor(zOutCol).AccessHidden(true) })
 
-					zIn := ui.ButtonBase(c.Key("zoom-in")).Label("放大时间轴").Tooltip("放大时间轴").Size(24, 24).Radius(12).Center().Cursor(ui.CursorPointer).
+					zIn := ui.ButtonBase(c.Key("zoom-in")).Label("放大时间轴").Size(24, 24).Radius(12).Center().Cursor(ui.CursorPointer).
 						Disabled(a.calendarZoom >= 96).OnClick(func() { zoomStep(8) })
 					if zIn.Hovered() && a.calendarZoom < 96 {
 						zIn.Background(t.BgApp)
@@ -231,7 +229,7 @@ func (a *App) calendarView(c *ui.Context) {
 					{Key: "2", Label: "仅显示外部日历"},
 				}
 				choice := appDropdown(c, filterOpen, items, func(trigger ui.Element) {
-					trigger.Label("日程来源").Tooltip("筛选日程来源").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer)
+					trigger.Label("日程来源").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer)
 					if a.calendarFilter != 0 {
 						trigger.Background(t.Accent.Alpha(0.12))
 					} else if trigger.Hovered() || *filterOpen {
@@ -264,7 +262,7 @@ func (a *App) calendarView(c *ui.Context) {
 			}
 
 			// Soft circular "+" primary create action
-			addBtn := ui.ButtonBase(c.Key("cal-create")).Label("添加日程").Tooltip("新建日程").Size(28, 28).Radius(14).Center().Shrink(0).
+			addBtn := ui.ButtonBase(c.Key("cal-create")).Label("添加日程").Size(28, 28).Radius(14).Center().Shrink(0).
 				Background(t.Accent).Cursor(ui.CursorPointer).Disabled(a.busy).OnClick(a.newTask)
 			if addBtn.Hovered() {
 				addBtn.Background(t.AccentHover)
@@ -308,30 +306,6 @@ func eventTimePrefix(event api.CalendarEvent, day time.Time) string {
 		return start.Format("15:04")
 	}
 	return ""
-}
-
-func eventLabel(event api.CalendarEvent, day time.Time) string {
-	prefix := "全天"
-	if !event.AllDay {
-		if p := eventTimePrefix(event, day); p != "" {
-			prefix = p
-		}
-	}
-	marker := ""
-	if event.ExtendedProps.Status == "completed" {
-		marker = "✓ "
-	}
-	if event.ExtendedProps.ReadOnly {
-		marker = "只读 · "
-	}
-	return marker + prefix + "  " + event.Title
-}
-
-func allDaySpanTooltip(event api.CalendarEvent, loc *time.Location) string {
-	if _, totalDays, sDay, eDay, ok := multiDayEventInfo(event, time.Now().In(loc)); ok {
-		return fmt.Sprintf("%s\n%s – %s · 全天（共 %d 天）", event.Title, sDay.Format("1月2日"), eDay.Format("1月2日"), totalDays)
-	}
-	return event.Title + "\n全天"
 }
 
 // calendarAllDaySpanBar renders a single continuous horizontal ribbon for an
@@ -391,7 +365,6 @@ func (a *App) calendarAllDaySpanBar(c *ui.Context, span allDaySpan, cols int, he
 			Justify(ui.Start).AlignItems(ui.Center).Clip().
 			Background(t.BgApp.Mix(accent, mixAmt)).
 			Cursor(ui.CursorPointer).FocusRingColor(t.Accent).
-			Tooltip(allDaySpanTooltip(span.Event, span.AnchorDay.Location())).
 			Disabled(a.busy).
 			OnClick(func() { a.openCalendarEvent(span.Event) })
 
@@ -441,7 +414,7 @@ func (a *App) calendarEventButton(c *ui.Context, event api.CalendarEvent, day ti
 	e := ui.ButtonBase(c).Label("日程 "+day.Format("2006-01-02")+" "+event.Title).
 		MinWidth(0).Padding(0, 6).Radius(4).Justify(ui.Start).AlignItems(ui.Center).Clip().
 		Cursor(ui.CursorPointer).FocusRingColor(t.Accent).
-		Tooltip(event.Title + "\n" + event.Start).Disabled(a.busy).
+		Disabled(a.busy).
 		OnClick(func() { a.openCalendarEvent(event) })
 
 	if event.AllDay {
@@ -529,7 +502,7 @@ func (a *App) calendarTimelineButton(c *ui.Context, event api.CalendarEvent, day
 	frame.Children(func() {
 		e := ui.ButtonBase(c.Key("event")).Label("日程 "+day.Format("2006-01-02")+" "+event.Title).Fill().MinWidth(0).Padding(4, 8, 4, 10).Radius(6).Clip().
 			Justify(ui.Start).AlignItems(ui.Start).Background(cardBg).Cursor(ui.CursorPointer).
-			Tooltip(eventLabel(event, day) + "\n" + event.Start).Disabled(a.busy).
+			Disabled(a.busy).
 			OnClick(func() { a.openCalendarEvent(event) })
 		if selected {
 			e.Border(1, accent.Alpha(0.48))
@@ -750,7 +723,7 @@ func (a *App) calendarMonthView(c *ui.Context, events []api.CalendarEvent) {
 								}
 								ui.Spacer(c)
 
-								addBtn := ui.ButtonBase(c.Key("add-day")).Label("在 "+dayStr+" 添加日程").Tooltip("新建日程").
+								addBtn := ui.ButtonBase(c.Key("add-day")).Label("在 "+dayStr+" 添加日程").
 									Size(22, 22).Radius(11).Center().Shrink(0).Cursor(ui.CursorPointer)
 								addIconCol := t.TextSecondary
 								if !cell.Hovered() && !addBtn.Focused() && !addBtn.Hovered() {
@@ -1143,15 +1116,13 @@ func (a *App) calendarAgendaView(c *ui.Context, events []api.CalendarEvent) {
 											if c.Theme().Dark {
 												pillMix = 0.22
 											}
-											ui.Box(c).Padding(1.5, 6).Radius(4).Background(t.BgApp.Mix(accent, pillMix)).Shrink(0).
-												Tooltip(fmt.Sprintf("%s – %s · 共 %d 天", startDay.Format("1月2日"), endDay.Format("1月2日"), totalDays)).Children(func() {
+											ui.Box(c).Padding(1.5, 6).Radius(4).Background(t.BgApp.Mix(accent, pillMix)).Shrink(0).Children(func() {
 												ui.Text(c, pillText).FontSize(10.5).FontFeatures("tnum").FontWeight(500).TextColor(accent).SingleLine()
 											})
 										}
 
 										if ev.ExtendedProps.ReadOnly {
-											ui.Row(c).Gap(3).Padding(1.5, 6).Radius(4).Background(t.BgSubtle).AlignItems(ui.Center).Shrink(0).
-												Tooltip("外部日历 · 只读").Children(func() {
+											ui.Row(c).Gap(3).Padding(1.5, 6).Radius(4).Background(t.BgSubtle).AlignItems(ui.Center).Shrink(0).Children(func() {
 												ui.Icon(c, lucide.Cloud()).Size(11, 11).TextColor(t.TextTertiary).AccessHidden(true)
 												ui.Text(c, "外部").FontSize(10.5).TextColor(t.TextTertiary).SingleLine()
 											})
