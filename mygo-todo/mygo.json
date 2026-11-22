@@ -2,7 +2,7 @@
   "name": "Todo Native",
   "slug": "mygo-todo",
   "identifier": "life.marlon.todo.native",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "publisher": "Marlon",
   "icon": "resources/icon.png",
   "out": "build",
