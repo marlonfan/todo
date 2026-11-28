@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"runtime"
 	"strings"
 	"time"
 
@@ -89,6 +90,117 @@ func trayPNG() []byte {
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	return b.Bytes()
+}
+
+// windowsTrayPNG renders a 32x32 4x4-supersampled colored brand tray icon
+// (royal-blue rounded squircle with a crisp white checkmark) so it stands out
+// clearly on both light and dark Windows taskbars and inside the overflow tray.
+func windowsTrayPNG() []byte {
+	const size = 32
+	const samples = 4
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+
+	const cx, cy = 16.0, 16.0
+	const half = 13.0
+	const radius = 6.5
+
+	const x1, y1 = 9.5, 16.4
+	const x2, y2 = 14.0, 20.8
+	const x3, y3 = 22.8, 11.4
+	const checkHalfStroke = 1.65
+
+	const bgR, bgG, bgB = 37.0, 99.0, 235.0 // #2563EB (matches resources/icon.png)
+
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			var rSum, gSum, bSum, aSum float64
+			for sy := 0; sy < samples; sy++ {
+				py := float64(y) + (float64(sy)+0.5)/float64(samples)
+				for sx := 0; sx < samples; sx++ {
+					px := float64(x) + (float64(sx)+0.5)/float64(samples)
+
+					qx := math.Abs(px-cx) - (half - radius)
+					qy := math.Abs(py-cy) - (half - radius)
+					outDist := math.Hypot(math.Max(qx, 0), math.Max(qy, 0))
+					inDist := math.Min(math.Max(qx, qy), 0)
+					if outDist+inDist-radius > 0 {
+						continue
+					}
+
+					d1 := distToSegment(px, py, x1, y1, x2, y2)
+					d2 := distToSegment(px, py, x2, y2, x3, y3)
+					if math.Min(d1, d2) <= checkHalfStroke {
+						rSum += 255
+						gSum += 255
+						bSum += 255
+					} else {
+						rSum += bgR
+						gSum += bgG
+						bSum += bgB
+					}
+					aSum += 1
+				}
+			}
+			if aSum > 0 {
+				total := float64(samples * samples)
+				img.SetNRGBA(x, y, color.NRGBA{
+					R: uint8(math.Round(rSum / aSum)),
+					G: uint8(math.Round(gSum / aSum)),
+					B: uint8(math.Round(bSum / aSum)),
+					A: uint8(math.Round((aSum / total) * 255)),
+				})
+			}
+		}
+	}
+
+	var b bytes.Buffer
+	_ = png.Encode(&b, img)
+	return b.Bytes()
+}
+
+func usesTrayContextMenu(goos string) bool {
+	return goos != "darwin"
+}
+
+func trayIconForOS(goos string) ([]byte, bool) {
+	if goos == "darwin" {
+		return trayPNG(), true
+	}
+	return windowsTrayPNG(), false
+}
+
+func (a *App) showFromTray() {
+	a.closeTrayFlyout()
+	a.Show()
+}
+
+func (a *App) quitFromTray() {
+	a.closeTrayFlyout()
+	mygo.App.Quit()
+}
+
+func (a *App) trayMenuItems() []*mygo.MenuItem {
+	return []*mygo.MenuItem{
+		{
+			Label: "显示 Todo",
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.showFromTray()
+			},
+		},
+		{
+			Label: "快捷任务面板",
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.toggleTrayFlyout()
+			},
+		},
+		mygo.Separator(),
+		{
+			Label: "退出 Todo",
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.quitFromTray()
+			},
+		},
+	}
 }
 
 func normalizeTrayTitleMode(mode string) string {
@@ -232,7 +344,9 @@ func (a *App) trayToolTip(now time.Time) string {
 func (a *App) updateTray() {
 	now := time.Now().In(a.location())
 	if a.tray != nil {
-		a.tray.SetTitle(a.trayStatusTitle(now))
+		if !usesTrayContextMenu(runtime.GOOS) {
+			a.tray.SetTitle(a.trayStatusTitle(now))
+		}
 		a.tray.SetToolTip(a.trayToolTip(now))
 	}
 	if a.trayFlyout != nil && !a.trayFlyout.IsDestroyed() {
@@ -344,7 +458,7 @@ func trayHeaderDateParts(now time.Time) (string, string) {
 
 func trayHeaderIconButton(c *ui.Context, key, label string, icon *ui.SVG, disabled bool, onClick func()) {
 	t := tokensOf(c)
-	btn := ui.ButtonBase(c.Key(key)).Label(label).Tooltip(label).
+	btn := ui.ButtonBase(c.Key(key)).Label(label).
 		Size(26, 26).Radius(6).Center().Cursor(ui.CursorPointer).
 		Disabled(disabled).FocusRingColor(t.Accent).OnClick(onClick)
 	fg := t.TextSecondary
@@ -472,7 +586,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 				ui.Text(c, smartSummaryText(smart)).FontSize(10.5).FontWeight(fontWeightMedium).TextColor(t.Accent).SingleLine().Shrink(0)
 			}
 			if hasTitle {
-				addBtn := ui.ButtonBase(c.Key("tray-quick-submit")).Label("菜单栏添加任务").Tooltip("创建任务 (Enter)").
+				addBtn := ui.ButtonBase(c.Key("tray-quick-submit")).Label("菜单栏添加任务").
 					Size(22, 22).Radius(5).Center().Cursor(ui.CursorPointer).Background(t.Accent).
 					OnClick(a.submitTrayQuickTask)
 				addBtn.Children(func() {
@@ -553,7 +667,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 					})
 
 					openBtn := ui.ButtonBase(c.Key("tray-open-"+a.stableTaskKey(task))).
-						Label("菜单栏打开 "+task.Title).Tooltip(task.Title).
+						Label("菜单栏打开 "+task.Title).
 						Grow(1).FillHeight().MinWidth(0).Justify(ui.Start).Padding(0, 2).Cursor(ui.CursorPointer).
 						OnClick(func() { a.openTaskFromTray(task) })
 					openBtn.Children(func() {
@@ -591,7 +705,6 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 		ui.Row(c.Key("tray-footer")).Height(30).Shrink(0).Padding(6, 2, 0, 2).AlignItems(ui.Center).Gap(4).
 			BorderWidth(1, 0, 0, 0).BorderColor(t.BorderSubtle).Children(func() {
 			modeBtn := ui.ButtonBase(c.Key("tray-title-mode")).Label("切换顶部状态栏显示模式").
-				Tooltip("点击切换状态栏文字：下一项任务 / 今日数量 / 仅图标").
 				Height(22).Padding(0, 6).Radius(5).Center().Cursor(ui.CursorPointer).
 				OnClick(a.cycleTrayTitleMode)
 			modeCol := t.TextTertiary

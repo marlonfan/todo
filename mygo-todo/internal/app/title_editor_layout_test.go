@@ -71,10 +71,10 @@ func TestTaskTitleEditorUsesAvailableHeadingWidth(t *testing.T) {
 				t.Fatal("native select-all and typing lost title characters")
 			}
 			editor, _ = tt.AccessByRole(ui.RoleTextField, "任务标题")
-			if editor.Bounds.H > 180 || editor.Bounds.W < wantWidth-2 {
-				t.Fatal("200-rune editor must retain width and bounded scrolling height", editor.Bounds)
+			if editor.Bounds.H > detailTitleLineHeight+1 || editor.Bounds.W < wantWidth-2 {
+				t.Fatal("200-rune title editor must stay single-line and retain full width", editor.Bounds)
 			}
-			tt.Scroll(editor.Bounds.X+editor.Bounds.W/2, editor.Bounds.Y+editor.Bounds.H/2, 0, 600)
+			tt.Key(0, ui.KeyEnd)
 			tt.Key(0, ui.KeyBackspace)
 			tt.Type("验")
 			maximum = strings.TrimSuffix(maximum, "！") + "验"

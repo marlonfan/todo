@@ -32,7 +32,7 @@ func (a *App) taskCenterView(c *ui.Context) {
 		}
 		t := tokensOf(c)
 		ui.Text(c, "提醒与活动记录").FontSize(fontTitle).FontWeight(600).TextColor(t.TextPrimary)
-		ui.Text(c, p.Task.Title).FontSize(fontTask).TextColor(t.TextSecondary)
+		ui.Text(c, p.Task.Title).FontSize(fontTask).TextColor(t.TextSecondary).FillWidth().MinWidth(0).MaxLines(3)
 		ui.Text(c, "显示服务器已保存的数据，不含尚未同步或编辑中的修改。").FontSize(12).TextColor(t.TextTertiary)
 		if p.Task.Recurring() {
 			ui.Text(c, "服务端提醒针对整个重复系列；此处不是单次实例提醒。").FontSize(12).TextColor(t.TextSecondary)

@@ -1,0 +1,6 @@
+.nsgo/
+dist/
+*.apk
+*.aab
+*.exe
+internal/voice/local_defaults_local.go

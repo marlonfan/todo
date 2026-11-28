@@ -39,6 +39,7 @@ func main() {
 	mygo.App.WhenReady(a.Start)
 	mygo.App.OnSecondInstance(func([]string, string) { a.Show() })
 	mygo.App.OnActivate(func(bool) { a.Show() })
+	mygo.App.OnWindowAllClosed(a.WindowAllClosed)
 	mygo.App.OnBeforeQuit(a.Quitting)
 	mygo.App.OnQuit(a.Close)
 	if err := mygo.App.Run(); err != nil {

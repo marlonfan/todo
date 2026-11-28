@@ -326,13 +326,13 @@ func (a *App) calendarResizeHandle(c *ui.Context, event api.CalendarEvent, day t
 	reveal := len(showIndicator) > 0 && showIndicator[0]
 	handle := ui.ButtonBase(c.Key("resize")).Label("调整结束 " + day.Format("2006-01-02") + " " + event.Title).Absolute().Bottom(0)
 	if event.AllDay {
-		handle.Top(0).Right(0).Width(14).Tooltip("拖到最后一天调整全天结束日期").Children(func() {
+		handle.Top(0).Right(0).Width(14).Children(func() {
 			if reveal || handle.Focused() || handle.Dragging() {
 				ui.Text(c, "↔").FontSize(10).TextColor(tokensOf(c).TextSecondary)
 			}
 		})
 	} else {
-		handle.Left(0).Right(0).Height(8).Tooltip("拖动调整本次结束时间").Children(func() {
+		handle.Left(0).Right(0).Height(8).Children(func() {
 			if reveal || handle.Focused() || handle.Dragging() {
 				ui.Box(c).Height(2.5).Width(22).Radius(1.5).Background(a.calendarEventAccent(c, event).Alpha(0.75)).AlignSelf(ui.Center)
 			}

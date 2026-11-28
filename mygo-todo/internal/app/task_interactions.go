@@ -474,7 +474,7 @@ func (a *App) taskCategoryHandle(c *ui.Context, task api.Task, visible bool, ope
 	}
 	// The trailing hover control sits in the title's reserved end margin,
 	// separated from the 32-DIP more-menu target by 6 DIPs.
-	handle := ui.Box(c.Key("task-category-drag")).Absolute().Right(46).Top(10).Size(32, 32).Center().Label("拖动归类 " + task.Title).Tooltip("拖到分类或拖动调整排序：" + task.Title).Cursor(ui.CursorGrab)
+	handle := ui.Box(c.Key("task-category-drag")).Absolute().Right(46).Top(6).Size(32, 32).Center().Label("拖动归类 " + task.Title).Tooltip("拖到分类或拖动调整排序：" + task.Title).Cursor(ui.CursorGrab)
 	if len(open) > 0 && open[0] != nil {
 		handle.OnClick(open[0])
 	}

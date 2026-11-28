@@ -64,12 +64,12 @@ func animatedCheckmarkBox(c *ui.Context, box ui.Element, checked, wasChecked boo
 }
 
 // detailCompleteCheckbox renders a refined rounded checkbox optically aligned
-// with the first line of the 23px detail title, keeping visual proximity and
+// with the 18px single-line detail title, keeping visual proximity and
 // native checkbox accessibility semantics (Space/Enter toggle).
 func detailCompleteCheckbox(c *ui.Context, checked *bool, label, priority string, disabled bool, onChange func()) ui.Element {
 	t := tokensOf(c)
 	cb := ui.CheckboxBase(c.Key("detail-complete"), checked).
-		Label(label).Size(26, 26).Margin(3, 0, 0, 0).Shrink(0).
+		Label(label).Size(26, 26).Margin(1, 0, 0, 0).Shrink(0).
 		Center().Radius(6).Cursor(ui.CursorPointer).
 		FocusRingColor(t.Accent).Disabled(disabled).
 		Transition(motionColorsFast()).

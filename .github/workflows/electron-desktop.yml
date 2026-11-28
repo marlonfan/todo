@@ -128,9 +128,88 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-mygo:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: Todo-MyGo-macOS
+            platform: darwin/universal
+            paths: |
+              mygo-todo/build/darwin-universal/*.dmg
+          - os: windows-latest
+            artifact: Todo-MyGo-Windows
+            platform: windows/amd64
+            paths: |
+              mygo-todo/build/windows-amd64/mygo-todo-setup-*-amd64.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: mygo-todo/go.mod
+          cache-dependency-path: mygo-todo/go.sum
+
+      - name: Resolve MyGo version
+        id: mygo-version
+        shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag || '' }}
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${RELEASE_TAG_INPUT}"
+          fi
+
+          if [[ -n "${tag}" ]]; then
+            if [[ "${tag}" != v* ]]; then
+              echo "::error::Release tag must start with v, for example v0.1.40."
+              exit 1
+            fi
+            version="${tag#v}"
+            node -e '
+              const fs = require("node:fs");
+              const cfg = JSON.parse(fs.readFileSync("mygo.json", "utf8"));
+              cfg.version = process.argv[1];
+              fs.writeFileSync("mygo.json", JSON.stringify(cfg, null, 2) + "\n");
+            ' "${version}"
+          else
+            version="$(node -p "require('./mygo.json').version")"
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        working-directory: mygo-todo
+
+      - name: Build MyGo Native app
+        shell: bash
+        run: |
+          go tool mygo build -platform "${{ matrix.platform }}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            installer="build/windows-amd64/mygo-todo-setup-${{ steps.mygo-version.outputs.version }}-amd64.exe"
+            if [[ ! -f "${installer}" ]]; then
+              echo "::error::Expected Windows NSIS installer at ${installer}"
+              exit 1
+            fi
+          fi
+        working-directory: mygo-todo
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Publish GitHub release
-    needs: build-electron
+    needs: [build-electron, build-mygo]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
 

@@ -36,6 +36,13 @@ type wysiwygEditorState struct {
 	slashSnapStart    int
 	slashSnapCaret    int
 	slashRestoreCaret int
+	richViewH         float32
+	rawViewH          float32
+	overscroll        ui.ScrollState
+	lastVisParaIdx    int
+	lastVisParaTop    float32
+	hasLastVisPara    bool
+	prevVisDocVersion uint64
 }
 
 type slashCommand struct {
@@ -43,6 +50,42 @@ type slashCommand struct {
 	Label string
 	Hint  string
 	Icon  *ui.SVG
+}
+
+const editorBottomOverscrollRatio = 0.5
+
+// editorHalfScreenPadding returns bottom padding (~50% of viewport height) so
+// raw Markdown editing keeps comfortable half-screen scroll breathing room.
+func editorHalfScreenPadding(viewH float32) float32 {
+	if viewH <= 0 {
+		return 6
+	}
+	return max(float32(6), float32(math.Round(float64(viewH)*editorBottomOverscrollRatio)))
+}
+
+// computeEditorBottomOverscroll computes the extra bottom scroll space below the
+// WYSIWYG editor (up to half the viewport height) so long notes can scroll past
+// the last line into the vertical middle of the pane, while short notes in the
+// upper half keep zero unnecessary scrolling.
+func computeEditorBottomOverscroll(viewH float32, boxes []richtext.ParagraphBox, paraCount int) float32 {
+	if viewH <= 0 || len(boxes) == 0 {
+		return 0
+	}
+	halfH := float32(math.Round(float64(viewH) * editorBottomOverscrollRatio))
+	if halfH <= 0 {
+		return 0
+	}
+	first := boxes[0]
+	last := boxes[len(boxes)-1]
+	overflows := first.Index > 0 || first.Top < -0.5 || last.Index < paraCount-1 || last.Top+last.Height > viewH+0.5
+	if overflows {
+		return halfH
+	}
+	lastBottom := last.Top + last.Height
+	if lastBottom <= viewH-halfH {
+		return 0
+	}
+	return min(halfH, float32(math.Round(float64(lastBottom-(viewH-halfH)))))
 }
 
 type richBlockAttachment struct {
@@ -474,10 +517,10 @@ func wysiwygThemeOf(c *ui.Context) *richtext.Theme {
 		QuoteText:           t.TextSecondary,
 		QuoteBarWidth:       2.5,
 		Headings: [6]richtext.HeadingStyle{
-			{Size: 1.32, Weight: 600, Color: t.TextPrimary, Top: 0.62, Bottom: 0.24},
-			{Size: 1.18, Weight: 600, Color: t.TextPrimary, Top: 0.54, Bottom: 0.20},
-			{Size: 1.07, Weight: 600, Color: t.TextPrimary, Top: 0.44, Bottom: 0.16},
-			{Size: 1.00, Weight: 600, Color: t.TextPrimary, Top: 0.36, Bottom: 0.14},
+			{Size: 1.22, Weight: 600, Color: t.TextPrimary, Top: 0.60, Bottom: 0.22},
+			{Size: 1.12, Weight: 600, Color: t.TextPrimary, Top: 0.52, Bottom: 0.18},
+			{Size: 1.04, Weight: 600, Color: t.TextPrimary, Top: 0.42, Bottom: 0.15},
+			{Size: 1.00, Weight: 600, Color: t.TextPrimary, Top: 0.34, Bottom: 0.13},
 			{Size: 0.96, Weight: 600, Color: t.TextSecondary, Top: 0.28, Bottom: 0.12},
 			{Size: 0.92, Weight: 600, Color: t.TextSecondary, Top: 0.25, Bottom: 0.12},
 		},
@@ -547,6 +590,8 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		st.slashDismissedAt = -1
 		st.pendingSlashApply = false
 		st.slashRestoreCaret = -1
+		st.overscroll = ui.ScrollState{}
+		st.hasLastVisPara = false
 		a.richComposing = false
 		reloadDoc(*source, targetW)
 	} else if !st.composing && *source != st.lastSerialized && *source != st.loadedSource {
@@ -953,6 +998,8 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					col = t.TextPrimary
 				}
 				toggle.OnClick(func() {
+					st.overscroll = ui.ScrollState{}
+					st.hasLastVisPara = false
 					if !st.sourceMode {
 						syncRichToSource()
 						st.sourceMode = true
@@ -974,12 +1021,20 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		if st.sourceMode {
 			rawWrap := ui.Column(c.Key(key + "-raw-wrap")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Clip()
 			rawWrap.Children(func() {
+				rawH := rawWrap.Bounds().H
+				if rawH <= 0 {
+					c.Invalidate()
+				} else if math.Abs(float64(rawH-st.rawViewH)) > 1 {
+					st.rawViewH = rawH
+					c.Invalidate()
+				}
+				bottomPad := editorHalfScreenPadding(rawH)
 				ed := appTextArea(c.Key(key+"-raw"), source, field.TextAreaProps{
 					Variant:     field.InputBorderless,
 					Placeholder: placeholder,
 					MinRows:     6,
 					MaxRows:     24,
-				}).Label(label).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 16, 6, 4).ScrollbarInsets(14, 2, 20, 0).Disabled(readOnly)
+				}).Label(label).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 16, max(bottomPad, 20), 4).ScrollbarInsets(14, 2, 20, 0).Disabled(readOnly)
 				if ref != nil {
 					ed.Ref(ref)
 				}
@@ -1058,28 +1113,87 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 			var editorElem ui.Element
 			hasEditorElem := false
 			pasteGuard.Children(func() {
-				editorElem = richtext.Editor(c.Key(key+"-rich"), st.doc, richtext.EditorOptions{
-					Label:       label,
-					Placeholder: placeholder,
-					Font:        ui.Font{Size: 14, Weight: 400, LineHeight: 1.72},
-					ReadOnly:    readOnly,
-					Theme:       wysiwygThemeOf(c),
-					OnLinkCommand: func() {
-						st.linkURL = st.doc.Formatting().Link
-						st.linkOpen = true
-					},
-				}).Background(ui.Transparent).BorderWidth(0).Radius(0).Grow(1).Basis(0).MinHeight(0).MinWidth(0)
-				hasEditorElem = true
-				if ref != nil {
-					editorElem.Ref(ref)
+				scrollView := ui.Scroll(c.Key(key + "-overscroll")).TrackScroll(&st.overscroll).Scrollbars(false).Grow(1).Basis(0).MinHeight(0).MinWidth(0)
+				viewH := scrollView.Bounds().H
+				editorH := viewH
+				if editorH <= 0 {
+					_, winH := c.Size()
+					if winH > 0 {
+						editorH = max(float32(160), winH-180)
+					} else {
+						editorH = 320
+					}
+					c.Invalidate()
+				} else if math.Abs(float64(viewH-st.richViewH)) > 1 {
+					st.richViewH = viewH
+					c.Invalidate()
 				}
-				if !editorElem.Focused() && st.composing {
-					st.composing = false
-					a.richComposing = false
+				boxes := st.doc.VisibleParagraphs()
+				paraCount := st.doc.Text().ParagraphCount()
+				docVer := st.doc.Version()
+				if st.overscroll.Y > 0 && len(boxes) > 0 {
+					lastBox := boxes[len(boxes)-1]
+					if lastBox.Index < paraCount-1 {
+						st.overscroll.Y = 0
+					} else if st.hasLastVisPara && docVer == st.prevVisDocVersion {
+						for _, b := range boxes {
+							if b.Index == st.lastVisParaIdx {
+								if delta := b.Top - st.lastVisParaTop; delta > 0.5 {
+									st.overscroll.Y = max(0, st.overscroll.Y-delta)
+								}
+								break
+							}
+						}
+					}
 				}
-				if editorElem.Changed() || (!st.composing && st.doc.Version() != st.docVersion) {
-					syncRichToSource()
+				if len(boxes) > 0 {
+					st.lastVisParaIdx = boxes[0].Index
+					st.lastVisParaTop = boxes[0].Top
+					st.hasLastVisPara = true
+					st.prevVisDocVersion = docVer
 				}
+				overscrollH := computeEditorBottomOverscroll(viewH, boxes, paraCount)
+				if overscrollH <= 0 && st.overscroll.Y > 0 {
+					st.overscroll.Y = 0
+				} else if st.overscroll.Y > overscrollH {
+					st.overscroll.Y = overscrollH
+				}
+				scrollView.Children(func() {
+					editor := richtext.Editor(c.Key(key+"-rich"), st.doc, richtext.EditorOptions{
+						Label:       label,
+						Placeholder: placeholder,
+						Font:        ui.Font{Size: 14, Weight: 400, LineHeight: 1.72},
+						ReadOnly:    readOnly,
+						Theme:       wysiwygThemeOf(c),
+						OnLinkCommand: func() {
+							st.linkURL = st.doc.Formatting().Link
+							st.linkOpen = true
+						},
+					}).Background(ui.Transparent).BorderWidth(0).Radius(0).FillWidth().Height(editorH).Shrink(0).MinWidth(0)
+					editorElem = editor
+					hasEditorElem = true
+					if ref != nil {
+						editor.Ref(ref)
+					}
+					if !editor.Focused() && st.composing {
+						st.composing = false
+						a.richComposing = false
+					}
+					if editor.Changed() || (!st.composing && st.doc.Version() != st.docVersion) {
+						syncRichToSource()
+					}
+					if overscrollH > 0 {
+						ui.Box(c.Key(key + "-bottom-space")).Label("编辑区底部留白").Height(overscrollH).Shrink(0).FillWidth().Cursor(ui.CursorText).OnClick(func() {
+							if !readOnly {
+								end := st.doc.Text().Len()
+								st.doc.SetSelection(end, end)
+							}
+							if ref != nil {
+								ref.Focus()
+							}
+						})
+					}
+				})
 			})
 
 			// "/" Slash Command Menu

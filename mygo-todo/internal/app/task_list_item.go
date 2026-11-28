@@ -66,6 +66,19 @@ func taskRowTimeLabel(task api.Task, now time.Time, loc *time.Location, isHistor
 	return localDate.Format(format), false
 }
 
+func taskRowTitleOverflows(title string, weight int, width float32) bool {
+	if strings.TrimSpace(title) == "" || width <= 24 {
+		return false
+	}
+	font := ui.Font{
+		Size:       fontTask,
+		Weight:     weight,
+		LineHeight: float32(taskRowTitleLineHeight) / float32(fontTask),
+	}
+	_, h := ui.ShapeText(title, font, width).Size()
+	return h > float32(taskRowTitleMaxLines*taskRowTitleLineHeight)+0.5
+}
+
 func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, titleLabel string, selected bool, open func()) bool {
 	a.interactionFrame(c)
 	ownsKeys := false
@@ -118,9 +131,12 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 	rowKey := a.stableTaskKey(task)
 	highlighted := !a.search.Open && a.highlightedTaskKey != "" && a.highlightedTaskKey == taskRowKey(task)
 
-	// Uniform 52px row height across all items for steady list rhythm.
-	row := ui.Row(c.Key("task-row")).Label("任务行 "+task.Title).Gap(6).Padding(0, 8).Height(taskSingleRowHeight).FillWidth().Shrink(0).
-		Radius(8).AlignItems(ui.Center).Background(ui.Transparent).
+	minHeight := float32(taskSingleRowHeight)
+	if hasMeta {
+		minHeight = taskMetaRowHeight
+	}
+	row := ui.Row(c.Key("task-row")).Label("任务行 "+task.Title).Gap(6).Padding(6, 8).MinHeight(minHeight).FillWidth().Shrink(0).
+		Radius(8).AlignItems(ui.Start).Background(ui.Transparent).
 		Transition(motionColorsShadowsFast()).
 		OnClick(open)
 
@@ -202,10 +218,18 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 		})
 		ownsKeys = checkbox.Focused()
 
-		button := ui.ButtonBase(c.Key("edit")).Label(titleLabel).Description(summaryDesc).Tooltip(task.Title).Disabled(a.aiPanel != nil).Grow(1).FillHeight().MinWidth(0).MinHeight(32).Justify(ui.Start).Padding(0).OnClick(open)
+		titleWeight := 400
+		if selected {
+			titleWeight = 500
+		}
+		button := ui.ButtonBase(c.Key("edit")).Label(titleLabel).Description(summaryDesc).Disabled(a.aiPanel != nil).
+			Grow(1).AlignSelf(ui.Stretch).AlignItems(ui.Start).MinWidth(0).MinHeight(32).Justify(ui.Start).Padding(0).OnClick(open)
 		if !task.ReadOnly {
 			// Reserve only the trailing hover control, outside the title target.
 			button.Margin(0, 38, 0, 0)
+		}
+		if taskRowTitleOverflows(task.Title, titleWeight, button.Bounds().W) {
+			button.Tooltip(task.Title)
 		}
 		if (button.Pressed() || row.Pressed()) && (!selected || a.quick.Open) && !a.taskDiscardConfirm && a.aiPanel == nil {
 			open()
@@ -238,12 +262,8 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 			metaColor = t.TextSecondary
 		}
 		button.Children(func() {
-			ui.Column(c).Grow(1).FillHeight().MinWidth(0).Gap(2.5).Justify(ui.Center).Children(func() {
-				titleWeight := 400
-				if selected {
-					titleWeight = 500
-				}
-				titleWrap := ui.Box(c.Key("title-wrap")).MinWidth(0)
+			ui.Column(c).Grow(1).MinWidth(0).Padding(6, 0, 0, 0).Gap(2).Justify(ui.Start).Children(func() {
+				titleWrap := ui.Box(c.Key("title-wrap")).FillWidth().MinWidth(0)
 				_, completingHold := a.interaction.statuses[taskRowKey(task)]
 				animateStrike := done && completingHold && !a.interaction.reduceMotion
 				strikeTarget := float32(0)
@@ -258,7 +278,8 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 				}
 
 				titleWrap.Children(func() {
-					text := ui.Text(c, task.Title).FontSize(fontTask).FontWeight(titleWeight).TextColor(t.TextPrimary).SingleLine().MinWidth(0)
+					text := ui.Text(c, task.Title).FontSize(fontTask).FontWeight(titleWeight).FixedLineHeight(taskRowTitleLineHeight).
+						TextColor(t.TextPrimary).FillWidth().MinWidth(0).MaxLines(taskRowTitleMaxLines)
 					if task.Status != "pending" {
 						titleCol := t.TextSecondary
 						if selected {
@@ -282,49 +303,49 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 				})
 
 				if hasMeta {
-					ui.Row(c.Key("task-summary")).Gap(5).AlignItems(ui.Center).MinWidth(0).Children(func() {
+					ui.Row(c.Key("task-summary")).Gap(5).Height(14).AlignItems(ui.Center).MinWidth(0).Children(func() {
 						wrote := false
 						sep := func() {
 							if wrote {
-								ui.Text(c, "·").FontSize(fontAux).TextColor(t.TextTertiary.Alpha(0.70)).SingleLine().Shrink(0).AccessHidden(true)
+								ui.Text(c, "·").FontSize(fontAux).FixedLineHeight(14).TextColor(t.TextTertiary.Alpha(0.70)).SingleLine().Shrink(0).AccessHidden(true)
 							}
 						}
 						if timeText != "" {
 							if overdue {
-								ui.Text(c.Key("overdue-date"), timeText).FontSize(fontAux).FontWeight(500).FontFeatures("tnum").TextColor(t.Danger).SingleLine().Shrink(0)
+								ui.Text(c.Key("overdue-date"), timeText).FontSize(fontAux).FixedLineHeight(14).FontWeight(500).FontFeatures("tnum").TextColor(t.Danger).SingleLine().Shrink(0)
 							} else {
-								ui.Text(c, timeText).FontSize(fontAux).FontFeatures("tnum").TextColor(metaColor).SingleLine().Shrink(0)
+								ui.Text(c, timeText).FontSize(fontAux).FixedLineHeight(14).FontFeatures("tnum").TextColor(metaColor).SingleLine().Shrink(0)
 							}
 							wrote = true
 						}
 						if recurring {
 							ui.Icon(c, lucide.Repeat()).Size(10.5, 10.5).TextColor(metaColor).Shrink(0).AccessHidden(true)
 							if !wrote {
-								ui.Text(c, "重复").FontSize(fontAux).TextColor(metaColor).SingleLine().Shrink(0)
+								ui.Text(c, "重复").FontSize(fontAux).FixedLineHeight(14).TextColor(metaColor).SingleLine().Shrink(0)
 							}
 							wrote = true
 						}
 						if primaryCat != "" {
 							sep()
-							ui.Text(c, primaryCat).FontSize(fontAux).TextColor(metaColor).SingleLine().Shrink(1).MinWidth(0)
+							ui.Text(c, primaryCat).FontSize(fontAux).FixedLineHeight(14).TextColor(metaColor).SingleLine().Shrink(1).MinWidth(0)
 							if extraCats > 0 && rowFocusedOrHovered {
-								ui.Text(c, fmt.Sprintf("+%d", extraCats)).FontSize(10).FontFeatures("tnum").TextColor(t.TextTertiary).SingleLine().Shrink(0)
+								ui.Text(c, fmt.Sprintf("+%d", extraCats)).FontSize(10).FixedLineHeight(14).FontFeatures("tnum").TextColor(t.TextTertiary).SingleLine().Shrink(0)
 							}
 							wrote = true
 						}
 						if blockedSync {
 							sep()
-							ui.Text(c, "同步受阻").FontSize(fontAux).FontWeight(500).TextColor(t.Warning).SingleLine().Shrink(0)
+							ui.Text(c, "同步受阻").FontSize(fontAux).FixedLineHeight(14).FontWeight(500).TextColor(t.Warning).SingleLine().Shrink(0)
 							wrote = true
 						}
 						if lowPriority && rowFocusedOrHovered {
 							sep()
-							ui.Text(c, "低优先级").FontSize(fontAux).TextColor(t.TextTertiary).SingleLine().Shrink(0)
+							ui.Text(c, "低优先级").FontSize(fontAux).FixedLineHeight(14).TextColor(t.TextTertiary).SingleLine().Shrink(0)
 							wrote = true
 						}
 						if task.ReadOnly {
 							sep()
-							ui.Text(c, "只读日历").FontSize(fontAux).TextColor(t.TextTertiary).SingleLine().Shrink(0)
+							ui.Text(c, "只读日历").FontSize(fontAux).FixedLineHeight(14).TextColor(t.TextTertiary).SingleLine().Shrink(0)
 						}
 					})
 				}

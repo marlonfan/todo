@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"time"
 
@@ -244,12 +245,16 @@ func (a *App) mainWindowOptions(hidden bool) mygo.WindowOptions {
 	}
 }
 
+func (a *App) createMainWindow(hidden bool) {
+	a.win = mygo.NewWindow(a.mainWindowOptions(hidden))
+	a.win.OnClose(a.windowClosing)
+}
+
 func (a *App) Start() {
 	mygo.Theme.SetSource(themeSource(a.theme))
-	a.win = mygo.NewWindow(a.mainWindowOptions(mygo.App.WasOpenedAtLogin()))
-	a.win.OnClose(a.windowClosing)
-	a.setupMenus()
 	a.setupTray()
+	a.createMainWindow(mygo.App.WasOpenedAtLogin())
+	a.setupMenus()
 	a.openAtLogin, a.packaged = mygo.App.OpenAtLogin(), mygo.App.IsPackaged()
 	a.notificationsAvailable = mygo.NotificationsSupported()
 	a.startReminders()
@@ -263,7 +268,12 @@ func (a *App) Start() {
 
 func (a *App) Show() {
 	if a.win == nil || a.win.IsDestroyed() {
-		return
+		if !a.quitting && a.tray != nil {
+			a.createMainWindow(false)
+		}
+		if a.win == nil || a.win.IsDestroyed() {
+			return
+		}
 	}
 	a.win.Show()
 	a.win.Restore()
@@ -272,7 +282,10 @@ func (a *App) Show() {
 func (a *App) Close() {
 	a.commitPendingDeletes()
 	a.closeTrayFlyout()
-	a.commitPendingDeletes()
+	if a.tray != nil {
+		a.tray.Destroy()
+		a.tray = nil
+	}
 	a.cancel()
 	if a.stopReminders != nil {
 		a.stopReminders()
@@ -309,24 +322,41 @@ func (a *App) setupMenus() {
 
 func (a *App) setupTray() {
 	now := time.Now().In(a.location())
-	// A small monochrome PNG is generated in Go: no web or icon font dependency.
-	// Menu is nil so left-clicking opens the interactive macOS Menu Bar Flyout
-	// Popover directly below the status bar item, while Title shows live task info.
-	tray, err := mygo.NewTray(mygo.TrayOptions{
+	icon, isTemplate := trayIconForOS(runtime.GOOS)
+	contextMenu := usesTrayContextMenu(runtime.GOOS)
+	opts := mygo.TrayOptions{
 		ID:             "todo-native-tray",
-		Icon:           trayPNG(),
-		IconIsTemplate: true,
-		Title:          a.trayStatusTitle(now),
+		Icon:           icon,
+		IconIsTemplate: isTemplate,
 		ToolTip:        a.trayToolTip(now),
-	})
+	}
+	if contextMenu {
+		opts.Menu = mygo.NewMenu(a.trayMenuItems())
+	} else {
+		// On macOS, Menu is nil so clicking the status item opens the interactive
+		// Menu Bar Flyout Popover while Title shows live task info.
+		opts.Title = a.trayStatusTitle(now)
+	}
+	tray, err := mygo.NewTray(opts)
+	if err != nil {
+		// Retry once with the monochrome fallback icon so Windows/Linux still get
+		// close-to-tray even if the primary icon conversion fails.
+		opts.Icon = trayPNG()
+		opts.IconIsTemplate = false
+		tray, err = mygo.NewTray(opts)
+	}
 	if err != nil {
 		log.Printf("托盘不可用，关闭窗口将退出：%v", err)
 		return
 	}
 	a.tray = tray
 	a.trayAvailable = true
-	tray.OnClick(a.toggleTrayFlyout)
-	tray.OnRightClick(a.toggleTrayFlyout)
+	if contextMenu {
+		tray.OnClick(a.showFromTray)
+	} else {
+		tray.OnClick(a.toggleTrayFlyout)
+		tray.OnRightClick(a.toggleTrayFlyout)
+	}
 }
 
 // All model changes happen on the UI thread. Network and disk reads happen in

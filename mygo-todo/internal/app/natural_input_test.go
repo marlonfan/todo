@@ -158,21 +158,29 @@ func TestLunarCalendarAndCalendarOverlayDrawerWithoutSqueezing(t *testing.T) {
 	if !ok {
 		t.Fatal("missing calendar day cell before opening drawer")
 	}
+	sundayBefore, ok := tt.Access("日历日期 2026-11-15")
+	if !ok {
+		t.Fatal("missing sunday column before opening drawer")
+	}
 
 	if err := tt.Click("日程 2026-11-11 改期后的单次"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Advance(500 * time.Millisecond)
+	tt.Advance(800 * time.Millisecond)
 	drawer, ok := tt.Access("详情侧边抽屉")
 	if !ok {
 		t.Fatal("expected right-hand floating overlay drawer to open on calendar event click")
 	}
 	cellAfter, ok := tt.Access("日历日期 2026-11-11")
 	if !ok || cellAfter.Bounds != cellBefore.Bounds {
-		t.Fatalf("calendar cell must keep exact 100%% bounds without squeezing under floating drawer: before=%+v after=%+v", cellBefore.Bounds, cellAfter.Bounds)
+		t.Fatalf("floating drawer deformed calendar cell: before=%+v after=%+v", cellBefore.Bounds, cellAfter.Bounds)
 	}
-	if drawer.Bounds.W < detailMinWidth || drawer.Bounds.X+drawer.Bounds.W > 1401 {
-		t.Fatalf("floating calendar drawer positioned out of bounds: drawer=%+v", drawer.Bounds)
+	sundayAfter, ok := tt.Access("日历日期 2026-11-15")
+	if !ok || sundayAfter.Bounds != sundayBefore.Bounds {
+		t.Fatalf("floating drawer deformed sunday column: before=%+v after=%+v", sundayBefore.Bounds, sundayAfter.Bounds)
+	}
+	if drawer.Bounds.X+drawer.Bounds.W < 1399 || drawer.Bounds.W < detailMinWidth {
+		t.Fatalf("floating drawer not anchored to right edge: drawer=%+v", drawer.Bounds)
 	}
 
 	// 3. Pressing Escape immediately after clicking a calendar event closes the side drawer
@@ -186,7 +194,7 @@ func TestLunarCalendarAndCalendarOverlayDrawerWithoutSqueezing(t *testing.T) {
 	if err := tt.Click("日程 2026-11-11 改期后的单次"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Advance(500 * time.Millisecond)
+	tt.Advance(800 * time.Millisecond)
 	if err := tt.Click("本次标题"); err != nil {
 		t.Fatal(err)
 	}

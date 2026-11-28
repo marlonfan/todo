@@ -65,7 +65,7 @@ func (a *App) view(c *ui.Context) {
 					if a.reauthRequired {
 						appButton(c, "去验证", "ghost").Height(24).Padding(0, 8).TextColor(t.Accent).OnClick(func() { a.changePage("sync") })
 					}
-					iconButton(c, "关闭提示", lucide.X()).Size(24, 24).Padding(4).OnClick(func() {
+					headerIconButton(c, "关闭提示", lucide.X()).Size(24, 24).Padding(4).OnClick(func() {
 						a.cacheError = ""
 						a.failure = ""
 					})
@@ -295,14 +295,14 @@ func (a *App) sidebarContent(c *ui.Context, inDrawer bool) {
 						{Divider: true},
 						{Key: "logout", Label: "退出账户", Icon: lucide.LogOut(), Danger: true},
 					}, func(trigger ui.Element) {
-						trigger.Label("账户菜单").Height(34).FillWidth().MinWidth(0).Padding(4, 8).Radius(7).Gap(8).Justify(ui.Start).
+						trigger.Label("账户菜单").Height(48).FillWidth().MinWidth(0).Padding(4, 8).Radius(7).Gap(10).Justify(ui.Start).AlignItems(ui.Center).
 							Transition(motionColorsFast())
 						if trigger.Hovered() || *profileOpen {
 							trigger.Background(t.BgHover)
 						}
 						trigger.Children(func() {
-							display.Avatar(c, a.session.User.Username, display.AvatarProps{Size: 22, Shape: display.AvatarCircle, Image: avatarImage(a.avatar), Fallback: display.AvatarText}).Label("账户头像")
-							ui.Text(c, a.session.User.Username).FontSize(12.5).FontWeight(500).TextColor(t.TextPrimary).SingleLine().Grow(1).MinWidth(0).Tooltip(a.session.User.Username)
+							display.Avatar(c, a.session.User.Username, display.AvatarProps{Size: 40, Shape: display.AvatarCircle, Image: avatarImage(a.avatar), Fallback: display.AvatarText}).Shrink(0).Label("账户头像")
+							ui.Text(c, a.session.User.Username).FontSize(13.5).FontWeight(fontWeightSemibold).TextColor(t.TextPrimary).SingleLine().Grow(1).MinWidth(0)
 							ui.Icon(c, lucide.ChevronsUpDown()).Size(13, 13).TextColor(t.TextTertiary).Shrink(0).AccessHidden(true)
 						})
 					})
@@ -392,16 +392,31 @@ func (a *App) title() string {
 	return "任务"
 }
 
+func headerIconButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
+	t := tokensOf(c)
+	button := styleAppButton(c, ui.ButtonBase(c).Label(label), "", "ghost").Size(30, 30).Padding(7)
+	iconColor := t.TextSecondary
+	if button.Hovered() || button.Pressed() {
+		iconColor = t.TextPrimary
+	}
+	button.Children(func() {
+		if icon != nil {
+			ui.Icon(c, icon).Size(15, 15).TextColor(iconColor).AccessHidden(true)
+		}
+	})
+	return button
+}
+
 func (a *App) header(c *ui.Context) {
 	t := tokensOf(c)
 	chrome := a.windowToolbarMetrics(c, 16)
 	ui.Row(c.Key("view-toolbar")).Height(chrome.ToolbarHeight).Shrink(0).Padding(0, chrome.PadRight, 0, chrome.PadLeft).Gap(6).BorderWidth(0, 0, 1, 0).BorderColor(t.BorderSubtle).AlignItems(ui.Center).DragWindow().Children(func() {
 		width, _ := c.Size()
 		if width < sidebarBreakpoint {
-			iconButton(c, "展开导航", lucide.PanelLeft()).OnClick(func() { a.sidebarOverlay = true })
-			iconButton(c, "刷新", lucide.RefreshCw()).Tooltip("刷新 " + shortcutHint("R")).Disabled(a.syncing).OnClick(a.refreshCurrentPage)
+			headerIconButton(c, "展开导航", lucide.PanelLeft()).OnClick(func() { a.sidebarOverlay = true })
+			headerIconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.syncing).OnClick(a.refreshCurrentPage)
 		}
-		ui.Text(c, a.title()).FontSize(15).FontWeight(600).TextColor(t.TextPrimary).SingleLine().MinWidth(0).Grow(1).Tooltip(a.title())
+		ui.Text(c, a.title()).FontSize(15).FontWeight(600).TextColor(t.TextPrimary).SingleLine().MinWidth(0).Grow(1)
 		if isTaskWorkspacePage(a.page) {
 			filtered := strings.TrimSpace(a.query) != "" || (isHistoryPage(a.page) && a.historyFilter.isActive())
 			if filtered {
@@ -421,17 +436,17 @@ func (a *App) header(c *ui.Context) {
 				}
 			}
 			if !isHistoryPage(a.page) && a.hasManualOrder(a.page) {
-				iconButton(c, "恢复默认排序", lucide.RotateCcw()).Tooltip("恢复默认排序").OnClick(func() { a.resetManualOrder(a.page) })
+				headerIconButton(c, "恢复默认排序", lucide.RotateCcw()).OnClick(func() { a.resetManualOrder(a.page) })
 			}
 			if !isHistoryPage(a.page) {
 				searchLabel := "搜索任务"
 				if a.search.Return {
 					searchLabel = "返回搜索"
 				}
-				iconButton(c, searchLabel, lucide.Search()).Tooltip(searchLabel + " " + shortcutHint("F")).OnClick(a.openTaskSearch)
+				headerIconButton(c, searchLabel, lucide.Search()).OnClick(a.openTaskSearch)
 			}
-			iconButton(c, "命令面板", lucide.Command()).Tooltip("命令面板 " + shortcutHint("K")).OnClick(a.openCommandPalette)
-			iconButton(c, "＋ 新建任务", lucide.Plus()).Tooltip("新建任务 " + shortcutHint("N")).OnClick(a.newTask)
+			headerIconButton(c, "命令面板", lucide.Command()).OnClick(a.openCommandPalette)
+			headerIconButton(c, "＋ 新建任务", lucide.Plus()).OnClick(a.newTask)
 		}
 	})
 }

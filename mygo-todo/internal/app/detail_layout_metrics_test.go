@@ -96,8 +96,11 @@ func TestDetailTitleNativeInputAndComposition(t *testing.T) {
 		t.Fatal("native committed input lost title text")
 	}
 	editor, ok := tt.AccessByRole(ui.RoleTextField, "任务标题")
-	if !ok || editor.Bounds.W < 379 || editor.Bounds.H > 5*detailTitleLineHeight+1 {
-		t.Fatal("long native title must retain width and a five-line scroll cap", editor.Bounds)
+	if !ok || editor.Bounds.W < 379 || editor.Bounds.H > detailTitleLineHeight+1 {
+		t.Fatal("long native title must stay single-line without awkward multi-line wrapping", editor.Bounds)
+	}
+	if detailTitleFontSize > 18 {
+		t.Fatalf("detail title font size should stay refined (<=18px), got %dpx", detailTitleFontSize)
 	}
 	tt.Key(0, ui.KeyEnd)
 	tt.Key(0, ui.KeyBackspace)

@@ -192,3 +192,105 @@ func TestTaskRowPriorityCheckboxGapAndNoCategoryTruncation(t *testing.T) {
 		t.Fatal("high-priority checkbox did not render warning highlight border")
 	}
 }
+
+func TestTaskRowLongTitleWrapsCleanlyLikeTickTick(t *testing.T) {
+	now := time.Now()
+	due := now.Add(2 * time.Hour)
+	longCN := "梳理并落地原生桌面端长任务标题多行展示方案确保列表内可直接阅读后续关键内容"
+	longMixed := "Implement TickTick-style multi-line task title wrapping with top-aligned checkbox and clean metadata layout"
+
+	for _, tc := range []struct {
+		name    string
+		title   string
+		hasMeta bool
+		dark    bool
+	}{
+		{"cn-with-meta-light", longCN, true, false},
+		{"cn-no-meta-dark", longCN, false, true},
+		{"mixed-with-meta-light", longMixed, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := New(storage.Store{Dir: t.TempDir()})
+			defer a.Close()
+			a.page = "all"
+			longTask := api.Task{
+				ID:       1,
+				Title:    tc.title,
+				Status:   "pending",
+				Priority: 1,
+			}
+			if tc.hasMeta {
+				longTask.StartTime = &due
+				longTask.Categories = []api.Category{{ID: 1, Name: "产品研发", Emoji: "🚀"}}
+			}
+			shortTask := api.Task{
+				ID:     2,
+				Title:  "紧随其后的短任务",
+				Status: "pending",
+			}
+
+			tt := ui.NewTester(func(c *ui.Context) {
+				applyAppTheme(c)
+				ui.Column(c).Width(taskListDefaultWidth - 12).Gap(3).Children(func() {
+					ui.Box(c.Key(longTask.ID)).FillWidth().Children(func() {
+						a.taskListItem(c, longTask, now)
+					})
+					ui.Box(c.Key(shortTask.ID)).FillWidth().Children(func() {
+						a.taskListItem(c, shortTask, now)
+					})
+				})
+			}, 420, 260)
+			tt.SetDark(tc.dark)
+			tt.Frame()
+			tt.Frame()
+
+			row, ok := tt.Access("任务行 " + longTask.Title)
+			if !ok {
+				t.Fatal("missing wrapped long task row")
+			}
+			shortRow, ok := tt.Access("任务行 " + shortTask.Title)
+			if !ok {
+				t.Fatal("missing following short task row")
+			}
+
+			baseMinH := float32(taskSingleRowHeight)
+			if tc.hasMeta {
+				baseMinH = taskMetaRowHeight
+			}
+			if row.Bounds.H <= baseMinH {
+				t.Fatalf("expected long title row to expand beyond single-line height %.0f, got %.1f", baseMinH, row.Bounds.H)
+			}
+			if row.Bounds.H > baseMinH+taskRowTitleLineHeight+4 {
+				t.Fatalf("expected wrapped row height to stay bounded to 2 lines, got %.1f", row.Bounds.H)
+			}
+			if shortRow.Bounds.Y <= row.Bounds.Y+row.Bounds.H {
+				t.Fatalf("wrapped row overlapped following row: long=%+v short=%+v", row.Bounds, shortRow.Bounds)
+			}
+
+			check, ok := tt.Access("完成 " + longTask.Title)
+			handle, hasHandle := tt.Access("拖动归类 " + longTask.Title)
+			more, hasMore := tt.Access("更多操作 " + longTask.Title)
+			if !ok || !hasHandle || !hasMore {
+				t.Fatalf("missing row controls: check=%v handle=%v more=%v", ok, hasHandle, hasMore)
+			}
+			if check.Bounds.Y != row.Bounds.Y+6 || handle.Bounds.Y != row.Bounds.Y+6 || more.Bounds.Y != row.Bounds.Y+6 {
+				t.Fatalf("controls must top-align with first line of wrapped title: rowY=%.1f check=%+v handle=%+v more=%+v",
+					row.Bounds.Y, check.Bounds, handle.Bounds, more.Bounds)
+			}
+
+			if tc.hasMeta {
+				timeText, _ := taskRowTimeLabel(longTask, now, a.location(), false)
+				summary, ok := tt.Find(timeText)
+				if !ok {
+					t.Fatalf("missing metadata summary %q in %v", timeText, tt.Texts())
+				}
+				if summary.Y < row.Bounds.Y+6+6+2*taskRowTitleLineHeight {
+					t.Fatalf("metadata overlaps wrapped 2-line title: row=%+v summary=%+v", row.Bounds, summary)
+				}
+				if summary.Y+summary.H > row.Bounds.Y+row.Bounds.H {
+					t.Fatalf("metadata clipped outside wrapped row: row=%+v summary=%+v", row.Bounds, summary)
+				}
+			}
+		})
+	}
+}

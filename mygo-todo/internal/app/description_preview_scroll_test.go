@@ -124,10 +124,11 @@ func TestWYSIWYGTableSpansFullEditorWidthAndTypographyHierarchy(t *testing.T) {
 	defer a.Close()
 	source := "## 二级标题\n\n| 阶段 | 内容 | 状态 |\n| --- | --- | --- |\n| 计划 | 核心事项 | 进行中 |"
 	var ref ui.Handle
-	var h2Size float32
+	var h1Size, h2Size float32
 	tt := ui.NewTester(func(c *ui.Context) {
 		applyAppTheme(c)
 		theme := wysiwygThemeOf(c)
+		h1Size = 14 * theme.Headings[0].Size
 		h2Size = 14 * theme.Headings[1].Size
 		ui.Column(c).Fill().Padding(10).MinWidth(0).Children(func() {
 			a.wysiwygMarkdownEditor(c, "ed", "doc-table", "备注", "占位", &source, false, &ref, nil, nil)
@@ -136,8 +137,11 @@ func TestWYSIWYGTableSpansFullEditorWidthAndTypographyHierarchy(t *testing.T) {
 	tt.Frame()
 	tt.Frame()
 
-	if float32(detailTitleFontSize)-h2Size < 5.5 {
-		t.Fatalf("title (%dpx) and body H2 (%.1fpx) lack sufficient visual hierarchy gap", detailTitleFontSize, h2Size)
+	if detailTitleFontSize > 18 {
+		t.Fatalf("detail title (%dpx) should remain refined and not oversized", detailTitleFontSize)
+	}
+	if float32(detailTitleFontSize) <= h1Size || h1Size <= h2Size || float32(detailTitleFontSize)-h2Size < 2.0 {
+		t.Fatalf("broken heading hierarchy: title=%dpx h1=%.1fpx h2=%.1fpx", detailTitleFontSize, h1Size, h2Size)
 	}
 	var tableW float32
 	for _, p := range a.richDoc.Text().Paragraphs() {
@@ -150,4 +154,115 @@ func TestWYSIWYGTableSpansFullEditorWidthAndTypographyHierarchy(t *testing.T) {
 	if tableW < 640 {
 		t.Fatalf("expected inline table attachment to span full editor width (~690px), got %.1f", tableW)
 	}
+}
+
+func TestWYSIWYGEditorHalfScreenBottomOverscroll(t *testing.T) {
+	t.Run("long note gets half-screen bottom scroll breathing room and clickable tail", func(t *testing.T) {
+		a := New(storage.Store{Dir: t.TempDir()})
+		defer a.Close()
+		var lines []string
+		for i := 1; i <= 50; i++ {
+			lines = append(lines, "第 "+strconv.Itoa(i)+" 段任务详情正文内容，用于验证长文本底部半屏留白滚动。")
+		}
+		source := strings.Join(lines, "\n\n")
+		var ref ui.Handle
+		tt := ui.NewTester(func(c *ui.Context) {
+			applyAppTheme(c)
+			ui.Column(c).Fill().Padding(8).MinWidth(0).Children(func() {
+				a.wysiwygMarkdownEditor(c, "ed", "doc-long", "备注", "占位", &source, false, &ref, nil, nil)
+			})
+		}, 560, 520)
+		tt.Frame()
+		tt.Frame()
+
+		field, ok := tt.AccessByRole(ui.RoleTextField, "备注")
+		if !ok {
+			t.Fatal("missing WYSIWYG editor")
+		}
+		initialBottom := field.Bounds.Y + field.Bounds.H
+		spacer, ok := tt.Access("编辑区底部留白")
+		if !ok {
+			t.Fatal("expected bottom overscroll breathing space for long document")
+		}
+		wantHalf := float32(math.Round(float64(field.Bounds.H) * editorBottomOverscrollRatio))
+		if math.Abs(float64(spacer.Bounds.H-wantHalf)) > 2 {
+			t.Fatalf("bottom overscroll height=%.1f, want ~half viewport %.1f", spacer.Bounds.H, wantHalf)
+		}
+
+		// Scroll all the way down past the last line into the half-screen overscroll space.
+		midX := field.Bounds.X + field.Bounds.W/2
+		midY := field.Bounds.Y + field.Bounds.H/2
+		for range 20 {
+			tt.Scroll(midX, midY, 0, 240)
+			tt.Frame()
+		}
+		scrolledField, ok := tt.AccessByRole(ui.RoleTextField, "备注")
+		if !ok {
+			t.Fatal("missing WYSIWYG editor after scroll")
+		}
+		scrolledBottom := scrolledField.Bounds.Y + scrolledField.Bounds.H
+		lifted := initialBottom - scrolledBottom
+		if lifted < wantHalf-10 {
+			t.Fatalf("expected bottom of editor to lift by ~%.1fpx for half-screen breathing room, got lifted=%.1fpx (initialBottom=%.1f scrolledBottom=%.1f)",
+				wantHalf, lifted, initialBottom, scrolledBottom)
+		}
+
+		// Clicking inside the bottom breathing space focuses the editor, places the caret at the end, and allows immediate typing.
+		if err := tt.Click("编辑区底部留白"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		if !tt.Focused("备注") {
+			t.Fatal("clicking bottom breathing space must focus the editor")
+		}
+		anchor, caret := a.richDoc.Selection()
+		docLen := a.richDoc.Text().Len()
+		if anchor != docLen || caret != docLen {
+			t.Fatalf("clicking bottom space must place caret at end (%d), got (%d, %d)", docLen, anchor, caret)
+		}
+		tt.Type(" 末尾追加")
+		tt.Frame()
+		if !strings.HasSuffix(source, " 末尾追加") {
+			t.Fatalf("typing after clicking bottom space did not append to source: %q", source[max(0, len(source)-40):])
+		}
+
+		// Scrolling back up reclaims the bottom overscroll cleanly.
+		for range 12 {
+			tt.Scroll(midX, midY, 0, -240)
+			tt.Frame()
+		}
+		restoredField, _ := tt.AccessByRole(ui.RoleTextField, "备注")
+		if math.Abs(float64((restoredField.Bounds.Y+restoredField.Bounds.H)-initialBottom)) > 2 {
+			t.Fatalf("scrolling back up did not reclaim bottom overscroll: restoredBottom=%.1f want=%.1f",
+				restoredField.Bounds.Y+restoredField.Bounds.H, initialBottom)
+		}
+	})
+
+	t.Run("short note does not add unnecessary overscroll", func(t *testing.T) {
+		a := New(storage.Store{Dir: t.TempDir()})
+		defer a.Close()
+		source := "简短备注内容"
+		var ref ui.Handle
+		tt := ui.NewTester(func(c *ui.Context) {
+			applyAppTheme(c)
+			ui.Column(c).Fill().Padding(8).MinWidth(0).Children(func() {
+				a.wysiwygMarkdownEditor(c, "ed", "doc-short", "备注", "占位", &source, false, &ref, nil, nil)
+			})
+		}, 560, 520)
+		tt.Frame()
+		tt.Frame()
+
+		if _, ok := tt.Access("编辑区底部留白"); ok {
+			t.Fatal("short note should not render extra bottom overscroll spacer")
+		}
+	})
+
+	t.Run("raw markdown source mode also provides half-screen bottom padding", func(t *testing.T) {
+		if got := editorHalfScreenPadding(500); got != 250 {
+			t.Fatalf("editorHalfScreenPadding(500) = %.1f, want 250", got)
+		}
+		if got := editorHalfScreenPadding(0); got != 6 {
+			t.Fatalf("editorHalfScreenPadding(0) = %.1f, want 6", got)
+		}
+	})
 }
