@@ -31,6 +31,7 @@ func (a *App) Quitting(e *mygo.QuitEvent) {
 		e.PreventDefault()
 		return
 	}
+	a.commitPendingDeletes()
 	// Durable pending outbox entries may remain; they are not a sync receipt.
 	a.quitting = true
 }
@@ -47,5 +48,7 @@ func (a *App) windowClosing(e *mygo.CloseEvent) {
 	}
 	if !a.guardTaskExit(func() { a.win.Close() }) {
 		e.PreventDefault()
+		return
 	}
+	a.commitPendingDeletes()
 }

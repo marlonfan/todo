@@ -82,16 +82,7 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 		primaryCat = strings.TrimSpace(task.Categories[0].Emoji + " " + task.Categories[0].Name)
 		extraCats = len(task.Categories) - 1
 	}
-	// Never append transient "待同步" for normal pending operations: doing so
-	// bounced 1-line rows between 44px and 52px during ~80ms background writes.
-	// Surface sync state on the row only when an operation is blocked/conflicted.
-	blockedSync := false
-	for _, op := range a.cache.Outbox {
-		if op.TaskID == task.ID && op.State != "pending" {
-			blockedSync = true
-			break
-		}
-	}
+	blockedSync := a.isTaskSyncBlocked(task.ID)
 
 	hasMeta := timeText != "" || recurring || primaryCat != "" || blockedSync || lowPriority || task.ReadOnly
 	descParts := make([]string, 0, 6)
@@ -124,14 +115,41 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 	}
 	summaryDesc := strings.Join(descParts, " · ")
 
-	height := float32(taskSingleRowHeight)
-	if hasMeta {
-		height = taskMetaRowHeight
-	}
-	row := ui.Row(c.Key("task-row")).Label("任务行 "+task.Title).Gap(6).Padding(0, 8).Height(height).FillWidth().Shrink(0).
+	rowKey := a.stableTaskKey(task)
+	highlighted := !a.search.Open && a.highlightedTaskKey != "" && a.highlightedTaskKey == taskRowKey(task)
+
+	// Uniform 52px row height across all items for steady list rhythm.
+	row := ui.Row(c.Key("task-row")).Label("任务行 "+task.Title).Gap(6).Padding(0, 8).Height(taskSingleRowHeight).FillWidth().Shrink(0).
 		Radius(8).AlignItems(ui.Center).Background(ui.Transparent).
+		Transition(motionColorsShadowsFast()).
 		OnClick(open)
+
+	// Manual drag-to-reorder drop indicator & handler on non-history pages.
+	var dropPos int // -1 top, +1 bottom
+	if !isHistory && !a.search.Open {
+		if drag, over := ui.DragOver[taskCategoryDrag](row); over && drag.TaskKey != "" && drag.TaskKey != rowKey {
+			_, py, _ := row.PointerPosition()
+			if py < row.Bounds().H/2 {
+				dropPos = -1
+			} else {
+				dropPos = 1
+			}
+		}
+		if drag, dropped := ui.Drop[taskCategoryDrag](row); dropped && drag.TaskKey != "" && drag.TaskKey != rowKey {
+			_, py, _ := row.PointerPosition()
+			after := py >= row.Bounds().H/2
+			currentTasks := a.cachedTaskList(a.page, a.query, now)
+			a.reorderTaskInPage(a.page, currentTasks, drag.TaskKey, rowKey, after)
+		}
+	}
+
 	row.Children(func() {
+		if dropPos == -1 {
+			ui.Box(c.Key("drop-top")).Absolute().Left(8).Right(8).Top(0).Height(2).Radius(1).Background(t.Accent).PassThrough().AccessHidden(true)
+		} else if dropPos == 1 {
+			ui.Box(c.Key("drop-bot")).Absolute().Left(8).Right(8).Bottom(0).Height(2).Radius(1).Background(t.Accent).PassThrough().AccessHidden(true)
+		}
+
 		done := task.Status == "completed"
 		checkDisabled := task.ReadOnly || (task.Recurring() && task.InstanceID == "")
 		checkTip := "点击标记完成"
@@ -149,31 +167,34 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 			a.setTaskStatus(task, status)
 		})
 		checkbox.Children(func() {
-			box := ui.Box(c).Size(16, 16).Radius(5).Center().AccessHidden(true)
+			box := ui.Box(c.Key("row-check-box")).Size(16, 16).Radius(5).Center().AccessHidden(true).
+				Transition(motionColorsFast())
 			if done {
-				box.Background(t.Accent.Alpha(0.88)).Border(1, t.Accent).Children(func() {
-					ui.Icon(c, lucide.Check()).Size(10.5, 10.5).TextColor(t.TextOnAccent).AccessHidden(true)
-				})
-			} else if task.Priority > 0 {
-				bg := t.Warning.Alpha(0.10)
-				if checkbox.Hovered() && !checkDisabled {
-					bg = t.Warning.Alpha(0.18)
-				}
-				box.Background(bg).Border(1.5, t.Warning)
-			} else if lowPriority {
-				bg := ui.Transparent
-				if checkbox.Hovered() && !checkDisabled {
-					bg = t.BgHover
-				}
-				box.Background(bg).Border(1.25, t.TextTertiary.Alpha(0.55))
+				box.Background(t.Accent.Alpha(0.90)).Border(1, t.Accent)
+				animatedCheckmarkBox(c, box, true, true, t.TextOnAccent, 1.65)
 			} else {
-				borderCol := t.TextTertiary.Alpha(0.82)
-				bg := ui.Transparent
-				if checkbox.Hovered() && !checkDisabled {
-					borderCol = t.Accent
-					bg = t.Accent.Alpha(0.08)
+				animatedCheckmarkBox(c, box, false, false, t.TextOnAccent, 1.65)
+				if task.Priority > 0 {
+					bg := t.Warning.Alpha(0.10)
+					if checkbox.Hovered() && !checkDisabled {
+						bg = t.Warning.Alpha(0.18)
+					}
+					box.Background(bg).Border(1.5, t.Warning)
+				} else if lowPriority {
+					bg := ui.Transparent
+					if checkbox.Hovered() && !checkDisabled {
+						bg = t.BgHover
+					}
+					box.Background(bg).Border(1.25, t.TextTertiary.Alpha(0.55))
+				} else {
+					borderCol := t.TextTertiary.Alpha(0.82)
+					bg := ui.Transparent
+					if checkbox.Hovered() && !checkDisabled {
+						borderCol = t.Accent
+						bg = t.Accent.Alpha(0.08)
+					}
+					box.Background(bg).Border(1.25, borderCol)
 				}
-				box.Background(bg).Border(1.25, borderCol)
 			}
 			if checkDisabled {
 				box.Opacity(0.42)
@@ -186,7 +207,7 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 			// Reserve only the trailing hover control, outside the title target.
 			button.Margin(0, 38, 0, 0)
 		}
-		if (button.Pressed() || row.Pressed()) && (!selected || a.quick.Open) && !a.busy && !a.taskDiscardConfirm && a.aiPanel == nil {
+		if (button.Pressed() || row.Pressed()) && (!selected || a.quick.Open) && !a.taskDiscardConfirm && a.aiPanel == nil {
 			open()
 			if a.taskRowSelected(task) {
 				selected = true
@@ -196,18 +217,24 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 		if selected {
 			row.Background(t.BgTaskSelected)
 			if c.Theme().Dark {
-				row.InsetShadow(0, 0, 0, 1, t.BorderDefault.Alpha(0.85)).
-					Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.28))
+				row.InsetShadow(0, 0, 0, 1, t.BorderDefault.Alpha(0.90)).
+					Shadow(0, 2, 8, -1, ui.RGBA(0, 0, 0, 0.36)).
+					Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.24))
 			} else {
-				row.InsetShadow(0, 0, 0, 1, t.BorderDefault.Alpha(0.80)).
+				row.InsetShadow(0, 0, 0, 1, t.BorderDefault.Alpha(0.85)).
+					Shadow(0, 2, 8, -2, ui.RGBA(28, 25, 23, 0.08)).
 					Shadow(0, 1, 2, 0, ui.RGBA(28, 25, 23, 0.05))
 			}
+		} else if highlighted {
+			row.Background(t.BgSelected.Alpha(0.75)).
+				InsetShadow(0, 0, 0, 1, t.Accent.Alpha(0.45))
 		} else if row.Hovered() {
 			row.Background(t.BgHover)
 		}
 
-		metaColor := t.TextTertiary
-		if selected || row.Hovered() {
+		rowFocusedOrHovered := selected || row.Hovered() || row.FocusWithin()
+		metaColor := t.TextTertiary.Alpha(0.85)
+		if rowFocusedOrHovered {
 			metaColor = t.TextSecondary
 		}
 		button.Children(func() {
@@ -216,17 +243,44 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 				if selected {
 					titleWeight = 500
 				}
-				text := ui.Text(c, task.Title).FontSize(fontTask).FontWeight(titleWeight).TextColor(t.TextPrimary).SingleLine().MinWidth(0)
-				if task.Status != "pending" {
-					titleCol := t.TextSecondary
-					if selected {
-						titleCol = t.TextReadable
-					}
-					text.TextColor(titleCol)
-					if task.Status == "completed" {
-						text.Strikethrough().DecorationColor(t.TextTertiary.Alpha(0.65))
-					}
+				titleWrap := ui.Box(c.Key("title-wrap")).MinWidth(0)
+				_, completingHold := a.interaction.statuses[taskRowKey(task)]
+				animateStrike := done && completingHold && !a.interaction.reduceMotion
+				strikeTarget := float32(0)
+				if done {
+					strikeTarget = 1
 				}
+				var strikeProgress float32
+				if animateStrike {
+					strikeProgress = titleWrap.AnimateTo("strike", strikeTarget, ui.Animation{Duration: 240 * time.Millisecond, Ease: ui.EaseOut})
+				} else {
+					strikeProgress = titleWrap.Jump("strike", strikeTarget)
+				}
+
+				titleWrap.Children(func() {
+					text := ui.Text(c, task.Title).FontSize(fontTask).FontWeight(titleWeight).TextColor(t.TextPrimary).SingleLine().MinWidth(0)
+					if task.Status != "pending" {
+						titleCol := t.TextSecondary
+						if selected {
+							titleCol = t.TextReadable
+						}
+						text.TextColor(titleCol)
+						if task.Status == "completed" && !animateStrike {
+							text.Strikethrough().DecorationColor(t.TextTertiary.Alpha(0.65))
+						}
+					}
+					if animateStrike && strikeProgress > 0.01 {
+						strikeCol := t.TextTertiary.Alpha(0.72)
+						text.Draw(func(p *ui.Painter, r ui.Rect) {
+							if r.W <= 2 {
+								return
+							}
+							y := r.Y + r.H*0.52
+							p.Fill(ui.Rect{X: r.X, Y: y, W: r.W * strikeProgress, H: 1.25}, strikeCol, 0.5)
+						})
+					}
+				})
+
 				if hasMeta {
 					ui.Row(c.Key("task-summary")).Gap(5).AlignItems(ui.Center).MinWidth(0).Children(func() {
 						wrote := false
@@ -253,7 +307,7 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 						if primaryCat != "" {
 							sep()
 							ui.Text(c, primaryCat).FontSize(fontAux).TextColor(metaColor).SingleLine().Shrink(1).MinWidth(0)
-							if extraCats > 0 {
+							if extraCats > 0 && rowFocusedOrHovered {
 								ui.Text(c, fmt.Sprintf("+%d", extraCats)).FontSize(10).FontFeatures("tnum").TextColor(t.TextTertiary).SingleLine().Shrink(0)
 							}
 							wrote = true
@@ -263,7 +317,7 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 							ui.Text(c, "同步受阻").FontSize(fontAux).FontWeight(500).TextColor(t.Warning).SingleLine().Shrink(0)
 							wrote = true
 						}
-						if lowPriority {
+						if lowPriority && rowFocusedOrHovered {
 							sep()
 							ui.Text(c, "低优先级").FontSize(fontAux).TextColor(t.TextTertiary).SingleLine().Shrink(0)
 							wrote = true
@@ -276,8 +330,8 @@ func (a *App) taskListItemWithOpen(c *ui.Context, task api.Task, now time.Time, 
 				}
 			})
 		})
-		a.taskCategoryHandle(c, task, row.Hovered() || row.FocusWithin(), open)
-		ownsKeys = a.taskActions(c, task, row.Hovered() || row.FocusWithin()) || ownsKeys
+		a.taskCategoryHandle(c, task, rowFocusedOrHovered, open)
+		ownsKeys = a.taskActions(c, task, rowFocusedOrHovered) || ownsKeys
 	})
 	return ownsKeys
 }

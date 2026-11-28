@@ -160,7 +160,7 @@ func (a *App) chooseAvatar() {
 		return
 	}
 	win := a.win
-	a.run(func(context.Context) (func(), error) {
+	a.runScoped("avatar.choose", func(context.Context) (func(), error) {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: "选择账户头像", Filters: []mygo.FileFilter{{Name: "图片", Extensions: []string{"png", "jpg", "jpeg", "gif", "webp"}}}})
 		if err != nil {
 			return nil, fmt.Errorf("选择头像失败：%w", err)
@@ -184,7 +184,7 @@ func (a *App) saveAvatar() {
 		a.saveAccountProfile(map[string]any{"avatar_url": ""}, "已移除账户头像", a.closeAccountEditor)
 		return
 	}
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("avatar.save", func(ctx context.Context) (func(), error) {
 		data, err := avatarBytes(ctx, raw)
 		if err != nil {
 			return nil, err

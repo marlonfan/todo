@@ -61,20 +61,13 @@ func (a *App) calendarEffectiveWidth(c *ui.Context, rootBounds ui.Rect) float32 
 	if windowWidth >= 1180 {
 		width -= a.sidebarWidth + 1
 	}
-	if (a.editing || a.selectedOccurrence != nil) && (width >= 1050 || windowWidth >= 1180) {
-		drawerW := min(float32(440), max(float32(detailMinWidth), width*0.36))
-		width -= drawerW
-	}
 	return max(float32(320), width)
 }
 
 func (a *App) calendarView(c *ui.Context) {
 	t := tokensOf(c)
-	state := a.cache
-	if state.Calendar != nil && state.Calendar.Timezone != a.location().String() {
-		state.Calendar = nil
-	}
-	events := filterCalendarEvents(projectedCalendar(state), a.calendarFilter)
+	now := time.Now().In(a.location())
+	events := a.cachedCalendarEvents(now)
 	windowWidth, _ := c.Size()
 
 	root := ui.Column(c.Key("calendar-content")).Grow(1).MinHeight(0).MinWidth(0).Background(t.BgApp)
@@ -110,7 +103,9 @@ func (a *App) calendarView(c *ui.Context) {
 			// Outlined pill "Today" button
 			todayBtn := ui.ButtonBase(c.Key("cal-today")).Label("回到今天").Tooltip("回到今天").
 				Height(28).Padding(0, 12).Radius(14).Center().Shrink(0).Border(1, t.BorderDefault).Background(ui.Transparent).Cursor(ui.CursorPointer).
+				Transition(motionColorsFast()).
 				OnClick(func() {
+					a.calendarNavDir = 0
 					a.selectedDay = time.Now().In(a.location())
 					a.focusCalendarWorkingHours()
 					a.loadCalendar()
@@ -125,14 +120,24 @@ func (a *App) calendarView(c *ui.Context) {
 			// Grouped Prev / Next circular navigation arrows
 			ui.Row(c.Key("cal-nav-arrows")).Gap(2).Shrink(0).AlignItems(ui.Center).Children(func() {
 				prev := ui.ButtonBase(c.Key("cal-prev")).Label("上一段").Tooltip("上一段").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer).
-					OnClick(func() { a.selectedDay = calendarShift(a.selectedDay, a.calendarMode, -1); a.loadCalendar() })
+					Transition(motionColorsFast()).
+					OnClick(func() {
+						a.calendarNavDir = -1
+						a.selectedDay = calendarShift(a.selectedDay, a.calendarMode, -1)
+						a.loadCalendar()
+					})
 				if prev.Hovered() {
 					prev.Background(t.BgHover)
 				}
 				prev.Children(func() { ui.Icon(c, lucide.ChevronLeft()).Size(15, 15).TextColor(t.TextSecondary).AccessHidden(true) })
 
 				next := ui.ButtonBase(c.Key("cal-next")).Label("下一段").Tooltip("下一段").Size(28, 28).Radius(14).Center().Cursor(ui.CursorPointer).
-					OnClick(func() { a.selectedDay = calendarShift(a.selectedDay, a.calendarMode, 1); a.loadCalendar() })
+					Transition(motionColorsFast()).
+					OnClick(func() {
+						a.calendarNavDir = 1
+						a.selectedDay = calendarShift(a.selectedDay, a.calendarMode, 1)
+						a.loadCalendar()
+					})
 				if next.Hovered() {
 					next.Background(t.BgHover)
 				}
@@ -173,10 +178,11 @@ func (a *App) calendarView(c *ui.Context) {
 				})
 				if *jumpOpen {
 					ui.PopoverBase(c.Key("cal-jump-popover"), titleAnchor, jumpOpen, func(panel ui.Element) {
-						panel.AttachTo(titleAnchor, ui.AnchorBottomStart, ui.AnchorTopStart)
+						panel.AttachTo(titleAnchor, ui.AnchorBottomStart, ui.AnchorTopStart).AttachedOrigin().Transition(motionPopup())
 						elevatePopup(c, panel.Padding(12).Width(268).Radius(popoverRadius).Background(t.BgElevated).Label("选择跳转日期"))
 						panel.Children(func() {
 							if appCalendar(c, &a.selectedDay, "跳转日历日期") {
+								a.calendarNavDir = 0
 								a.selectedDay = a.selectedDay.In(a.location())
 								*jumpOpen = false
 								a.loadCalendar()
@@ -256,6 +262,7 @@ func (a *App) calendarView(c *ui.Context) {
 			})
 
 			if appSegmented(c, &a.calendarMode, calendarModes, action.SegmentedProps{Size: theme.Small}).Shrink(0).Label("日历视图").Changed() {
+				a.calendarNavDir = 0
 				a.setCalendarMode(a.calendarMode)
 			}
 
@@ -264,8 +271,8 @@ func (a *App) calendarView(c *ui.Context) {
 			}
 
 			// Soft circular "+" primary create action
-			addBtn := ui.ButtonBase(c.Key("cal-create")).Label("添加日程").Tooltip("新建日程").Size(28, 28).Radius(14).Center().Shrink(0).
-				Background(t.Accent).Cursor(ui.CursorPointer).Disabled(a.busy).OnClick(a.newTask)
+			addBtn := ui.ButtonBase(c.Key("cal-create")).Label("添加日程").Tooltip("新建日程 "+shortcutHint("N")).Size(28, 28).Radius(14).Center().Shrink(0).
+				Background(t.Accent).Cursor(ui.CursorPointer).Transition(motionColorsFast()).OnClick(a.newTask)
 			if addBtn.Hovered() {
 				addBtn.Background(t.AccentHover)
 			}
@@ -275,7 +282,9 @@ func (a *App) calendarView(c *ui.Context) {
 		})
 
 		start, end := calendarRange(a.selectedDay, a.calendarMode)
-		if !calendarCovered(a.cache, start, end, a.location().String()) && !a.calendarLoading && !a.syncing {
+		if a.calendarLoading && !calendarCovered(a.cache, start, end, a.location().String()) {
+			a.calendarSkeletonBanner(c)
+		} else if !calendarCovered(a.cache, start, end, a.location().String()) && !a.calendarLoading && !a.syncing {
 			ui.Row(c).Padding(4, 16).Gap(8).AlignItems(ui.Center).Background(t.BgSubtle).BorderWidth(0, 0, 1, 0).BorderColor(calendarGridLine(c)).Children(func() {
 				ui.Icon(c, lucide.Info()).Size(13, 13).TextColor(t.TextSecondary)
 				ui.Text(c, "当前范围仅显示本机已缓存日程，联网刷新可同步完整周期与外部日历").FontSize(11).TextColor(t.TextSecondary).Grow(1)
@@ -283,16 +292,25 @@ func (a *App) calendarView(c *ui.Context) {
 			})
 		}
 
-		// Edge-to-edge full-bleed canvas for Month & Week/Day
-		ui.Column(c.Key("calendar-surface")).Background(t.BgApp).Grow(1).MinHeight(0).MinWidth(0).Clip().Children(func() {
-			switch a.calendarMode {
-			case 0, 1:
-				a.calendarTimelineView(c, events, effectiveWidth)
-			case 2:
-				a.calendarMonthView(c, events)
-			default:
-				a.calendarAgendaView(c, events)
-			}
+		// Edge-to-edge full-bleed canvas for Month & Week/Day with directional transition
+		calStage := ui.Box(c.Key("calendar-surface")).Background(t.BgApp).Grow(1).MinHeight(0).MinWidth(0).Clip()
+		if a.calendarNavDir != 0 {
+			calStage.ChildExit(ui.Motion{X: -36 * a.calendarNavDir})
+		}
+		periodKey := fmt.Sprintf("cal-m%d-%s", a.calendarMode, start.Format("20060102"))
+		calStage.Children(func() {
+			ui.Column(c.Key(periodKey)).Absolute().Fill().MinHeight(0).MinWidth(0).
+				Transition(motionCalendarSlide(a.calendarNavDir)).
+				Children(func() {
+					switch a.calendarMode {
+					case 0, 1:
+						a.calendarTimelineView(c, events, effectiveWidth)
+					case 2:
+						a.calendarMonthView(c, events)
+					default:
+						a.calendarAgendaView(c, events)
+					}
+				})
 		})
 	})
 }
@@ -440,8 +458,8 @@ func (a *App) calendarEventButton(c *ui.Context, event api.CalendarEvent, day ti
 
 	e := ui.ButtonBase(c).Label("日程 "+day.Format("2006-01-02")+" "+event.Title).
 		MinWidth(0).Padding(0, 6).Radius(4).Justify(ui.Start).AlignItems(ui.Center).Clip().
-		Cursor(ui.CursorPointer).FocusRingColor(t.Accent).
-		Tooltip(event.Title + "\n" + event.Start).Disabled(a.busy).
+		Cursor(ui.CursorPointer).FocusRingColor(t.Accent).Transition(motionColorsFast()).
+		Tooltip(event.Title + "\n" + event.Start).
 		OnClick(func() { a.openCalendarEvent(event) })
 
 	if event.AllDay {
@@ -529,7 +547,8 @@ func (a *App) calendarTimelineButton(c *ui.Context, event api.CalendarEvent, day
 	frame.Children(func() {
 		e := ui.ButtonBase(c.Key("event")).Label("日程 "+day.Format("2006-01-02")+" "+event.Title).Fill().MinWidth(0).Padding(4, 8, 4, 10).Radius(6).Clip().
 			Justify(ui.Start).AlignItems(ui.Start).Background(cardBg).Cursor(ui.CursorPointer).
-			Tooltip(eventLabel(event, day) + "\n" + event.Start).Disabled(a.busy).
+			Transition(motionColorsFast()).
+			Tooltip(eventLabel(event, day) + "\n" + event.Start).
 			OnClick(func() { a.openCalendarEvent(event) })
 		if selected {
 			e.Border(1, accent.Alpha(0.48))
@@ -791,7 +810,7 @@ func (a *App) calendarMonthView(c *ui.Context, events []api.CalendarEvent) {
 								})
 								if *moreOpen {
 									ui.PopoverBase(c.Key("day-more-pop-"+dayStr), cell, moreOpen, func(panel ui.Element) {
-										panel.AttachTo(cell, ui.AnchorBottomStart, ui.AnchorTopStart)
+										panel.AttachTo(cell, ui.AnchorBottomStart, ui.AnchorTopStart).AttachedOrigin().Transition(motionPopup())
 										elevatePopup(c, panel.Width(248).Padding(10).Gap(6).Radius(popoverRadius).Background(t.BgElevated).Label(dayStr+" 全部日程"))
 										panel.Children(func() {
 											wk := "周" + []string{"日", "一", "二", "三", "四", "五", "六"}[day.Weekday()]
@@ -997,7 +1016,7 @@ func (a *App) calendarTimelineView(c *ui.Context, events []api.CalendarEvent, ef
 						slot := ui.ButtonBase(c.Key(hour)).Height(hourHeight).Shrink(0).FillWidth().
 							BorderWidth(topBorder, 0, 0, 0).BorderColor(gridLine).
 							Label(fmt.Sprintf("在 %s %02d:00 添加日程", dayStr, hour)).
-							Disabled(a.busy).OnClick(func() { a.newCalendarTask(day, hour) })
+							OnClick(func() { a.newCalendarTask(day, hour) })
 						if slot.Hovered() && !a.calendarDragging {
 							slot.Background(t.BgHover)
 						}

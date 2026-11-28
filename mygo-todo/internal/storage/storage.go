@@ -79,12 +79,13 @@ type CalendarSnapshot struct {
 }
 
 type Preferences struct {
-	Theme          string  `json:"theme,omitempty"`
-	LocalReminders *bool   `json:"local_reminders,omitempty"`
-	CalendarView   string  `json:"calendar_view,omitempty"`
-	SidebarWidth   float32 `json:"sidebar_width,omitempty"`
-	TaskListWidth  float32 `json:"task_list_width,omitempty"`
-	TrayTitleMode  string  `json:"tray_title_mode,omitempty"`
+	Theme           string              `json:"theme,omitempty"`
+	LocalReminders  *bool               `json:"local_reminders,omitempty"`
+	CalendarView    string              `json:"calendar_view,omitempty"`
+	SidebarWidth    float32             `json:"sidebar_width,omitempty"`
+	TaskListWidth   float32             `json:"task_list_width,omitempty"`
+	TrayTitleMode   string              `json:"tray_title_mode,omitempty"`
+	ManualTaskOrder map[string][]string `json:"manual_task_order,omitempty"`
 }
 type ReminderRecord struct {
 	At         time.Time `json:"at"`

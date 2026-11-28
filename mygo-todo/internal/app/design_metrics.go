@@ -1,6 +1,10 @@
 package app
 
-import "github.com/egoist/mygo/ui"
+import (
+	"runtime"
+
+	"github.com/egoist/mygo/ui"
+)
 
 // All dimensions are MyGo logical units, independent of backing/Retina scale.
 // The system font is inherited through applyAppTheme; no bundled font is used.
@@ -19,7 +23,7 @@ const (
 	detailPropertiesWidth = 224
 	toolbarHeight         = 50
 	navigationRowHeight   = 34
-	taskSingleRowHeight   = 44
+	taskSingleRowHeight   = 52
 	taskMetaRowHeight     = 52
 	controlHeight         = 30
 	controlRadius         = 6
@@ -103,4 +107,11 @@ func (a *App) rightDetailPaneVisible(windowWidth float32) bool {
 func (a *App) windowToolbarMetrics(c *ui.Context, basePadX float32) titleBarChromeMetrics {
 	windowWidth, _ := c.Size()
 	return toolbarChromeMetrics(c.TitleBar(), basePadX, windowWidth < sidebarBreakpoint, !a.rightDetailPaneVisible(windowWidth))
+}
+
+func shortcutHint(key string) string {
+	if runtime.GOOS == "darwin" {
+		return "⌘" + key
+	}
+	return "Ctrl+" + key
 }

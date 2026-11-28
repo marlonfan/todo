@@ -120,7 +120,11 @@ func (a *App) taskCenterView(c *ui.Context) {
 			if p.Editing {
 				a.manualReminderActions(c, p)
 			} else {
-				appActionButton(c, "刷新提醒与记录", action.ButtonProps{}).Disabled(a.busy).OnClick(a.loadTaskCenter)
+				refreshLbl := "刷新提醒与记录"
+				if a.isPending("taskcenter.load") {
+					refreshLbl = "加载中…"
+				}
+				appActionButton(c, refreshLbl, action.ButtonProps{}).Disabled(a.isPending("taskcenter.load") || a.busy).OnClick(a.loadTaskCenter)
 			}
 			appActionButton(c, "关闭提醒与记录", action.ButtonProps{}).Disabled(a.busy).OnClick(func() { a.taskCenter = nil; a.failure = "" })
 		})

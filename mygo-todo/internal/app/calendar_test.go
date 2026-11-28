@@ -221,6 +221,7 @@ func TestNativeCalendarModesOpenInstanceAndCreateSlot(t *testing.T) {
 	if err := tt.Click(label); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	if a.selectedOccurrence == nil || a.selectedOccurrence.OccurrenceDate != "2026-11-10" || a.selectedOccurrence.StartTime.Day() != 11 {
 		t.Fatal(a.selectedOccurrence)
 	}
@@ -236,6 +237,7 @@ func TestNativeCalendarModesOpenInstanceAndCreateSlot(t *testing.T) {
 	if err := tt.Click("关闭"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	if err := tt.Click("周"); err != nil {
 		t.Fatal(err)
 	}
@@ -246,12 +248,14 @@ func TestNativeCalendarModesOpenInstanceAndCreateSlot(t *testing.T) {
 	if err := tt.Click(slot); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	if !a.editing || !a.draft.HasStart || a.draft.Start.Hour() != 14 || a.draft.End.Sub(a.draft.Start) != time.Hour {
 		t.Fatal(a.draft)
 	}
 	if err := tt.Click("关闭"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	if err := tt.Click("日程"); err != nil {
 		t.Fatal(err)
 	}

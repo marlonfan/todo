@@ -76,14 +76,27 @@ func (a *App) accountEditor(c *ui.Context) {
 			ui.Scroll(c.Key("account-editor-error")).MaxHeight(72).Children(func() { feedback.Alert(c, a.failure, feedback.AlertProps{Type: feedback.Error}) })
 		}
 		ui.Row(c).Gap(8).Wrap().Justify(ui.End).Children(func() {
-			appActionButton(c, "取消账户编辑", action.ButtonProps{}).Disabled(a.busy).OnClick(func() { a.closeAccountEditor(); a.failure = "" })
+			saving := a.isPending("account.profile") || a.isPending("account.password") || a.isPending("avatar.save") || a.isPending("profile.save") || a.busy
+			appActionButton(c, "取消账户编辑", action.ButtonProps{}).Disabled(saving).OnClick(func() { a.closeAccountEditor(); a.failure = "" })
 			switch a.accountSection {
 			case "修改密码":
-				primaryButton(c, "确认修改密码").Disabled(a.busy).OnClick(a.changePassword)
+				lbl := "确认修改密码"
+				if a.isPending("account.password") {
+					lbl = "修改中…"
+				}
+				primaryButton(c, lbl).Disabled(saving).OnClick(a.changePassword)
 			case "账户头像":
-				primaryButton(c, "保存头像").Disabled(a.busy).OnClick(a.saveAvatar)
+				lbl := "保存头像"
+				if a.isPending("avatar.save") || a.isPending("account.profile") {
+					lbl = "保存中…"
+				}
+				primaryButton(c, lbl).Disabled(saving).OnClick(a.saveAvatar)
 			case "任务与日历偏好":
-				primaryButton(c, "保存任务偏好").Disabled(a.busy).OnClick(a.saveAccountPreferences)
+				lbl := "保存任务偏好"
+				if a.isPending("profile.save") {
+					lbl = "保存中…"
+				}
+				primaryButton(c, lbl).Disabled(saving).OnClick(a.saveAccountPreferences)
 			}
 		})
 	}).Width(580).MaxWidthPercent(95)

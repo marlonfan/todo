@@ -41,6 +41,7 @@ func TestNativeTaskMenuKeepsInstanceScopeAndCanonicalSeries(t *testing.T) {
 	if err := tt.Click("编辑整个系列"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	if !a.editing || !a.draft.Start.Equal(*state.Tasks[0].StartTime) || a.draft.Task.InstanceID != "" {
 		t.Fatal("projected occurrence replaced series anchor", a.draft)
 	}
@@ -83,8 +84,20 @@ func TestNativeTaskMenuKeepsInstanceScopeAndCanonicalSeries(t *testing.T) {
 	}
 	projected := projectedTasks[0]
 	a.performTaskAction(projected, "delete")
-	if a.deleteTask == nil || a.deleteTask.InstanceID != "" || !a.deleteTask.StartTime.Equal(*state.Tasks[0].StartTime) || len(a.cache.Outbox) != 1 || a.cache.Outbox[0].ID != savedOp.ID || string(a.cache.Outbox[0].Body) != string(savedOp.Body) {
-		t.Fatalf("delete skipped confirmation or changed the saved intent: delete=%+v outbox=%+v", a.deleteTask, a.cache.Outbox)
+	tt.Frame()
+	if len(a.interaction.pendingDeletes) != 1 || len(a.cache.Outbox) != 1 || a.cache.Outbox[0].ID != savedOp.ID || string(a.cache.Outbox[0].Body) != string(savedOp.Body) {
+		t.Fatalf("direct delete with undo altered outbox prematurely: pendingDeletes=%+v outbox=%+v", a.interaction.pendingDeletes, a.cache.Outbox)
+	}
+	if err := tt.Click("撤销"); err != nil {
+		t.Fatalf("undo delete toast failed: %v", err)
+	}
+	if len(a.interaction.pendingDeletes) != 0 || len(a.tasks) != 1 {
+		t.Fatalf("undo did not restore task: pendingDeletes=%+v tasks=%d", a.interaction.pendingDeletes, len(a.tasks))
+	}
+	a.performTaskAction(projected, "delete")
+	a.commitPendingDeletes()
+	if len(a.interaction.pendingDeletes) != 0 || len(a.cache.Outbox) != 2 || a.cache.Outbox[1].Method != "DELETE" || a.cache.Outbox[1].TaskID != projected.ID {
+		t.Fatalf("committing pending delete did not enqueue canonical series DELETE: pending=%+v outbox=%+v", a.interaction.pendingDeletes, a.cache.Outbox)
 	}
 }
 
@@ -179,13 +192,13 @@ func TestNewTaskIsRevealedInVirtualList(t *testing.T) {
 	// Low-priority local task starts below the 120 high-priority tasks until revealed.
 	a.tasks = append(a.tasks, api.Task{ID: -1, Title: "刚刚创建的离线任务", Status: "pending", Priority: -1})
 	tt := ui.NewTester(a.view, 900, 600)
-	if _, ok := tt.AccessByRole(ui.RoleButton, "刚刚创建的离线任务"); ok {
-		t.Fatal("fixture must start outside virtualized visible rows")
+	if initialNode, ok := tt.AccessByRole(ui.RoleButton, "刚刚创建的离线任务"); !ok || !initialNode.Offscreen {
+		t.Fatalf("fixture must start offscreen below the initial viewport: %+v", initialNode)
 	}
 	a.revealTaskID = -1
 	tt.Frame()
-	if _, ok := tt.AccessByRole(ui.RoleButton, "刚刚创建的离线任务"); !ok || a.revealTaskID != 0 {
-		t.Fatal("new task remained outside the visible list")
+	if revealedNode, ok := tt.AccessByRole(ui.RoleButton, "刚刚创建的离线任务"); !ok || revealedNode.Offscreen || a.revealTaskID != 0 {
+		t.Fatalf("new task remained offscreen after reveal: %+v revealID=%d", revealedNode, a.revealTaskID)
 	}
 	if err := clickNavigation(tt, "今天"); err != nil {
 		t.Fatal(err)
@@ -193,7 +206,7 @@ func TestNewTaskIsRevealedInVirtualList(t *testing.T) {
 	if err := clickNavigation(tt, "全部任务"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := tt.AccessByRole(ui.RoleButton, "已有任务 120"); !ok {
-		t.Fatal("switching task pages retained stale list position")
+	if topNode, ok := tt.AccessByRole(ui.RoleButton, "已有任务 120"); !ok || topNode.Offscreen {
+		t.Fatalf("switching task pages retained stale list position: %+v", topNode)
 	}
 }

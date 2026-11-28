@@ -67,8 +67,10 @@ func (a *App) performTaskAction(task api.Task, key string) {
 			if key == "series" {
 				a.editTask(canonical)
 			} else {
-				copy := canonical
-				a.requestTaskTransition(func() { a.failure, a.deleteTask = "", &copy })
+				a.requestTaskTransition(func() {
+					a.failure = ""
+					a.deleteTaskWithUndo(canonical)
+				})
 			}
 			return
 		}
@@ -81,9 +83,9 @@ func (a *App) taskActions(c *ui.Context, task api.Task, visible ...bool) bool {
 	holder := ui.Box(c.Key("task-actions")).Shrink(0)
 	open := ui.Local(holder, "open", func() bool { return false })
 	holder.Children(func() {
-		key := appDropdown(c, open, taskMenuItems(task, a.busy), func(trigger ui.Element) {
+		key := appDropdown(c, open, taskMenuItems(task, false), func(trigger ui.Element) {
 			styleAppButton(c, trigger, "", "ghost").
-				Label("更多操作 "+task.Title).Tooltip("更多操作").Size(32, 32).Radius(6).TextColor(tokensOf(c).TextSecondary).Disabled(a.busy).Children(func() {
+				Label("更多操作 "+task.Title).Tooltip("更多操作").Size(32, 32).Radius(6).TextColor(tokensOf(c).TextSecondary).Children(func() {
 				ui.Icon(c, lucide.Ellipsis()).Size(16, 16).TextColor(tokensOf(c).TextSecondary).AccessHidden(true)
 			})
 			ownsKeys = trigger.Focused()

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"todo-native/internal/api"
@@ -164,6 +165,7 @@ func TestPropertyPickerBoundsAndLayout(t *testing.T) {
 				if err := tt.Click("编辑分类"); err != nil {
 					t.Fatal(err)
 				}
+				tt.Advance(200 * time.Millisecond)
 				p, ok := tt.AccessByRole(ui.RolePopup, "属性选项")
 				if !ok || p.Bounds.X < 0 || p.Bounds.Y < 0 || p.Bounds.X+p.Bounds.W > float32(size[0]) || p.Bounds.Y+p.Bounds.H > float32(size[1]) {
 					t.Fatal("popup outside bounds", p)

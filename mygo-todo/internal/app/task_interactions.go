@@ -25,8 +25,14 @@ type taskInteractionState struct {
 	categoryOps        map[string]taskCategoryUndo
 	categoryGeneration map[int64]uint64
 	categoryFailures   map[int64]categoryDelta
+	pendingDeletes     map[int64]*pendingTaskDelete
 	reduceMotion       bool
 	failedOps          map[string]bool
+}
+
+type pendingTaskDelete struct {
+	task      api.Task
+	committed bool
 }
 
 type taskStatusInteraction struct {
@@ -43,6 +49,7 @@ type taskCategoryDrag struct {
 	TaskID         int64
 	SourceCategory int64
 	InstanceID     string
+	TaskKey        string
 }
 
 type categoryDelta struct{ Removed, Added []int64 }
@@ -59,7 +66,7 @@ func (s *taskInteractionState) recordStatus(before api.Task, status, operation s
 		s.statuses = make(map[string]taskStatusInteraction)
 	}
 	s.generation++
-	delay := 180 * time.Millisecond
+	delay := motionCompleteHold
 	if s.reduceMotion || status == "pending" {
 		delay = 0
 	}
@@ -467,7 +474,7 @@ func (a *App) taskCategoryHandle(c *ui.Context, task api.Task, visible bool, ope
 	}
 	// The trailing hover control sits in the title's reserved end margin,
 	// separated from the 32-DIP more-menu target by 6 DIPs.
-	handle := ui.Box(c.Key("task-category-drag")).Absolute().Right(46).Top(6).Size(32, 32).Center().Label("拖动归类 " + task.Title).Tooltip("拖到分类：" + task.Title).Cursor(ui.CursorGrab)
+	handle := ui.Box(c.Key("task-category-drag")).Absolute().Right(46).Top(10).Size(32, 32).Center().Label("拖动归类 " + task.Title).Tooltip("拖到分类或拖动调整排序：" + task.Title).Cursor(ui.CursorGrab)
 	if len(open) > 0 && open[0] != nil {
 		handle.OnClick(open[0])
 	}
@@ -475,7 +482,7 @@ func (a *App) taskCategoryHandle(c *ui.Context, task api.Task, visible bool, ope
 	if strings.HasPrefix(a.page, "category:") {
 		source, _ = strconv.ParseInt(strings.TrimPrefix(a.page, "category:"), 10, 64)
 	}
-	handle.Drag(taskCategoryDrag{TaskID: task.ID, SourceCategory: source, InstanceID: task.InstanceID})
+	handle.Drag(taskCategoryDrag{TaskID: task.ID, SourceCategory: source, InstanceID: task.InstanceID, TaskKey: a.stableTaskKey(task)})
 	if task.Recurring() {
 		handle.Tooltip("拖动修改整个系列的分类：" + task.Title)
 	}
@@ -528,4 +535,75 @@ func (a *App) taskCategoryUndoView(c *ui.Context) {
 		ui.Text(c, label).FontSize(11).Grow(1).MinWidth(0)
 		ui.ButtonBase(c.Key("undo-task-category")).Label("撤销任务归类").MinHeight(32).Padding(0, 8).OnClick(a.undoTaskCategoryDrop).Children(func() { ui.Text(c, "撤销").FontSize(12) })
 	})
+}
+
+func (a *App) undoTaskStatus(before api.Task) {
+	a.setTaskStatus(before, before.Status)
+}
+
+func (a *App) deleteTaskWithUndo(task api.Task) {
+	if task.ReadOnly || task.ID == 0 {
+		return
+	}
+	// Resolve canonical task when deleting a projected occurrence.
+	canonical := task
+	for _, item := range a.tasks {
+		if item.ID == task.ID {
+			canonical = item
+			break
+		}
+	}
+	if canonical.ReadOnly {
+		return
+	}
+	if a.interaction.pendingDeletes == nil {
+		a.interaction.pendingDeletes = make(map[int64]*pendingTaskDelete)
+	}
+	pending := &pendingTaskDelete{task: canonical}
+	a.interaction.pendingDeletes[canonical.ID] = pending
+	a.interaction.generation++
+	if (a.editing && a.draft.Task.ID == canonical.ID) || (a.selectedOccurrence != nil && a.selectedOccurrence.ID == canonical.ID) {
+		a.detailNavDir = -1
+		a.clearTaskSelection()
+	}
+	a.deleteTask = nil
+
+	title := fmt.Sprintf("已删除「%s」", canonical.Title)
+	if canonical.Recurring() {
+		title = fmt.Sprintf("已删除系列「%s」", canonical.Title)
+	}
+	id := canonical.ID
+	a.pushUndoToast(fmt.Sprintf("delete-task-%d", id), title, "撤销", func() {
+		if entry := a.interaction.pendingDeletes[id]; entry != nil {
+			entry.committed = true
+			delete(a.interaction.pendingDeletes, id)
+			a.interaction.generation++
+		}
+	}, func() {
+		a.commitPendingDelete(id)
+	})
+}
+
+func (a *App) commitPendingDelete(id int64) {
+	entry := a.interaction.pendingDeletes[id]
+	if entry == nil || entry.committed {
+		return
+	}
+	entry.committed = true
+	delete(a.interaction.pendingDeletes, id)
+	a.interaction.generation++
+	a.queueTask("DELETE", fmt.Sprintf("/tasks/%d", entry.task.ID), nil, entry.task.Revision, nil)
+}
+
+func (a *App) commitPendingDeletes() {
+	if len(a.interaction.pendingDeletes) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(a.interaction.pendingDeletes))
+	for id := range a.interaction.pendingDeletes {
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		a.commitPendingDelete(id)
+	}
 }

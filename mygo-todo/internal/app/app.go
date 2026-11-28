@@ -159,6 +159,19 @@ type App struct {
 	notifyDraftResult                     *notifyTestResult
 	deleteNotify                          *api.NotifySetting
 	taskCenter                            *taskCenter
+
+	viewCache          viewCache
+	pendingOps         map[string]bool
+	pendingToasts      []ui.Toast
+	taskListScroll     ui.ScrollState
+	detailNavDir       float32
+	calendarNavDir     float32
+	discardedDraft     *Draft
+	palette            commandPaletteState
+	highlightedTaskKey string
+	highlightOpenAt    time.Time
+	highlightPending   *api.Task
+	manualOrderRev     uint64
 }
 
 func New(store storage.Store) *App {
@@ -221,7 +234,7 @@ func (a *App) mainWindowOptions(hidden bool) mygo.WindowOptions {
 		MinWidth:             900,
 		MinHeight:            600,
 		StateKey:             "main",
-		TitleBarStyle:        mygo.TitleBarHiddenInset,
+		TitleBarStyle:        mygo.TitleBarHidden,
 		TitleBarHeight:       windowTitleBarHeight,
 		TrafficLightPosition: &mygo.Point{X: trafficLightInsetX, Y: trafficLightInsetY},
 		AutoHideMenuBar:      true,
@@ -257,7 +270,9 @@ func (a *App) Show() {
 	a.win.Focus()
 }
 func (a *App) Close() {
+	a.commitPendingDeletes()
 	a.closeTrayFlyout()
+	a.commitPendingDeletes()
 	a.cancel()
 	if a.stopReminders != nil {
 		a.stopReminders()
@@ -281,7 +296,7 @@ func (a *App) setupMenus() {
 			{Label: "搜索任务", Accelerator: "CmdOrCtrl+F", Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.win.Update(a.openTaskSearch)
 			}},
-			{Label: "快速搜索", Accelerator: "CmdOrCtrl+K", Click: func(*mygo.MenuItem, *mygo.Window) { a.win.Update(a.openTaskSearch) }},
+			{Label: "命令面板", Accelerator: "CmdOrCtrl+K", Click: func(*mygo.MenuItem, *mygo.Window) { a.win.Update(a.openCommandPalette) }},
 			{Label: "保存任务", Accelerator: "CmdOrCtrl+S", Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.win.Update(a.saveCurrentTask)
 			}},
@@ -316,11 +331,28 @@ func (a *App) setupTray() {
 
 // All model changes happen on the UI thread. Network and disk reads happen in
 // workers. Session epochs discard stale responses after logout/account changes.
-func (a *App) run(job func(context.Context) (func(), error)) {
+func (a *App) isPending(scope string) bool {
+	return a.pendingOps[scope]
+}
+
+func (a *App) anyPending() bool {
+	return len(a.pendingOps) > 0
+}
+
+func (a *App) runScoped(scope string, job func(context.Context) (func(), error)) {
 	if a.busy {
 		return
 	}
-	a.busy, a.failure, a.message = true, "", ""
+	if scope != "" && a.pendingOps[scope] {
+		return
+	}
+	if a.pendingOps == nil {
+		a.pendingOps = make(map[string]bool)
+	}
+	if scope != "" {
+		a.pendingOps[scope] = true
+	}
+	a.failure, a.message = "", ""
 	epoch, ctx := a.epoch, a.ctx
 	go func() {
 		apply, err := job(ctx)
@@ -332,9 +364,12 @@ func (a *App) run(job func(context.Context) (func(), error)) {
 				return
 			}
 			defer a.openPendingReminder()
-			a.busy = false
+			if scope != "" {
+				delete(a.pendingOps, scope)
+			}
 			if err != nil {
 				a.failure = err.Error()
+				a.pushErrorToast(err, func() { a.runScoped(scope, job) })
 				return
 			}
 			if apply != nil {
@@ -344,6 +379,10 @@ func (a *App) run(job func(context.Context) (func(), error)) {
 			a.scheduleTaskSync()
 		})
 	}()
+}
+
+func (a *App) run(job func(context.Context) (func(), error)) {
+	a.runScoped("global", job)
 }
 
 func (a *App) login() {
@@ -357,7 +396,7 @@ func (a *App) login() {
 		a.failure = "请输入用户名和密码"
 		return
 	}
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("auth.login", func(ctx context.Context) (func(), error) {
 		if register {
 			if err := client.Do(ctx, "POST", "/auth/register", map[string]string{"username": username, "password": password, "email": email}, nil, 0); err != nil {
 				return nil, err
@@ -413,6 +452,7 @@ func (a *App) logout() {
 		a.failure = "无法清除本地会话：" + err.Error()
 		return
 	}
+	a.commitPendingDeletes()
 	a.cancel()
 	if a.stopAutoSync != nil {
 		a.stopAutoSync()
@@ -458,6 +498,11 @@ func (a *App) logout() {
 	a.pendingTaskAction = nil
 	a.taskDiscardConfirm = false
 	a.busy = false
+	a.pendingOps = nil
+	a.pendingToasts = nil
+	a.discardedDraft = nil
+	a.highlightedTaskKey = ""
+	a.highlightPending = nil
 	a.syncing = false
 	a.calendarLoading = false
 	a.page = "all"
@@ -514,6 +559,7 @@ func (a *App) refresh() {
 				a.adoptCache(state)
 				a.failure = err.Error()
 				a.setSyncFailure(err)
+				a.pushErrorToast(err, a.refresh)
 			})
 		}
 		var user api.User
@@ -661,7 +707,7 @@ func (a *App) mutate(method, path string, body any, revision int64, after func()
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("mutate:"+method+":"+path, func(ctx context.Context) (func(), error) {
 		err := client.Do(ctx, method, path, body, nil, revision)
 		return func() {
 			if after != nil {

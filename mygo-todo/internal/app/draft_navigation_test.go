@@ -22,11 +22,14 @@ func TestCompactNewTaskDraftCanResumeAndQuickShortcutIsVisible(t *testing.T) {
 	}
 	a.newTask()
 	tt.Frame()
-	if err := tt.Click("继续编辑"); err != nil {
+	if a.discardedDraft == nil || a.draft.Title != "" {
+		t.Fatal("switching from brand-new draft should discard directly with undo toast")
+	}
+	if err := tt.Click("撤销"); err != nil {
 		t.Fatal(err)
 	}
 	if !a.taskDetailOpen || a.draft.Title != "窄窗中不能丢失的新任务" {
-		t.Fatal("cancelled transition did not restore the draft")
+		t.Fatal("undo did not restore the discarded new draft")
 	}
 	a.beginQuickAdd()
 	tt.Frame()

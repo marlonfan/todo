@@ -30,31 +30,30 @@ func elevateFloatingSurface(c *ui.Context, panel ui.Element) ui.Element {
 		Shadow(0, 12, 30, -4, ui.RGBA(20, 18, 16, 0.15))
 }
 
-// detailPropertyChip renders a calm, de-capsuled Ghost metadata trigger:
-// completely transparent at rest with a crisp icon and readable label, showing
-// a whisper-soft warm tint only on hover or when open. Only alert states (such
-// as overdue) tint both icon and text in soft Danger red without heavy pill boxes.
+// detailPropertyChip renders a calm Ghost metadata trigger: when unset (!active),
+// it shows a subtle icon + muted placeholder label (e.g. "添加提醒") so every
+// attribute is immediately intelligible; when set (active), it turns into a
+// crisp soft chip (with semantic Danger/Success/Warning tint when appropriate).
 func detailPropertyChip(c *ui.Context, key, label, value string, icon *ui.SVG, active bool, accent ui.Color, disabled bool, onClick func()) ui.Element {
 	t := tokensOf(c)
 	button := ui.ButtonBase(c.Key(key)).Label("编辑" + label).Description(value).Tooltip(label + " · " + value).
-		Height(26).MinWidth(26).Radius(6).
+		Height(26).MinWidth(26).Radius(6).Padding(0, 7).Justify(ui.Start).
 		BorderWidth(0).Background(ui.Transparent).
 		FocusRingColor(t.Accent).Disabled(disabled).Cursor(ui.CursorPointer).
+		Transition(motionColorsFast()).
 		OnClick(onClick)
 
 	isAlert := active && accent == t.Danger && accent.A > 0
 	isMutedDone := active && accent == t.Success && accent.A > 0
 
-	fg := t.TextPrimary
+	fg := t.TextTertiary
 	iconColor := t.TextTertiary
-	if !active && icon != nil {
-		button.Width(26).Padding(0).Center()
-	} else {
-		button.Padding(0, 6).Justify(ui.Start)
-	}
 	if active {
+		button.Background(t.BgSubtle.Alpha(0.85)).Padding(0, 8)
+		fg = t.TextPrimary
 		iconColor = t.TextSecondary
 		if isAlert {
+			button.Background(t.Danger.Alpha(0.10))
 			iconColor = t.Danger
 			fg = t.Danger
 		} else if isMutedDone {
@@ -66,31 +65,28 @@ func detailPropertyChip(c *ui.Context, key, label, value string, icon *ui.SVG, a
 	}
 	if button.Pressed() {
 		if isAlert {
-			button.Background(t.Danger.Alpha(0.12))
+			button.Background(t.Danger.Alpha(0.16))
 		} else {
 			button.Background(t.BgSelected)
 		}
 	} else if button.Hovered() {
 		if isAlert {
-			button.Background(t.Danger.Alpha(0.08))
+			button.Background(t.Danger.Alpha(0.14))
 		} else {
 			button.Background(t.BgHover)
 		}
 		if !active {
-			iconColor = t.TextPrimary
+			iconColor = t.TextSecondary
+			fg = t.TextSecondary
 		}
 	}
 	button.Children(func() {
-		if !active && icon != nil {
-			ui.Icon(c, icon).Size(14, 14).TextColor(iconColor).AccessHidden(true)
-			return
-		}
 		ui.Row(c).Gap(5).MinWidth(0).AlignItems(ui.Center).Children(func() {
 			if icon != nil {
-				ui.Icon(c, icon).Size(13.5, 13.5).TextColor(iconColor).Shrink(0).AccessHidden(true)
+				ui.Icon(c, icon).Size(13, 13).TextColor(iconColor).Shrink(0).AccessHidden(true)
 			}
 			weight := 400
-			if isAlert {
+			if active {
 				weight = 500
 			}
 			ui.Text(c, value).FontSize(12).FontWeight(weight).FontFeatures("tnum").TextColor(fg).SingleLine().MaxWidth(168)
@@ -190,7 +186,8 @@ func propertyPopover(c *ui.Context, anchor ui.Element, open *bool, content func(
 			panel.AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart)
 		}
 		elevateFloatingSurface(c, panel.Width(panelWidth).MinWidth(0).MaxHeight(height-16).
-			Margin(6, 0, 0, min(float32(0), width-8-bounds.X-panelWidth)).Padding(12).Radius(10).Label("属性选项"))
+			Margin(6, 0, 0, min(float32(0), width-8-bounds.X-panelWidth)).Padding(12).Radius(10).
+			AttachedOrigin().Transition(motionPopup()).Label("属性选项"))
 		entered := ui.Local(panel, "property-entered", func() bool { return false })
 		hook := propertyPickerScope(c)
 		previous := *hook

@@ -38,7 +38,7 @@ func (a *App) loadAI() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.load", func(ctx context.Context) (func(), error) {
 		prompts, err := client.Prompts(ctx)
 		if err != nil {
 			return nil, err
@@ -55,7 +55,7 @@ func (a *App) editAIConfig() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.config.load", func(ctx context.Context) (func(), error) {
 		out, err := client.AIConfiguration(ctx)
 		if err != nil {
 			return nil, err
@@ -83,7 +83,7 @@ func (a *App) saveAIConfig() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.config.save", func(ctx context.Context) (func(), error) {
 		if err := client.Do(ctx, "PUT", "/ai/config", cfg, nil, 0); err != nil {
 			return nil, err
 		}
@@ -115,7 +115,7 @@ func (a *App) savePrompt() {
 		method, path = "PUT", fmt.Sprintf("/prompts/%d", p.ID)
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.prompt.save", func(ctx context.Context) (func(), error) {
 		var saved api.Prompt
 		if err := client.Do(ctx, method, path, body, &saved, 0); err != nil {
 			var connection *api.ConnectionError
@@ -141,7 +141,7 @@ func (a *App) deleteAIItem() {
 	if item.Kind == "历史" {
 		path = fmt.Sprintf("/prompts/history/%d", item.ID)
 	}
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.delete", func(ctx context.Context) (func(), error) {
 		if err := client.Do(ctx, "DELETE", path, nil, nil, 0); err != nil {
 			return nil, err
 		}
@@ -161,7 +161,7 @@ func (a *App) moreAIHistory() {
 		return
 	}
 	client, cursor := a.client, a.aiHistory.NextCursor
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.history.more", func(ctx context.Context) (func(), error) {
 		page, err := client.AskHistories(ctx, cursor)
 		if err != nil {
 			return nil, err
@@ -375,7 +375,7 @@ func (a *App) saveAskHistory() {
 	}
 	body := map[string]any{"prompt_id": p.Prompt.ID, "input": p.SentInput, "output": p.Result.Text, "reasoning": p.Result.Reasoning, "status": status, "finish_reason": p.Result.FinishReason}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("ai.history.save", func(ctx context.Context) (func(), error) {
 		var saved api.AskHistory
 		err := client.Do(ctx, "POST", "/prompts/history", body, &saved, 0)
 		return func() {

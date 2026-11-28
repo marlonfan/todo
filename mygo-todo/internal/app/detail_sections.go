@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
@@ -9,6 +10,57 @@ import (
 
 func detailSectionTitle(c *ui.Context, label string) {
 	ui.Text(c, label).FontSize(fontProperty).FontWeight(600).TextColor(tokensOf(c).TextSecondary)
+}
+
+func animatedCheckmarkBox(c *ui.Context, box ui.Element, checked, wasChecked bool, fg ui.Color, strokeWidth float32) {
+	type checkAnimState struct {
+		prev    bool
+		run     uint64
+		animate bool
+	}
+	st := ui.Local(box, "check-anim", func() checkAnimState {
+		return checkAnimState{prev: checked}
+	})
+	if checked != st.prev {
+		st.prev = checked
+		if checked {
+			st.run++
+			st.animate = true
+		} else {
+			st.animate = false
+		}
+	}
+	if !checked {
+		return
+	}
+	scale := box.Keyframes("check-bounce", []ui.Keyframe{
+		{Value: 1.0},
+		{At: 60 * time.Millisecond, Value: 0.84, Ease: ui.EaseOut},
+		{At: 170 * time.Millisecond, Value: 1.14, Ease: ui.EaseOut},
+		{At: 260 * time.Millisecond, Value: 1.0, Ease: ui.EaseInOut},
+	}, ui.KeyframeOptions{Run: st.run})
+	if st.run > 0 && scale != 1 {
+		box.Scale(scale, scale)
+	}
+	progress := float32(1)
+	if st.animate && !c.Preferences().ReduceMotion {
+		progress = box.AnimateTo("check-draw", 1, ui.Animation{Duration: 200 * time.Millisecond, Ease: ui.EaseOut})
+	} else {
+		progress = box.Jump("check-draw", 1)
+	}
+	box.Draw(func(p *ui.Painter, r ui.Rect) {
+		if progress <= 0.01 {
+			return
+		}
+		path := (&ui.Path{}).
+			MoveTo(r.X+r.W*0.24, r.Y+r.H*0.52).
+			LineTo(r.X+r.W*0.43, r.Y+r.H*0.71).
+			LineTo(r.X+r.W*0.76, r.Y+r.H*0.31)
+		if progress < 0.999 {
+			path.Trim(0, progress)
+		}
+		p.StrokePath(path, strokeWidth, fg)
+	})
 }
 
 // detailCompleteCheckbox renders a refined rounded checkbox optically aligned
@@ -20,21 +72,23 @@ func detailCompleteCheckbox(c *ui.Context, checked *bool, label, priority string
 		Label(label).Size(26, 26).Margin(3, 0, 0, 0).Shrink(0).
 		Center().Radius(6).Cursor(ui.CursorPointer).
 		FocusRingColor(t.Accent).Disabled(disabled).
+		Transition(motionColorsFast()).
 		OnChange(onChange)
 	if cb.Hovered() && !disabled {
 		cb.Background(t.BgHover)
 	}
 	cb.Children(func() {
-		box := ui.Box(c).Size(18, 18).Radius(5).Center().AccessHidden(true)
+		box := ui.Box(c.Key("detail-check-box")).Size(18, 18).Radius(5).Center().AccessHidden(true).
+			Transition(motionColorsFast())
 		if *checked {
 			fill := t.Accent
 			if disabled {
 				fill = t.TextTertiary.Alpha(0.55)
 			}
-			box.Background(fill).Children(func() {
-				ui.Icon(c, lucide.Check()).Size(12, 12).TextColor(t.TextOnAccent).AccessHidden(true)
-			})
+			box.Background(fill)
+			animatedCheckmarkBox(c, box, true, true, t.TextOnAccent, 1.8)
 		} else {
+			animatedCheckmarkBox(c, box, false, false, t.TextOnAccent, 1.8)
 			borderCol := t.BorderDefault.Mix(t.TextTertiary, 0.35)
 			if priority == "高" && !disabled {
 				borderCol = t.Warning.Alpha(0.80)
@@ -87,9 +141,9 @@ func detailTransientStatus(c *ui.Context, saveLabel string, failed bool) {
 		dot = t.Danger
 		fg = t.Danger
 	}
-	ui.Row(c.Key("detail-transient-status")).Gap(5).Padding(0, 4).Height(16).AlignItems(ui.Center).Shrink(0).Children(func() {
+	ui.Row(c.Key("detail-transient-status")).Gap(5).Padding(0, 4).Height(16).AlignItems(ui.Center).Shrink(0).Clip().Children(func() {
 		ui.Box(c).Size(5, 5).Radius(2.5).Background(dot).Shrink(0).AccessHidden(true)
-		ui.Text(c, saveLabel).FontSize(10.5).FontWeight(400).TextColor(fg).SingleLine()
+		ui.Text(c.Key(saveLabel), saveLabel).FontSize(10.5).FontWeight(400).TextColor(fg).SingleLine().Transition(motionTextSwap())
 	})
 }
 

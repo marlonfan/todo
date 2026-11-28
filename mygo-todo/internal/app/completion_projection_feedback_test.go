@@ -30,7 +30,7 @@ func TestCompletionFeedbackSurvivesFastOccurrenceProjectionReplacement(t *testin
 	if !found || len(visible) != 2 {
 		t.Fatal("fast projection removed checked feedback early", visible)
 	}
-	visible = a.interactionTasks([]api.Task{next}, "all", "", now.Add(210*time.Millisecond))
+	visible = a.interactionTasks([]api.Task{next}, "all", "", now.Add(motionCompleteHold+20*time.Millisecond))
 	if len(visible) != 1 || visible[0].InstanceID != next.InstanceID || len(a.interaction.statuses) != 0 {
 		t.Fatal("feedback did not end at its own identity boundary", visible)
 	}

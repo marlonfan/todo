@@ -41,7 +41,7 @@ func (a *App) loadTaskCenter() {
 		return
 	}
 	client, id, limit := a.client, a.taskCenter.Task.ID, a.taskCenter.ActivityLimit
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("taskcenter.load", func(ctx context.Context) (func(), error) {
 		notifications, ne := client.TaskNotifications(ctx, id)
 		activities, ae := client.TaskActivities(ctx, id, limit)
 		settings, se := client.NotifySettings(ctx)
@@ -146,7 +146,7 @@ func (a *App) saveManualReminder() {
 		method, path = "PATCH", fmt.Sprintf("%s/%d", path, p.EditID)
 	}
 	client, id := a.client, p.Task.ID
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("taskcenter.reminder", func(ctx context.Context) (func(), error) {
 		var saved api.Notification
 		if err := client.DoOperation(ctx, method, path, body, &saved, 0, opID); err != nil {
 			return nil, err

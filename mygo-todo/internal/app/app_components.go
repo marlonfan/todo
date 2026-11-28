@@ -50,7 +50,8 @@ func styleAppButton(c *ui.Context, button ui.Element, label, variant string) ui.
 	}
 	button.Height(controlHeight).Padding(0, 10).Radius(controlRadius).Center().Cursor(ui.CursorPointer).
 		FontSize(12.5).FontWeight(500).
-		Background(bg).Border(1, border).TextColor(text).FocusRingColor(t.Accent)
+		Background(bg).Border(1, border).TextColor(text).FocusRingColor(t.Accent).
+		Transition(motionColorsFast())
 	if label != "" {
 		button.Children(func() {
 			ui.Text(c, label).SingleLine()
@@ -143,18 +144,25 @@ func iconButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
 	return button
 }
 
+type sidebarActiveMatch struct{}
+
 // A hidden count still returns an element so callers can safely assign refs.
 func countBadge(c *ui.Context, count int) ui.Element {
 	t := tokensOf(c)
-	return ui.Text(c, strconv.Itoa(count)).Hidden(count <= 0).FontSize(fontAux).FontWeight(fontWeightRegular).FontFeatures("tnum").
-		TextColor(t.TextSecondary).Radius(5).Padding(1, 6).Shrink(0)
+	box := ui.Box(c).Hidden(count <= 0).Radius(5).Padding(1, 6).Shrink(0).Clip()
+	box.Children(func() {
+		ui.Text(c.Key(count), strconv.Itoa(count)).FontSize(fontAux).FontWeight(fontWeightRegular).FontFeatures("tnum").
+			TextColor(t.TextSecondary).Transition(motionTextSwap())
+	})
+	return box
 }
 
 // Keep SidebarItem's selection, type-to-select and tree semantics.
 func (a *App) sidebarEntry(c *ui.Context, id, title, emoji string, icon *ui.SVG) ui.Element {
 	t := tokensOf(c)
 	selected := a.page == id
-	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(fontBody).FontWeight(fontWeightRegular).Label(title)
+	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(fontBody).FontWeight(fontWeightRegular).Label(title).
+		Transition(motionColorsFast())
 	item.OnClick(func() {
 		if selected {
 			a.sidebarOverlay = false
@@ -162,14 +170,19 @@ func (a *App) sidebarEntry(c *ui.Context, id, title, emoji string, icon *ui.SVG)
 	})
 	iconColor := t.TextSecondary
 	item.TextColor(t.TextPrimary).Background(ui.Transparent)
-	if item.Hovered() {
+	if item.Hovered() && !selected {
 		item.Background(t.BgHover)
 	}
 	if selected {
-		item.Background(t.BgSelected).FontWeight(fontWeightSemibold)
+		item.FontWeight(fontWeightSemibold)
 		iconColor = t.Accent
 	}
 	item.Children(func() {
+		if selected {
+			ui.Box(c.Key("sidebar-active-bg")).Absolute().Left(0).Top(0).Right(0).Bottom(0).Radius(7).
+				Background(t.BgSelected).PassThrough().AccessHidden(true).
+				Transition(ui.ElementTransition{Animation: &ui.Snappy, Match: sidebarActiveMatch{}})
+		}
 		ui.Column(c.Key("identity")).Absolute().Start(11).Top(0).Bottom(0).Width(18).Center().Children(func() {
 			if emoji != "" {
 				opacity := float32(0.80)
@@ -191,21 +204,27 @@ func (a *App) sidebarEntry(c *ui.Context, id, title, emoji string, icon *ui.SVG)
 func (a *App) sidebarCategoryEntry(c *ui.Context, id, title, emoji, colorHex string, fallbackIcon *ui.SVG) ui.Element {
 	t := tokensOf(c)
 	selected := a.page == id
-	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(fontBody).FontWeight(fontWeightRegular).Label(title)
+	item := ui.SidebarItem(c, id, nil, title).Height(navigationRowHeight).Padding(0, 10, 0, 36).Radius(7).FontSize(fontBody).FontWeight(fontWeightRegular).Label(title).
+		Transition(motionColorsFast())
 	item.OnClick(func() {
 		if selected {
 			a.sidebarOverlay = false
 		}
 	})
 	item.TextColor(t.TextPrimary).Background(ui.Transparent)
-	if item.Hovered() {
+	if item.Hovered() && !selected {
 		item.Background(t.BgHover)
 	}
 	if selected {
-		item.Background(t.BgSelected).FontWeight(fontWeightSemibold)
+		item.FontWeight(fontWeightSemibold)
 	}
 	hasColor := validCategoryColor(colorHex)
 	item.Children(func() {
+		if selected {
+			ui.Box(c.Key("sidebar-active-bg")).Absolute().Left(0).Top(0).Right(0).Bottom(0).Radius(7).
+				Background(t.BgSelected).PassThrough().AccessHidden(true).
+				Transition(ui.ElementTransition{Animation: &ui.Snappy, Match: sidebarActiveMatch{}})
+		}
 		ui.Column(c.Key("identity")).Absolute().Start(11).Top(0).Bottom(0).Width(18).Center().Children(func() {
 			if hasColor {
 				dotColor := softenAccentColor(c, ui.Hex(colorHex))

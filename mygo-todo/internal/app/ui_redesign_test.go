@@ -285,8 +285,8 @@ func TestAntiFlickerSyncAndStableRowGeometry(t *testing.T) {
 	}
 	keyBefore := a.stableTaskKey(orderedBefore[0])
 	newRowBefore, ok := tt.Access("任务行 新创建的置顶任务")
-	if !ok || newRowBefore.Bounds.H != 44 {
-		t.Fatalf("pending outbox task should keep crisp 44px 1-line row height without 待同步 bounce: %+v", newRowBefore)
+	if !ok || newRowBefore.Bounds.H != 52 {
+		t.Fatalf("pending outbox task should keep crisp 52px row height without 待同步 bounce: %+v", newRowBefore)
 	}
 
 	// Mark sent and apply server receipt assigning positive ID = 500
@@ -433,10 +433,12 @@ func TestCalendarModesZoomAndGhostPreview(t *testing.T) {
 	if err := tt.Click("周"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	beforeZoom := a.calendarZoom
 	if err := tt.Click("放大时间轴"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(500 * time.Millisecond)
 	if a.calendarZoom <= beforeZoom {
 		t.Fatalf("zoom-in did not increase calendarZoom: before=%v after=%v", beforeZoom, a.calendarZoom)
 	}

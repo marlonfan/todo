@@ -40,8 +40,8 @@ func titleBarTestApp(t *testing.T) *App {
 func TestMainWindowOptionsHiddenTitleBarCrossPlatform(t *testing.T) {
 	a := titleBarTestApp(t)
 	opts := a.mainWindowOptions(false)
-	if opts.TitleBarStyle != mygo.TitleBarHiddenInset {
-		t.Fatalf("TitleBarStyle = %q, want %q", opts.TitleBarStyle, mygo.TitleBarHiddenInset)
+	if opts.TitleBarStyle != mygo.TitleBarHidden {
+		t.Fatalf("TitleBarStyle = %q, want %q", opts.TitleBarStyle, mygo.TitleBarHidden)
 	}
 	if opts.TitleBarHeight != 40 {
 		t.Fatalf("TitleBarHeight = %d, want 40", opts.TitleBarHeight)
@@ -142,17 +142,22 @@ func TestSidebarAndHeaderTitleBarAvoidanceAcrossPlatforms(t *testing.T) {
 	a := titleBarTestApp(t)
 	tt := ui.NewTester(a.view, 1440, 900)
 
-	// 1. macOS wide: sidebar reserves traffic-light band so account menu starts at Y >= 38.
+	// 1. macOS wide: sidebar reserves traffic-light band so top nav starts below bar.Height,
+	//    while account menu stays docked at the bottom of the sidebar.
 	tt.SetTitleBar(macBar)
-	accountMac, ok := tt.Find("账户菜单")
+	navMac, ok := tt.AccessByRole(ui.RoleTreeItem, "全部任务")
 	if !ok {
-		t.Fatal("missing sidebar account menu on macOS")
+		t.Fatal("missing sidebar top nav on macOS")
 	}
-	if accountMac.Y < macBar.Height {
-		t.Fatalf("macOS sidebar account menu overlaps traffic lights: Y=%v < %v", accountMac.Y, macBar.Height)
+	if navMac.Bounds.Y < macBar.Height {
+		t.Fatalf("macOS sidebar top nav overlaps traffic lights: Y=%v < %v", navMac.Bounds.Y, macBar.Height)
+	}
+	accountMac, ok := tt.Find("账户菜单")
+	if !ok || accountMac.Y < 700 {
+		t.Fatalf("macOS sidebar account menu should be bottom-docked: %+v", accountMac)
 	}
 
-	// 2. Windows wide: sidebar stays compact (Y == 10, no wasted macOS traffic-light block),
+	// 2. Windows wide: sidebar stays compact (no wasted macOS traffic-light block),
 	//    middle list header does NOT add duplicate bar.Right padding, and empty detail clears top 40px.
 	tt.SetTitleBar(fullscreenBar)
 	newTaskFS, ok := tt.Find("＋ 新建任务")
@@ -161,12 +166,12 @@ func TestSidebarAndHeaderTitleBarAvoidanceAcrossPlatforms(t *testing.T) {
 	}
 
 	tt.SetTitleBar(winBar)
-	accountWin, ok := tt.Find("账户菜单")
+	navWin, ok := tt.AccessByRole(ui.RoleTreeItem, "全部任务")
 	if !ok {
-		t.Fatal("missing sidebar account menu on Windows")
+		t.Fatal("missing sidebar top nav on Windows")
 	}
-	if accountWin.Y != sidebarCompactTopDrag {
-		t.Fatalf("Windows sidebar account menu Y=%v, want compact %v", accountWin.Y, sidebarCompactTopDrag)
+	if navWin.Bounds.Y >= navMac.Bounds.Y {
+		t.Fatalf("Windows sidebar did not stay more compact than macOS: winY=%v macY=%v", navWin.Bounds.Y, navMac.Bounds.Y)
 	}
 	newTaskWinWide, ok := tt.Find("＋ 新建任务")
 	if !ok {
@@ -175,9 +180,9 @@ func TestSidebarAndHeaderTitleBarAvoidanceAcrossPlatforms(t *testing.T) {
 	if newTaskWinWide.X != newTaskFS.X {
 		t.Fatalf("Windows 3-column middle header reserved duplicate bar.Right: win X=%v vs fullscreen X=%v", newTaskWinWide.X, newTaskFS.X)
 	}
-	emptyHeading, ok := tt.Find("选择一个任务")
+	emptyHeading, ok := tt.Find("今日概览")
 	if !ok {
-		t.Fatal("missing empty detail state")
+		t.Fatal("missing empty detail overview")
 	}
 	if emptyHeading.Y < winBar.Height {
 		t.Fatalf("empty detail content overlapped Windows caption bar: Y=%v", emptyHeading.Y)
@@ -187,12 +192,12 @@ func TestSidebarAndHeaderTitleBarAvoidanceAcrossPlatforms(t *testing.T) {
 	//    macOS clears bar.Left; Windows clears bar.Right; child buttons stay clickable inside DragWindow.
 	tt.SetSize(960, 720)
 	tt.SetTitleBar(macBar)
-	navMac, ok := tt.Find("展开导航")
+	navBtnMac, ok := tt.Find("展开导航")
 	if !ok {
 		t.Fatal("missing narrow nav button on macOS")
 	}
-	if navMac.X < macBar.Left {
-		t.Fatalf("narrow macOS nav button overlaps traffic lights: X=%v < Left=%v", navMac.X, macBar.Left)
+	if navBtnMac.X < macBar.Left {
+		t.Fatalf("narrow macOS nav button overlaps traffic lights: X=%v < Left=%v", navBtnMac.X, macBar.Left)
 	}
 	if err := tt.Click("展开导航"); err != nil {
 		t.Fatalf("clicking nav button inside DragWindow header failed: %v", err)
@@ -225,22 +230,22 @@ func TestSidebarAndHeaderTitleBarAvoidanceAcrossPlatforms(t *testing.T) {
 	a.clearTaskSelection()
 	tt.Frame()
 
-	// 4. Failure banner clears Windows bar.Right and macOS bar.Left.
-	a.failure = "网络同步暂不可用"
+	// 4. Persistent banner clears Windows bar.Right and macOS bar.Left.
+	a.cacheError = "本地缓存读写异常"
 	tt.SetSize(1440, 900)
 	tt.SetTitleBar(winBar)
 	dismissWin, ok := tt.Find("关闭提示")
 	if !ok {
-		t.Fatal("missing failure banner dismiss button")
+		t.Fatal("missing persistent banner dismiss button")
 	}
 	if rightEdge := dismissWin.X + dismissWin.W; rightEdge > 1440-winBar.Right {
-		t.Fatalf("failure banner close button overlaps Windows caption buttons: rightEdge=%v > %v", rightEdge, 1440-winBar.Right)
+		t.Fatalf("persistent banner close button overlaps Windows caption buttons: rightEdge=%v > %v", rightEdge, 1440-winBar.Right)
 	}
 	if err := tt.Click("关闭提示"); err != nil {
 		t.Fatalf("clicking failure dismiss button failed: %v", err)
 	}
-	if a.failure != "" {
-		t.Fatal("clicking failure dismiss button did not clear failure")
+	if a.cacheError != "" {
+		t.Fatal("clicking failure dismiss button did not clear persistent cache error")
 	}
 }
 

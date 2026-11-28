@@ -101,7 +101,7 @@ func (a *App) loadCaldav() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("caldav.load", func(ctx context.Context) (func(), error) {
 		sources, err := client.CaldavSources(ctx)
 		if err != nil {
 			return nil, err
@@ -137,7 +137,7 @@ func (a *App) discoverCaldav() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("caldav.discover", func(ctx context.Context) (func(), error) {
 		choices, err := client.DiscoverCaldav(ctx, r)
 		if err != nil {
 			return nil, err
@@ -187,7 +187,7 @@ func (a *App) writeCaldav(method, path string, payload any) {
 	if a.deleteCaldav != nil {
 		deletedID = a.deleteCaldav.ID
 	}
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("caldav.write", func(ctx context.Context) (func(), error) {
 		var source api.CaldavSource
 		if err := client.Do(ctx, method, path, payload, &source, 0); err != nil {
 			return nil, err
@@ -220,7 +220,7 @@ func (a *App) syncCaldav(source api.CaldavSource) {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("caldav.sync", func(ctx context.Context) (func(), error) {
 		err := client.Do(ctx, "POST", fmt.Sprintf("/caldav/sources/%d/sync", source.ID), nil, nil, 0)
 		return func() {
 			a.caldavNotice = "已提交同步请求；服务端后台执行，稍后刷新查看同步时间或错误。"
@@ -254,7 +254,7 @@ func (a *App) exportCalendar() {
 		return
 	}
 	client, feed, win := a.client, a.calendarSubscription.ICSURL, a.win
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("caldav.export", func(ctx context.Context) (func(), error) {
 		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: win, Title: "导出 Todo 日历", DefaultPath: "Todo.ics", Filters: []mygo.FileFilter{{Name: "ICS 日历", Extensions: []string{"ics"}}}})
 		if err != nil {
 			return nil, fmt.Errorf("无法选择导出文件：%w", err)

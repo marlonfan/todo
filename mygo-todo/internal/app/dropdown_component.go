@@ -13,14 +13,15 @@ func appDropdown(c *ui.Context, open *bool, items []overlay.MenuItem, trigger fu
 	trigger(menu.Trigger)
 	chosen := ""
 	menu.Popup(func(panel ui.Element) {
-		elevateFloatingSurface(c, panel.Padding(5).Radius(10).MinWidth(212).MaxWidthPercent(95))
+		elevateFloatingSurface(c, panel.Padding(5).Radius(10).MinWidth(212).MaxWidthPercent(95).AttachedOrigin().Transition(motionPopup()))
 		panel.Children(func() {
 			for index, item := range items {
 				if item.Divider {
 					ui.Box(c.Key(index)).Height(1).Margin(4, 4).Background(t.BorderSubtle)
 					continue
 				}
-				row := menu.Item().Label(item.Label).Disabled(item.Disabled).Padding(6, 10).MinHeight(32).Radius(6).AlignSelf(ui.Stretch).FontSize(13)
+				row := menu.Item().Label(item.Label).Disabled(item.Disabled).Padding(6, 10).MinHeight(32).Radius(6).AlignSelf(ui.Stretch).FontSize(13).
+					Transition(motionColorsFast())
 				color := t.TextPrimary
 				if item.Danger {
 					color = t.Danger

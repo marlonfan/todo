@@ -16,19 +16,33 @@ import (
 )
 
 type wysiwygEditorState struct {
-	identity       string
-	doc            *richtext.Document
-	loadedSource   string
-	lastSerialized string
-	docVersion     uint64
-	fenceLangs     []string
-	sourceMode     bool
-	composing      bool
-	linkOpen       bool
-	linkURL        string
-	moreOpen       bool
-	dark           bool
-	contentW       float32
+	identity          string
+	doc               *richtext.Document
+	loadedSource      string
+	lastSerialized    string
+	docVersion        uint64
+	fenceLangs        []string
+	sourceMode        bool
+	composing         bool
+	linkOpen          bool
+	linkURL           string
+	moreOpen          bool
+	dark              bool
+	contentW          float32
+	floatingHovered   bool
+	slashIndex        int
+	slashDismissedAt  int
+	pendingSlashApply bool
+	slashSnapStart    int
+	slashSnapCaret    int
+	slashRestoreCaret int
+}
+
+type slashCommand struct {
+	ID    string
+	Label string
+	Hint  string
+	Icon  *ui.SVG
 }
 
 type richBlockAttachment struct {
@@ -450,6 +464,7 @@ func wysiwygThemeOf(c *ui.Context) *richtext.Theme {
 		CodeBlockBackground: t.BgSubtle,
 		CodeBlockRadius:     0.45,
 		CodeBlockPadding:    [2]float32{0.95, 0.72},
+		Padding:             [2]float32{14, 6},
 		ParagraphSpacing:    0.62,
 		Indent:              1.75,
 		Marker:              t.TextTertiary,
@@ -527,6 +542,11 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		st.composing = false
 		st.linkOpen = false
 		st.moreOpen = false
+		st.floatingHovered = false
+		st.slashIndex = 0
+		st.slashDismissedAt = -1
+		st.pendingSlashApply = false
+		st.slashRestoreCaret = -1
 		a.richComposing = false
 		reloadDoc(*source, targetW)
 	} else if !st.composing && *source != st.lastSerialized && *source != st.loadedSource {
@@ -577,9 +597,156 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 		reloadDoc(*source, targetW)
 	}
 
+	if st.slashRestoreCaret >= 0 && st.doc != nil {
+		n := len([]rune(st.doc.Text().PlainText()))
+		pos := max(0, min(st.slashRestoreCaret, n))
+		st.doc.SetSelection(pos, pos)
+		st.slashRestoreCaret = -1
+	}
+
+	detectSlash := func() (int, string) {
+		if readOnly || st.sourceMode || st.composing || st.doc == nil {
+			return -1, ""
+		}
+		anchor, caret := st.doc.Selection()
+		if anchor != caret || caret <= 0 {
+			return -1, ""
+		}
+		runes := []rune(st.doc.Text().PlainText())
+		if caret > len(runes) {
+			caret = len(runes)
+		}
+		for i := caret - 1; i >= 0; i-- {
+			r := runes[i]
+			if r == '\n' || r == ' ' || r == '\t' {
+				return -1, ""
+			}
+			if r == '/' {
+				if i == 0 || runes[i-1] == '\n' || runes[i-1] == ' ' || runes[i-1] == '\t' {
+					return i, string(runes[i+1 : caret])
+				}
+				return -1, ""
+			}
+		}
+		return -1, ""
+	}
+
+	allSlashCommands := func() []slashCommand {
+		cmds := []slashCommand{
+			{ID: "h1", Label: "一级标题", Hint: "# 标题", Icon: lucide.Heading1()},
+			{ID: "h2", Label: "二级标题", Hint: "## 标题", Icon: lucide.Heading2()},
+			{ID: "todo", Label: "待办清单", Hint: "- [ ] 任务", Icon: lucide.ListTodo()},
+			{ID: "bullet", Label: "无序列表", Hint: "- 列表项", Icon: lucide.List()},
+			{ID: "number", Label: "有序列表", Hint: "1. 列表项", Icon: lucide.ListOrdered()},
+			{ID: "quote", Label: "引用", Hint: "> 引用块", Icon: lucide.Quote()},
+			{ID: "code", Label: "代码块", Hint: "``` 代码", Icon: lucide.SquareCode()},
+			{ID: "table", Label: "插入表格", Hint: "| 表格 |", Icon: lucide.Table()},
+			{ID: "hr", Label: "插入分隔线", Hint: "---", Icon: lucide.Minus()},
+		}
+		if onAI != nil {
+			cmds = append(cmds, slashCommand{ID: "ai", Label: "AI 生成描述", Hint: "智能整理", Icon: lucide.Sparkles()})
+		}
+		return cmds
+	}
+
+	filterSlashCommands := func(q string) []slashCommand {
+		q = strings.ToLower(strings.TrimSpace(q))
+		all := allSlashCommands()
+		if q == "" {
+			return all
+		}
+		var out []slashCommand
+		for _, cmd := range all {
+			if strings.Contains(strings.ToLower(cmd.ID+" "+cmd.Label+" "+cmd.Hint), q) {
+				out = append(out, cmd)
+			}
+		}
+		return out
+	}
+
+	execSlashCommand := func(cmdID string, startIdx, endIdx int) {
+		if st.doc == nil {
+			return
+		}
+		runes := []rune(st.doc.Text().PlainText())
+		startIdx = max(0, min(startIdx, len(runes)))
+		endIdx = max(startIdx, min(endIdx, len(runes)))
+		if endIdx > startIdx {
+			st.doc.Edit(func(e *richtext.Edit) {
+				e.ReplaceString(startIdx, endIdx, "", richtext.Attributes{})
+				e.Select(startIdx, startIdx)
+			})
+		}
+		switch cmdID {
+		case "h1":
+			st.doc.SetHeading(1)
+		case "h2":
+			st.doc.SetHeading(2)
+		case "todo":
+			st.doc.ToggleList(richtext.Tasks)
+		case "bullet":
+			st.doc.ToggleList(richtext.Bullets)
+		case "number":
+			st.doc.ToggleList(richtext.Numbers)
+		case "quote":
+			st.doc.ToggleQuote()
+		case "code":
+			st.doc.ToggleCodeBlock()
+		case "table":
+			insertMarkdownBlock("| 阶段 | 内容 | 状态 |\n| --- | --- | --- |\n| 计划 | 核心事项 | 进行中 |")
+			return
+		case "hr":
+			insertMarkdownBlock("---")
+			return
+		case "ai":
+			syncRichToSource()
+			if onAI != nil {
+				onAI()
+			}
+			return
+		}
+		syncRichToSource()
+		if ref != nil {
+			ref.Focus()
+		}
+	}
+
+	if st.pendingSlashApply {
+		st.pendingSlashApply = false
+		runes := []rune(st.doc.Text().PlainText())
+		queryEnd := min(st.slashSnapCaret, len(runes))
+		q := ""
+		if st.slashSnapStart >= 0 && st.slashSnapStart < queryEnd {
+			q = string(runes[st.slashSnapStart+1 : queryEnd])
+		}
+		matched := filterSlashCommands(q)
+		if len(matched) > 0 {
+			idx := max(0, min(st.slashIndex, len(matched)-1))
+			// Eat the trailing newline inserted by Enter if present.
+			delEnd := queryEnd
+			if delEnd < len(runes) && runes[delEnd] == '\n' {
+				delEnd++
+			}
+			execSlashCommand(matched[idx].ID, st.slashSnapStart, delEnd)
+		}
+	}
+
+	slashStart, slashQuery := detectSlash()
+	if st.slashDismissedAt >= 0 && slashStart != st.slashDismissedAt {
+		st.slashDismissedAt = -1
+	}
+	var slashMatches []slashCommand
+	if slashStart >= 0 && st.slashDismissedAt != slashStart {
+		slashMatches = filterSlashCommands(slashQuery)
+		if st.slashIndex >= len(slashMatches) {
+			st.slashIndex = max(0, len(slashMatches)-1)
+		}
+	}
+	slashOpen := len(slashMatches) > 0
+
 	root.Children(func() {
-		// Single-line, quiet, de-noised formatting strip with automatic overflow
-		// dropdown in narrow drawers so no lone icon ever wraps onto a second row.
+		// Single-line, quiet formatting strip with automatic overflow dropdown in
+		// narrow drawers so no lone icon wraps onto a second row.
 		toolbar := ui.Row(c.Key(key+"-toolbar")).Height(28).Shrink(0).Padding(0, 0).Gap(1).AlignItems(ui.Center)
 		toolbar.Children(func() {
 			var linkAnchor ui.Element
@@ -594,7 +761,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 				}
 				fmtBtn := func(id, tip string, active bool, icon *ui.SVG, actionFn func()) ui.Element {
 					btn := ui.ButtonBase(c.Key("fmt-"+id)).Label(tip).Tooltip(tip).Size(24, 24).Padding(0).Radius(5).Center().Shrink(0).
-						Cursor(ui.CursorPointer).FocusRingColor(t.Accent)
+						Cursor(ui.CursorPointer).FocusRingColor(t.Accent).Transition(motionColorsFast())
 					fg := t.TextTertiary.Alpha(0.80)
 					if active {
 						btn.Background(t.BgSelected)
@@ -633,13 +800,13 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					}
 				})
 				toolbarDivider()
-				fmtBtn("bold", "加粗 (⌘B)", f.Bold == richtext.FormatOn, lucide.Bold(), func() { st.doc.ToggleBold() })
-				fmtBtn("italic", "斜体 (⌘I)", f.Italic == richtext.FormatOn, lucide.Italic(), func() { st.doc.ToggleItalic() })
+				fmtBtn("bold", "加粗 ("+shortcutHint("B")+")", f.Bold == richtext.FormatOn, lucide.Bold(), func() { st.doc.ToggleBold() })
+				fmtBtn("italic", "斜体 ("+shortcutHint("I")+")", f.Italic == richtext.FormatOn, lucide.Italic(), func() { st.doc.ToggleItalic() })
 				if wideBar {
-					fmtBtn("strike", "删除线 (⇧⌘X)", f.Strikethrough == richtext.FormatOn, lucide.Strikethrough(), func() { st.doc.ToggleStrikethrough() })
+					fmtBtn("strike", "删除线", f.Strikethrough == richtext.FormatOn, lucide.Strikethrough(), func() { st.doc.ToggleStrikethrough() })
 				}
 				if wideBar || medBar {
-					fmtBtn("code", "行内代码 (⌘E)", f.Code == richtext.FormatOn, lucide.Code(), func() { st.doc.ToggleCode() })
+					fmtBtn("code", "行内代码 ("+shortcutHint("E")+")", f.Code == richtext.FormatOn, lucide.Code(), func() { st.doc.ToggleCode() })
 				}
 				toolbarDivider()
 				fmtBtn("bullet", "无序列表", !f.ParagraphsMixed && f.Paragraph.List == richtext.Bullets, lucide.List(), func() { st.doc.ToggleList(richtext.Bullets) })
@@ -660,7 +827,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					})
 				}
 				if wideBar || medBar {
-					linkAnchor = fmtBtn("link", "插入链接 (⌘K)", f.Link != "", lucide.Link(), func() {
+					linkAnchor = fmtBtn("link", "插入链接 ("+shortcutHint("K")+")", f.Link != "", lucide.Link(), func() {
 						st.linkURL = f.Link
 						st.linkOpen = !st.linkOpen
 					})
@@ -671,14 +838,14 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					var overflow []overlay.MenuItem
 					if !medBar {
 						overflow = append(overflow,
-							overlay.MenuItem{Key: "code", Label: "行内代码", Hotkey: "⌘E", Icon: lucide.Code()},
+							overlay.MenuItem{Key: "code", Label: "行内代码", Hotkey: shortcutHint("E"), Icon: lucide.Code()},
 							overlay.MenuItem{Key: "quote", Label: "引用", Icon: lucide.Quote()},
-							overlay.MenuItem{Key: "link", Label: "插入链接", Hotkey: "⌘K", Icon: lucide.Link()},
+							overlay.MenuItem{Key: "link", Label: "插入链接", Hotkey: shortcutHint("K"), Icon: lucide.Link()},
 							overlay.MenuItem{Divider: true},
 						)
 					}
 					overflow = append(overflow,
-						overlay.MenuItem{Key: "strike", Label: "删除线", Hotkey: "⇧⌘X", Icon: lucide.Strikethrough()},
+						overlay.MenuItem{Key: "strike", Label: "删除线", Icon: lucide.Strikethrough()},
 						overlay.MenuItem{Key: "number", Label: "有序列表", Icon: lucide.ListOrdered()},
 						overlay.MenuItem{Key: "codeblock", Label: "代码块", Icon: lucide.SquareCode()},
 						overlay.MenuItem{Divider: true},
@@ -687,7 +854,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					)
 					choice := appDropdown(c.Key(key+"-fmt-more"), &st.moreOpen, overflow, func(trigger ui.Element) {
 						trigger.Label("更多格式").Tooltip("更多格式").Size(24, 24).Padding(0).Radius(5).Center().Shrink(0).
-							Cursor(ui.CursorPointer).FocusRingColor(t.Accent)
+							Cursor(ui.CursorPointer).FocusRingColor(t.Accent).Transition(motionColorsFast())
 						fg := t.TextTertiary.Alpha(0.80)
 						if st.moreOpen {
 							trigger.Background(t.BgSelected)
@@ -727,7 +894,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 				if st.linkOpen {
 					ui.PopoverBase(c.Key(key+"-link-popover"), linkAnchor, &st.linkOpen, func(panel ui.Element) {
 						panel.AttachTo(linkAnchor, ui.AnchorBottomStart, ui.AnchorTopStart)
-						elevateFloatingSurface(c, panel.Width(280).Padding(12).Gap(8).Radius(10).Label("设置链接"))
+						elevateFloatingSurface(c, panel.Width(280).Padding(12).Gap(8).Radius(10).AttachedOrigin().Transition(motionPopup()).Label("设置链接"))
 						panel.Children(func() {
 							ui.Text(c, "链接地址").FontSize(12).FontWeight(600).TextColor(t.TextPrimary)
 							applyLink := func() {
@@ -757,7 +924,8 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 
 			ui.Spacer(c)
 			if onAI != nil && !readOnly {
-				aiBtn := ui.ButtonBase(c.Key(key+"-ai")).Label("AI 生成描述").Tooltip("AI 辅助写作").Size(24, 24).Radius(5).Center().Shrink(0).Cursor(ui.CursorPointer)
+				aiBtn := ui.ButtonBase(c.Key(key+"-ai")).Label("AI 生成描述").Tooltip("AI 辅助写作").Size(24, 24).Radius(5).Center().Shrink(0).Cursor(ui.CursorPointer).
+					Transition(motionColorsFast())
 				aiCol := t.TextTertiary.Alpha(0.80)
 				if aiBtn.Hovered() {
 					aiBtn.Background(t.BgHover)
@@ -774,7 +942,8 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					modeTip = "切换为所见即所得编辑"
 					modeIcon = lucide.Eye()
 				}
-				toggle := ui.ButtonBase(c.Key(key+"-mode-toggle")).Label(modeTip).Tooltip(modeTip).Size(24, 24).Radius(5).Center().Shrink(0).Cursor(ui.CursorPointer)
+				toggle := ui.ButtonBase(c.Key(key+"-mode-toggle")).Label(modeTip).Tooltip(modeTip).Size(24, 24).Radius(5).Center().Shrink(0).Cursor(ui.CursorPointer).
+					Transition(motionColorsFast())
 				col := t.TextTertiary.Alpha(0.80)
 				if st.sourceMode {
 					toggle.Background(t.BgSelected)
@@ -810,7 +979,7 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 					Placeholder: placeholder,
 					MinRows:     6,
 					MaxRows:     24,
-				}).Label(label).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 4).Disabled(readOnly)
+				}).Label(label).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 16, 6, 4).ScrollbarInsets(14, 2, 20, 0).Disabled(readOnly)
 				if ref != nil {
 					ed.Ref(ref)
 				}
@@ -823,10 +992,31 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 			})
 		} else {
 			svc := c.Services()
-			pasteGuard := ui.Column(c.Key(key + "-rich-wrap")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Clip().
+			pasteGuard := ui.Column(c.Key(key + "-rich-wrap")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Margin(8, -4, 18, -10).Clip().
 				ObserveInput(func(ev ui.InputEvent) {
 					if readOnly {
 						return
+					}
+					if slashOpen && ev.Kind == ui.InputKeyDown && ev.Mods == 0 {
+						_, curCaret := st.doc.Selection()
+						switch ev.Key {
+						case ui.KeyEscape:
+							st.slashDismissedAt = slashStart
+							return
+						case ui.KeyDown:
+							st.slashIndex = (st.slashIndex + 1) % len(slashMatches)
+							st.slashRestoreCaret = curCaret
+							return
+						case ui.KeyUp:
+							st.slashIndex = (st.slashIndex + len(slashMatches) - 1) % len(slashMatches)
+							st.slashRestoreCaret = curCaret
+							return
+						case ui.KeyEnter:
+							st.pendingSlashApply = true
+							st.slashSnapStart = slashStart
+							st.slashSnapCaret = curCaret
+							return
+						}
 					}
 					switch ev.Kind {
 					case ui.InputCompose:
@@ -865,8 +1055,10 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 						transfer.Bytes(transfer.Text, []byte(plain)),
 					)))
 				})
+			var editorElem ui.Element
+			hasEditorElem := false
 			pasteGuard.Children(func() {
-				editor := richtext.EditorBase(c.Key(key+"-rich"), st.doc, richtext.EditorOptions{
+				editorElem = richtext.Editor(c.Key(key+"-rich"), st.doc, richtext.EditorOptions{
 					Label:       label,
 					Placeholder: placeholder,
 					Font:        ui.Font{Size: 14, Weight: 400, LineHeight: 1.72},
@@ -876,18 +1068,89 @@ func (a *App) wysiwygMarkdownEditor(c *ui.Context, key, identity, label, placeho
 						st.linkURL = st.doc.Formatting().Link
 						st.linkOpen = true
 					},
-				}).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Padding(6, 2)
+				}).Background(ui.Transparent).BorderWidth(0).Radius(0).Grow(1).Basis(0).MinHeight(0).MinWidth(0)
+				hasEditorElem = true
 				if ref != nil {
-					editor.Ref(ref)
+					editorElem.Ref(ref)
 				}
-				if !editor.Focused() && st.composing {
+				if !editorElem.Focused() && st.composing {
 					st.composing = false
 					a.richComposing = false
 				}
-				if editor.Changed() || (!st.composing && st.doc.Version() != st.docVersion) {
+				if editorElem.Changed() || (!st.composing && st.doc.Version() != st.docVersion) {
 					syncRichToSource()
 				}
 			})
+
+			// "/" Slash Command Menu
+			if !readOnly && hasEditorElem {
+				_, caret := st.doc.Selection()
+				editorFocused := editorElem.Focused()
+				eb := editorElem.Bounds()
+				winW, winH := c.Size()
+
+				paraTopForRune := func(runePos int) float32 {
+					boxes := st.doc.VisibleParagraphs()
+					if len(boxes) == 0 {
+						return eb.Y + 8
+					}
+					chosen := boxes[0]
+					for _, b := range boxes {
+						if b.Start <= runePos {
+							chosen = b
+						} else {
+							break
+						}
+					}
+					return eb.Y + chosen.Top
+				}
+
+				if slashOpen && (editorFocused || st.floatingHovered) {
+					menuTop := paraTopForRune(slashStart) + 26
+					if menuTop+220 > winH-16 {
+						menuTop = max(12, paraTopForRune(slashStart)-226)
+					}
+					menuLeft := max(float32(12), min(eb.X+14, winW-248))
+					ui.Overlay(c, func() {
+						menu := ui.Column(c.Key(key+"-slash-menu")).Label("斜杠命令菜单").
+							Absolute().Left(menuLeft).Top(menuTop).Width(232).MaxHeight(260).
+							Padding(6).Gap(2).Radius(10).Transition(motionPopup())
+						elevateFloatingSurface(c, menu)
+						st.floatingHovered = menu.Hovered()
+						menu.Children(func() {
+							ui.Text(c, "插入内容").FontSize(11).FontWeight(600).TextColor(t.TextTertiary).Padding(2, 8, 4, 8)
+							ui.Scroll(c.Key("slash-scroll")).MaxHeight(220).Gap(2).Children(func() {
+								for i, cmd := range slashMatches {
+									cItem := cmd
+									sel := i == st.slashIndex
+									row := ui.ButtonBase(c.Key("slash-"+cItem.ID)).Label("斜杠命令 "+cItem.Label).
+										Height(30).FillWidth().Padding(0, 8).Radius(6).Justify(ui.Start).Cursor(ui.CursorPointer).
+										Transition(motionColorsFast()).
+										OnClick(func() {
+											execSlashCommand(cItem.ID, slashStart, caret)
+										})
+									iconCol := t.TextSecondary
+									if sel {
+										row.Background(t.BgSelected)
+										iconCol = t.Accent
+									} else if row.Hovered() {
+										row.Background(t.BgHover)
+									}
+									row.Children(func() {
+										ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+											ui.Icon(c, cItem.Icon).Size(14, 14).TextColor(iconCol).Shrink(0).AccessHidden(true)
+											ui.Text(c, cItem.Label).FontSize(12.5).FontWeight(500).TextColor(t.TextPrimary).Grow(1).MinWidth(0).SingleLine()
+											ui.Text(c, cItem.Hint).FontSize(11).TextColor(t.TextTertiary).Shrink(0).SingleLine()
+										})
+									})
+								}
+							})
+						})
+					})
+				} else {
+					st.floatingHovered = false
+				}
+			}
 		}
 	})
 }

@@ -1,6 +1,155 @@
 package app
 
-import "github.com/egoist/mygo/ui"
+import (
+	"time"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// Motion timing tokens used across all animations in the desktop app.
+// MyGo automatically collapses motion when the OS "Reduce motion" preference
+// is active, while keeping opacity fades and color/shadow transitions smooth.
+const (
+	motionFast         = 120 * time.Millisecond
+	motionBase         = 200 * time.Millisecond
+	motionPopupEnter   = 150 * time.Millisecond
+	motionPopupExit    = 100 * time.Millisecond
+	motionDetailIn     = 90 * time.Millisecond
+	motionPageIn       = 120 * time.Millisecond
+	motionCompleteHold = 360 * time.Millisecond
+)
+
+func motionColorsFast() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:    true,
+		Animation: &ui.Animation{Duration: motionFast, Ease: ui.EaseOut, Oklab: true},
+	}
+}
+
+func motionColorsShadowsFast() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:    true,
+		Shadows:   true,
+		Animation: &ui.Animation{Duration: motionFast, Ease: ui.EaseOut, Oklab: true},
+	}
+}
+
+func motionLayoutBase() ui.ElementTransition {
+	return ui.ElementTransition{
+		Size:     true,
+		Position: true,
+		Duration: motionBase,
+		Ease:     ui.EaseOut,
+	}
+}
+
+func motionStructural() ui.ElementTransition {
+	return ui.ElementTransition{
+		Animation: &ui.Snappy,
+	}
+}
+
+func motionRowLifecycle() ui.ElementTransition {
+	return ui.ElementTransition{
+		Animation: &ui.Snappy,
+		Position:  true,
+		Colors:    true,
+		Shadows:   true,
+		Enter:     &ui.Motion{Collapse: true},
+		Exit:      &ui.Motion{Collapse: true},
+	}
+}
+
+func motionPopup() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:       true,
+		Duration:     motionPopupEnter,
+		Ease:         ui.EaseOut,
+		ExitDuration: motionPopupExit,
+		ExitEase:     ui.EaseIn,
+		Enter:        &ui.Motion{Scale: 0.96, Y: -4, Flip: true},
+		Exit:         &ui.Motion{Scale: 0.96, Y: -4, Flip: true},
+	}
+}
+
+func motionModal() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:       true,
+		Duration:     motionPopupEnter,
+		Ease:         ui.EaseOut,
+		ExitDuration: motionPopupExit,
+		ExitEase:     ui.EaseIn,
+		Enter:        &ui.Motion{Scale: 0.96},
+		Exit:         &ui.Motion{Scale: 0.96},
+	}
+}
+
+func motionDetailSwitch() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:   true,
+		Duration: motionDetailIn,
+		Ease:     ui.EaseOut,
+		Enter:    &ui.Motion{Y: 4},
+		Exit:     &ui.Motion{},
+	}
+}
+
+func motionPageSwitch() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:   true,
+		Duration: motionPageIn,
+		Ease:     ui.EaseOut,
+		Enter:    &ui.Motion{Y: 4},
+	}
+}
+
+func motionDrawerRight() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:    true,
+		Animation: &ui.Snappy,
+		Enter:     &ui.Motion{Opacity: 1, XPercent: 100},
+		Exit:      &ui.Motion{Opacity: 1, XPercent: 100},
+	}
+}
+
+func motionPush(dir float32) ui.ElementTransition {
+	if dir == 0 {
+		dir = 1
+	}
+	return ui.ElementTransition{
+		Colors:    true,
+		Animation: &ui.Snappy,
+		Enter:     &ui.Motion{Opacity: 1, XPercent: 100 * dir},
+		Exit:      &ui.Motion{Opacity: 1, XPercent: -30 * dir},
+	}
+}
+
+func motionCalendarSlide(dir float32) ui.ElementTransition {
+	if dir == 0 {
+		return ui.ElementTransition{
+			Colors:   true,
+			Duration: motionPageIn,
+			Ease:     ui.EaseOut,
+			Enter:    &ui.Motion{Y: 4},
+		}
+	}
+	return ui.ElementTransition{
+		Colors:    true,
+		Animation: &ui.Snappy,
+		Enter:     &ui.Motion{X: 36 * dir},
+		Exit:      &ui.Motion{X: -36 * dir},
+	}
+}
+
+func motionTextSwap() ui.ElementTransition {
+	return ui.ElementTransition{
+		Colors:   true,
+		Duration: 150 * time.Millisecond,
+		Ease:     ui.EaseOut,
+		Enter:    &ui.Motion{Y: 4, Blur: 2},
+		Exit:     &ui.Motion{Y: -4, Blur: 2},
+	}
+}
 
 // designTokens is the shared semantic palette. Keep appearance-specific colors
 // here so every surface, including native controls, follows the same mapping.
@@ -62,6 +211,11 @@ func applyAppTheme(c *ui.Context) {
 	palette.Inverse, palette.InverseText = t.TextPrimary, t.BgApp
 	palette.Danger, palette.Warning, palette.Success = t.Danger, t.Warning, t.Success
 	palette.Selection, palette.Focus = t.Accent.Alpha(0.16), t.Accent
+	palette.Scrollbar = t.TextTertiary.Alpha(0.28)
+	if c.Theme().Dark {
+		palette.Scrollbar = t.TextTertiary.Alpha(0.32)
+	}
+	palette.ScrollbarWidth = 4
 	palette.Radius, palette.Spacing, palette.FontSize, palette.Font = controlRadius, spaceUnit, fontBody, ""
 	c.SetTheme(&palette)
 }

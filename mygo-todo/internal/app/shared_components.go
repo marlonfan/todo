@@ -51,7 +51,7 @@ func appEmptyState(c *ui.Context, title, description, actionLabel string, onClic
 func appDialog(c *ui.Context, open *bool, content func()) ui.Element {
 	t := tokensOf(c)
 	return elevateModal(c, ui.Modal(c, open, content).Radius(dialogRadius).Padding(24).Gap(16).
-		Background(t.BgElevated).MaxWidthPercent(95))
+		Background(t.BgElevated).MaxWidthPercent(95).Transition(motionModal()))
 }
 
 func sameCalendarDay(a, b time.Time) bool {
@@ -230,6 +230,7 @@ func appCalendar(c *ui.Context, date *time.Time, label string) bool {
 				cell := ui.ButtonBase(c.Key(d.Format("2006-01-02"))).
 					Label(strconv.Itoa(d.Day())).
 					Height(31).FillWidth().Radius(6).Center().Cursor(ui.CursorPointer).
+					Transition(motionColorsFast()).
 					OnClick(func() { selectDay(d) })
 
 				fg := t.TextPrimary
@@ -309,7 +310,7 @@ func appDatePickerField(c *ui.Context, date *time.Time, label string, onChange f
 		})
 		if *open {
 			ui.PopoverBase(c.Key("pop-"+label), anchor, open, func(panel ui.Element) {
-				panel.AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart)
+				panel.AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart).AttachedOrigin().Transition(motionPopup())
 				elevatePopup(c, panel.Padding(12).Width(272).Radius(popoverRadius).Background(t.BgElevated).Label("选择"+label))
 				panel.Children(func() {
 					if appCalendar(c, date, "日历"+label) {

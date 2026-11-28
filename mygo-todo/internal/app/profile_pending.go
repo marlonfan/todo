@@ -77,7 +77,7 @@ func (a *App) saveProfilePreferences(payload map[string]any, after func(), basel
 		a.failure = err.Error()
 		return
 	}
-	a.run(func(context.Context) (func(), error) {
+	a.runScoped("profile.save", func(context.Context) (func(), error) {
 		if err := a.store.SaveCache(state); err != nil {
 			return nil, fmt.Errorf("无法保存账户偏好，请保留当前输入后重试：%w", err)
 		}
@@ -109,7 +109,7 @@ func (a *App) discardProfilePreferences() {
 	state := syncer.Clone(a.cache)
 	base := state.ProfileChanges.Base
 	state.ProfileChanges = nil
-	a.run(func(context.Context) (func(), error) {
+	a.runScoped("profile.discard", func(context.Context) (func(), error) {
 		if err := a.store.SaveCache(state); err != nil {
 			return nil, err
 		}

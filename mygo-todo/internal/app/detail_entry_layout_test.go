@@ -75,16 +75,19 @@ func TestDetailListHistoryCategoryAndSearchEntries(t *testing.T) {
 				if err := tt.Click(a.tasks[0].Title); err != nil {
 					t.Fatal(err)
 				}
+				tt.Advance(800 * time.Millisecond)
 				first := assertWindowDetail(t, tt, width, false)
 				listBounds, hadList := tt.Access("任务列表")
 				if width < 1180 {
 					if err := tt.Click("‹ 返回任务列表"); err != nil {
 						t.Fatal(err)
 					}
+					tt.Advance(800 * time.Millisecond)
 				}
 				if err := tt.Click(a.tasks[1].Title); err != nil {
 					t.Fatal(err)
 				}
+				tt.Advance(800 * time.Millisecond)
 				second := assertWindowDetail(t, tt, width, false)
 				nearDetail(t, "selection keeps title x", second.Bounds.X, first.Bounds.X)
 				nearDetail(t, "selection keeps title y", second.Bounds.Y, first.Bounds.Y)
@@ -131,6 +134,7 @@ func TestDetailCalendarTaskAndOccurrenceEntry(t *testing.T) {
 				if err := tt.Click("日程 2026-11-10 " + task.Title); err != nil {
 					t.Fatal(err)
 				}
+				tt.Advance(800 * time.Millisecond)
 				assertWindowDetail(t, tt, width, recurring)
 				if a.page != "calendar" || !a.taskEditorInline {
 					t.Fatal("calendar entry lost workspace context")
@@ -139,6 +143,7 @@ func TestDetailCalendarTaskAndOccurrenceEntry(t *testing.T) {
 					if err := tt.Click("‹ 返回任务列表"); err != nil {
 						t.Fatal(err)
 					}
+					tt.Advance(800 * time.Millisecond)
 					tt.Frame()
 					if a.taskDetailOpen {
 						t.Fatal("calendar back action reopened detail")

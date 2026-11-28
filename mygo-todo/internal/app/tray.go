@@ -399,7 +399,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 			})
 
 			ui.Row(c).Gap(2).AlignItems(ui.Center).Shrink(0).Children(func() {
-				trayHeaderIconButton(c, "tray-refresh", "刷新菜单栏任务", lucide.RefreshCw(), a.busy || a.syncing, a.refresh)
+				trayHeaderIconButton(c, "tray-refresh", "刷新菜单栏任务", lucide.RefreshCw(), a.syncing, a.refresh)
 				trayHeaderIconButton(c, "tray-open-main", "打开 Todo 主窗口", lucide.ExternalLink(), false, func() {
 					a.closeTrayFlyout()
 					a.Show()
@@ -466,7 +466,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 			ui.Icon(c, lucide.Plus()).Size(13.5, 13.5).TextColor(iconCol).Shrink(0).AccessHidden(true)
 			ui.TextInputBase(c.Key("tray-quick-input"), &a.trayQuickTitle).Ref(&a.trayQuickInput).
 				Label("菜单栏快捷添加").Placeholder("添加任务…").PlaceholderColor(t.TextTertiary).
-				FontSize(12.5).FontWeight(fontWeightRegular).Grow(1).MinWidth(0).MinHeight(24).Disabled(a.busy).OnSubmit(a.submitTrayQuickTask)
+				FontSize(12.5).FontWeight(fontWeightRegular).Grow(1).MinWidth(0).MinHeight(24).OnSubmit(a.submitTrayQuickTask)
 			smart := a.previewSmartInput(a.trayQuickTitle)
 			if smart.HasTime || smart.HasPriority {
 				ui.Text(c, smartSummaryText(smart)).FontSize(10.5).FontWeight(fontWeightMedium).TextColor(t.Accent).SingleLine().Shrink(0)
@@ -474,7 +474,7 @@ func (a *App) trayFlyoutView(c *ui.Context) {
 			if hasTitle {
 				addBtn := ui.ButtonBase(c.Key("tray-quick-submit")).Label("菜单栏添加任务").Tooltip("创建任务 (Enter)").
 					Size(22, 22).Radius(5).Center().Cursor(ui.CursorPointer).Background(t.Accent).
-					Disabled(a.busy).OnClick(a.submitTrayQuickTask)
+					OnClick(a.submitTrayQuickTask)
 				addBtn.Children(func() {
 					ui.Icon(c, lucide.CornerDownLeft()).Size(11.5, 11.5).TextColor(t.TextOnAccent).AccessHidden(true)
 				})

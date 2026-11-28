@@ -47,8 +47,14 @@ func TestQuickCaptureEscapeAndDetailTransferProtectDraft(t *testing.T) {
 	}
 	a.changePage("today")
 	tt.Frame()
-	if !a.taskDiscardConfirm {
-		t.Fatal("transferred draft bypassed discard gate")
+	if a.editing || a.discardedDraft == nil {
+		t.Fatal("brand-new transferred draft should discard directly with undo offer")
+	}
+	if err := tt.Click("撤销"); err != nil {
+		t.Fatalf("undo discarded draft failed: %v", err)
+	}
+	if !a.editing || a.draft.Title != "待确认的快捷草稿" {
+		t.Fatal("undo did not restore discarded draft", a.draft)
 	}
 }
 

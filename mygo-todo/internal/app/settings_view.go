@@ -98,7 +98,7 @@ func (a *App) settingsView(c *ui.Context) {
 						ui.Text(c, "开机启动需要使用打包后的应用。").FontSize(12).TextColor(c.Theme().TextMuted)
 					}
 					ui.Text(c, "关闭窗口后的行为取决于平台托盘支持；退出应用会停止本地提醒。").FontSize(12).TextColor(c.Theme().TextMuted)
-					appButton(c, "发送测试通知", "secondary").AlignSelf(ui.Start).Disabled(a.busy || !a.notificationsAvailable).OnClick(a.testSystemNotification)
+					appButton(c, "发送测试通知", "secondary").AlignSelf(ui.Start).Disabled(a.isPending("settings.notify.test") || a.busy || !a.notificationsAvailable).OnClick(a.testSystemNotification)
 				})
 				settingsSection(c, "about", 12, func() {
 					ui.Text(c, "Todo 0.1.39").Bold()
@@ -204,7 +204,7 @@ func (a *App) dateAndReminderPreferences(c *ui.Context) {
 }
 
 func (a *App) testSystemNotification() {
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("settings.notify.test", func(ctx context.Context) (func(), error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if !a.notificationsAvailable || !mygo.NotificationsSupported() {

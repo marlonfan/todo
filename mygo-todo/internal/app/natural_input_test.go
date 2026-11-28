@@ -162,18 +162,17 @@ func TestLunarCalendarAndCalendarOverlayDrawerWithoutSqueezing(t *testing.T) {
 	if err := tt.Click("日程 2026-11-11 改期后的单次"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
+	tt.Advance(500 * time.Millisecond)
 	drawer, ok := tt.Access("详情侧边抽屉")
 	if !ok {
-		t.Fatal("expected right-hand responsive drawer to open on calendar event click")
+		t.Fatal("expected right-hand floating overlay drawer to open on calendar event click")
 	}
 	cellAfter, ok := tt.Access("日历日期 2026-11-11")
-	if !ok || cellAfter.Bounds.W < 70 || cellAfter.Bounds.H != cellBefore.Bounds.H {
-		t.Fatalf("calendar cell should resize cleanly beside drawer: before=%+v after=%+v", cellBefore.Bounds, cellAfter.Bounds)
+	if !ok || cellAfter.Bounds != cellBefore.Bounds {
+		t.Fatalf("calendar cell must keep exact 100%% bounds without squeezing under floating drawer: before=%+v after=%+v", cellBefore.Bounds, cellAfter.Bounds)
 	}
-	sundayAfter, ok := tt.Access("日历日期 2026-11-15")
-	if !ok || sundayAfter.Bounds.X+sundayAfter.Bounds.W > drawer.Bounds.X+1.5 {
-		t.Fatalf("sunday column was clipped by calendar side drawer: sunday=%+v drawer=%+v", sundayAfter.Bounds, drawer.Bounds)
+	if drawer.Bounds.W < detailMinWidth || drawer.Bounds.X+drawer.Bounds.W > 1401 {
+		t.Fatalf("floating calendar drawer positioned out of bounds: drawer=%+v", drawer.Bounds)
 	}
 
 	// 3. Pressing Escape immediately after clicking a calendar event closes the side drawer
@@ -187,7 +186,7 @@ func TestLunarCalendarAndCalendarOverlayDrawerWithoutSqueezing(t *testing.T) {
 	if err := tt.Click("日程 2026-11-11 改期后的单次"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
+	tt.Advance(500 * time.Millisecond)
 	if err := tt.Click("本次标题"); err != nil {
 		t.Fatal(err)
 	}

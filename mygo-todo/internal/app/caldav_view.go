@@ -58,7 +58,7 @@ func (a *App) caldavView(c *ui.Context) {
 				preferenceRow(c, source.Name, source.BaseURL, func() {
 					ui.Text(c, status).FontSize(12).TextColor(c.Theme().TextMuted)
 					iconButton(c, "编辑来源 "+source.Name, lucide.Pencil()).Size(28, 28).Padding(6).Disabled(a.busy).OnClick(func() { a.editCaldav(source) })
-					iconButton(c, "同步来源 "+source.Name, lucide.RefreshCw()).Size(28, 28).Padding(6).Disabled(a.busy || !source.IsActive).OnClick(func() { a.syncCaldav(source) })
+					iconButton(c, "同步来源 "+source.Name, lucide.RefreshCw()).Size(28, 28).Padding(6).Disabled(a.isPending("caldav.sync") || a.busy || !source.IsActive).OnClick(func() { a.syncCaldav(source) })
 					holder := ui.Box(c.Key("caldav-actions")).Shrink(0)
 					open := ui.Local(holder, "open", func() bool { return false })
 					holder.Children(func() {
@@ -258,17 +258,26 @@ func (a *App) caldavEditor(c *ui.Context) {
 				}
 			})
 		})
-		if a.busy {
+		if a.isPending("caldav.discover") || a.isPending("caldav.write") || a.busy {
 			ui.Text(c, "正在连接服务，请稍候…").FontSize(12).TextColor(c.Theme().TextMuted)
 		}
 		if a.failure != "" {
 			ui.Scroll(c.Key("caldav-editor-error")).MaxHeight(72).Children(func() { feedback.Alert(c, a.failure, feedback.AlertProps{Type: feedback.Error}) })
 		}
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			appActionButton(c, "发现日历", action.ButtonProps{}).Disabled(a.busy).OnClick(a.discoverCaldav)
+			pending := a.isPending("caldav.discover") || a.isPending("caldav.write") || a.busy
+			discoverLabel := "发现日历"
+			if a.isPending("caldav.discover") {
+				discoverLabel = "发现中…"
+			}
+			saveLabel := "保存来源"
+			if a.isPending("caldav.write") {
+				saveLabel = "保存中…"
+			}
+			appActionButton(c, discoverLabel, action.ButtonProps{}).Disabled(pending).OnClick(a.discoverCaldav)
 			ui.Spacer(c)
-			appActionButton(c, "取消来源编辑", action.ButtonProps{}).Disabled(a.busy).OnClick(func() { a.caldavEditing = false; a.caldavDraft = caldavDraft{}; a.failure = "" })
-			primaryButton(c, "保存来源").Disabled(a.busy).OnClick(a.saveCaldav)
+			appActionButton(c, "取消来源编辑", action.ButtonProps{}).Disabled(pending).OnClick(func() { a.caldavEditing = false; a.caldavDraft = caldavDraft{}; a.failure = "" })
+			primaryButton(c, saveLabel).Disabled(pending).OnClick(a.saveCaldav)
 		})
 	}).Width(600).MaxWidthPercent(95)
 	if wasOpen && !a.caldavEditing {

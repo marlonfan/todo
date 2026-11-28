@@ -167,7 +167,7 @@ func (a *App) changeOutbox(change func(storage.Cache) (storage.Cache, error)) {
 		a.failure = err.Error()
 		return
 	}
-	a.run(func(context.Context) (func(), error) {
+	a.runScoped("sync.outbox", func(context.Context) (func(), error) {
 		if err := a.store.SaveCache(state); err != nil {
 			return nil, err
 		}
@@ -190,7 +190,7 @@ func (a *App) reauthenticate() {
 		return
 	}
 	session, password, state := a.session, a.reauthPassword, syncer.Clone(a.cache)
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("sync.reauth", func(ctx context.Context) (func(), error) {
 		client, err := api.New(session.Server, "")
 		if err != nil {
 			return nil, err

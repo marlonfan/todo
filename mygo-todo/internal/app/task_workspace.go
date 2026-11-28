@@ -10,7 +10,7 @@ import (
 
 func isTaskWorkspacePage(page string) bool {
 	switch page {
-	case "all", "inbox", "today", "upcoming", "completed", "cancelled", "skipped":
+	case "all", "inbox", "today", "upcoming", "processed", "completed", "cancelled", "skipped":
 		return true
 	}
 	return strings.HasPrefix(page, "category:")
@@ -58,6 +58,8 @@ func (a *App) clearTaskSelection() {
 	a.selectedTaskID, a.taskDraftBase = 0, nil
 	a.selectedOccurrence, a.occurrenceSchedule, a.occurrenceScheduleBase = nil, nil, nil
 	a.occurrenceEditing = false
+	a.highlightPending = nil
+	a.highlightedTaskKey = ""
 	a.failure = ""
 	a.taskDraftOrphaned = false
 }
@@ -65,6 +67,7 @@ func (a *App) clearTaskSelection() {
 func (a *App) resumeTaskDraft() {
 	a.sidebarOverlay = false
 	if (a.editing || a.selectedOccurrence != nil) && a.taskDraftDirty() {
+		a.detailNavDir = 1
 		a.taskDetailOpen = a.taskEditorInline
 		return
 	}
@@ -73,6 +76,19 @@ func (a *App) resumeTaskDraft() {
 		a.quick.Open = true
 		a.quick.Input.Focus()
 	}
+}
+
+func (a *App) restoreDiscardedDraft() {
+	if a.discardedDraft == nil {
+		return
+	}
+	d := *a.discardedDraft
+	d.Categories = maps.Clone(d.Categories)
+	a.discardedDraft = nil
+	a.requestTaskTransition(func() {
+		a.newTaskNow()
+		a.draft = d
+	})
 }
 
 // Every destructive editor transition goes through this gate. Returning from
@@ -89,6 +105,18 @@ func (a *App) requestTaskTransition(next func()) {
 		a.flushDetailAutosave()
 	}
 	if a.taskDraftDirty() {
+		// For brand-new unsaved drafts without autosave/storage errors, discard directly with an Undo toast.
+		if a.editing && a.draft.Task.ID == 0 && a.autosave.failure == "" && a.cacheError == "" {
+			snap := a.draft
+			snap.Categories = maps.Clone(snap.Categories)
+			a.discardedDraft = &snap
+			a.clearTaskSelection()
+			next()
+			a.pushUndoToast("discard-new-draft", "已放弃未保存的任务草稿", "撤销", func() {
+				a.restoreDiscardedDraft()
+			}, nil)
+			return
+		}
 		a.pendingTaskAction = next
 		a.taskDiscardConfirm = true
 		return
@@ -105,6 +133,9 @@ func (a *App) changePage(page string) {
 		a.sidebarOverlay = false
 		a.quick.Open = false
 		a.quick.Meta = ""
+		a.highlightedTaskKey = ""
+		a.highlightPending = nil
+		a.taskListScroll = ui.ScrollState{}
 		a.page = page
 		a.query = ""
 		a.search = taskSearchState{}

@@ -19,7 +19,7 @@ func TestDenseRowsHaveExactHeightAndReachableTargets(t *testing.T) {
 				a := New(storage.Store{Dir: t.TempDir()})
 				defer a.Close()
 				task := api.Task{ID: 1, Title: "标题优先的紧凑任务", Status: "pending"}
-				want := float32(44)
+				want := float32(52)
 				if auxiliary {
 					task.StartTime = &yesterday
 					want = 52

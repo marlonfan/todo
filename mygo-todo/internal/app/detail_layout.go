@@ -24,16 +24,31 @@ func (a *App) detailWorkspace(c *ui.Context, main func()) {
 			a.taskListWidth = a.taskListFitWidth
 			a.rememberWorkspaceLayout()
 		}
-	} else if a.taskDetailOpen && (a.editing || a.selectedOccurrence != nil) {
-		ui.Column(c).Grow(1).MinHeight(0).MinWidth(0).Children(func() { a.taskDetailPanel(c, true) })
-	} else {
-		main()
+		return
 	}
+	dir := a.detailNavDir
+	if dir == 0 {
+		dir = 1
+	}
+	stage := ui.Box(c.Key("narrow-route-stage")).Grow(1).Fill().MinHeight(0).MinWidth(0).Clip().
+		ChildExit(ui.Motion{Opacity: 1, XPercent: -30 * dir})
+	stage.Children(func() {
+		if a.taskDetailOpen && (a.editing || a.selectedOccurrence != nil) {
+			ui.Column(c.Key("route-detail")).Absolute().Fill().MinHeight(0).MinWidth(0).
+				Transition(motionPush(dir)).
+				Children(func() { a.taskDetailPanel(c, true) })
+		} else {
+			ui.Column(c.Key("route-list")).Absolute().Fill().MinHeight(0).MinWidth(0).
+				Background(tokensOf(c).BgList).
+				Transition(motionPush(dir)).
+				Children(main)
+		}
+	})
 }
 
-// detailDrawerWorkspace renders full-canvas pages (such as Calendar) alongside
-// a responsive right-hand inspector drawer inside a horizontal flex row so the
-// calendar grid and top view switcher resize gracefully without ever clipping.
+// detailDrawerWorkspace renders full-canvas pages (such as Calendar) at 100%
+// full width and floats a responsive right-hand inspector drawer over the right
+// edge so opening a task detail never narrows or deforms the calendar grid.
 func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 	width, _ := c.Size()
 	windowWidth := width
@@ -43,22 +58,28 @@ func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 	if width >= 1050 || windowWidth >= 1180 {
 		t := tokensOf(c)
 		drawerWidth := min(float32(440), max(float32(detailMinWidth), width*0.36))
-		drawerRow := ui.Row(c.Key("drawer-workspace")).Grow(1).Fill().MinHeight(0).MinWidth(0)
+		drawerStage := ui.Box(c.Key("drawer-workspace")).Grow(1).Fill().MinHeight(0).MinWidth(0).Clip()
 		if (a.editing || a.selectedOccurrence != nil) && a.taskMetaOpen == "" {
-			drawerRow.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
+			drawerStage.OnShortcut(0, ui.KeyEscape, func() {
+				a.detailNavDir = -1
+				a.requestTaskTransition(func() {})
+			})
 		}
-		drawerRow.Children(func() {
-			ui.Column(c.Key("drawer-main-canvas")).Grow(1).FillHeight().MinHeight(0).MinWidth(0).Children(main)
+		drawerStage.Children(func() {
+			ui.Column(c.Key("drawer-main-canvas")).Fill().MinHeight(0).MinWidth(0).
+				Children(main)
 			if a.editing || a.selectedOccurrence != nil {
 				drawer := ui.Column(c.Key("detail-side-drawer")).Label("详情侧边抽屉").
-					Width(drawerWidth).FillHeight().MinHeight(0).Shrink(0).
-					Background(t.BgApp).BorderWidth(0, 0, 0, 1).BorderColor(t.BorderDefault)
+					Absolute().Top(0).Bottom(0).Right(0).Width(drawerWidth).MinHeight(0).ZIndex(20).
+					Background(t.BgApp).BorderWidth(0, 0, 0, 1).BorderColor(t.BorderDefault).
+					Transition(motionDrawerRight())
 				if c.Theme().Dark {
-					drawer.Shadow(-6, 0, 20, 0, ui.RGBA(0, 0, 0, 0.28))
+					drawer.Shadow(-8, 0, 28, -4, ui.RGBA(0, 0, 0, 0.36))
 				} else {
-					drawer.Shadow(-4, 0, 16, 0, ui.RGBA(28, 25, 23, 0.05))
+					drawer.Shadow(-6, 0, 24, -4, ui.RGBA(28, 25, 23, 0.08))
 				}
 				if a.taskMetaOpen == "" && drawer.OverlayShortcut(0, ui.KeyEscape) {
+					a.detailNavDir = -1
 					a.requestTaskTransition(func() {})
 				}
 				drawer.Children(func() {
@@ -66,13 +87,29 @@ func (a *App) detailDrawerWorkspace(c *ui.Context, main func()) {
 				})
 			}
 		})
-	} else if a.taskDetailOpen && (a.editing || a.selectedOccurrence != nil) {
-		col := ui.Column(c).Grow(1).MinHeight(0).MinWidth(0)
-		if a.taskMetaOpen == "" {
-			col.OnShortcut(0, ui.KeyEscape, func() { a.requestTaskTransition(func() {}) })
-		}
-		col.Children(func() { a.taskDetailPanel(c, true) })
-	} else {
-		main()
+		return
 	}
+	dir := a.detailNavDir
+	if dir == 0 {
+		dir = 1
+	}
+	stage := ui.Box(c.Key("narrow-drawer-route-stage")).Grow(1).Fill().MinHeight(0).MinWidth(0).Clip().
+		ChildExit(ui.Motion{Opacity: 1, XPercent: -30 * dir})
+	stage.Children(func() {
+		if a.taskDetailOpen && (a.editing || a.selectedOccurrence != nil) {
+			col := ui.Column(c.Key("route-detail")).Absolute().Fill().MinHeight(0).MinWidth(0).
+				Transition(motionPush(dir))
+			if a.taskMetaOpen == "" {
+				col.OnShortcut(0, ui.KeyEscape, func() {
+					a.detailNavDir = -1
+					a.requestTaskTransition(func() {})
+				})
+			}
+			col.Children(func() { a.taskDetailPanel(c, true) })
+		} else {
+			ui.Column(c.Key("route-main")).Absolute().Fill().MinHeight(0).MinWidth(0).
+				Transition(motionPush(dir)).
+				Children(main)
+		}
+	})
 }

@@ -100,6 +100,7 @@ func (a *App) newTaskNow() {
 	now := time.Now().In(a.location())
 	a.draft = draftFrom(api.Task{}, atClock(now, a.session.User.DefaultTaskStartTime))
 	a.editing = true
+	a.detailNavDir = 1
 	a.selectedTaskID = 0
 	a.taskEditorInline = isTaskWorkspacePage(a.page)
 	a.taskDetailOpen = a.taskEditorInline
@@ -139,7 +140,10 @@ func (a *App) editTaskNow(task api.Task) {
 	a.occurrenceEditing = false
 	a.draft = draftFrom(task, time.Now().In(a.location()).Truncate(time.Minute))
 	a.editing = true
+	a.detailNavDir = 1
 	a.selectedTaskID = task.ID
+	a.highlightPending = nil
+	a.highlightedTaskKey = taskRowKey(task)
 	a.taskEditorInline = isTaskWorkspacePage(a.page)
 	a.taskDetailOpen = a.taskEditorInline
 	a.descriptionPreview = false
@@ -302,8 +306,11 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 	// Borderless canvas-blended top drag / platform window-button clearance strip
 	detailTopStrip(c, "detail-top-strip", "", m, func() {
 		if isCompact {
-			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
-			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
+			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() {
+				a.detailNavDir = -1
+				a.taskDetailOpen = false
+			})
+			iconButton(c, "刷新", lucide.RefreshCw()).Tooltip("刷新 " + shortcutHint("R")).Disabled(a.syncing).OnClick(a.refreshCurrentPage)
 		}
 		if m.ShowNavBar && hasContextBadge {
 			renderContextBadge()
@@ -373,20 +380,20 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 				moreOpen := ui.Local(headingActions, "more-open", func() bool { return false })
 				headingActions.Children(func() {
 					if d.Task.ID != 0 {
-						iconButton(c, "提醒与活动记录", lucide.BellRing()).Disabled(a.busy).OnClick(func() { a.openTaskCenter(d.Task) })
+						iconButton(c, "提醒与活动记录", lucide.BellRing()).Tooltip("提醒与活动记录").OnClick(func() { a.openTaskCenter(d.Task) })
 					}
 					var moreItems []overlay.MenuItem
 					if !d.Task.ReadOnly {
-						moreItems = append(moreItems, overlay.MenuItem{Key: "ai", Label: "AI 生成描述", Icon: lucide.Sparkles(), Disabled: a.busy})
+						moreItems = append(moreItems, overlay.MenuItem{Key: "ai", Label: "AI 生成描述", Icon: lucide.Sparkles()})
 					}
 					if d.Task.ID != 0 {
-						moreItems = append(moreItems, overlay.MenuItem{Key: "activity", Label: "提醒与活动记录", Icon: lucide.History(), Disabled: a.busy})
+						moreItems = append(moreItems, overlay.MenuItem{Key: "activity", Label: "提醒与活动记录", Icon: lucide.History()})
 					}
 					if d.Task.ID > 0 && !d.Task.ReadOnly {
 						if len(moreItems) > 0 {
 							moreItems = append(moreItems, overlay.MenuItem{Divider: true})
 						}
-						moreItems = append(moreItems, overlay.MenuItem{Key: "delete", Label: "删除任务…", Icon: lucide.Trash2(), Danger: true})
+						moreItems = append(moreItems, overlay.MenuItem{Key: "delete", Label: "删除任务", Icon: lucide.Trash2(), Danger: true})
 					}
 					if len(moreItems) > 0 {
 						choice := appDropdown(c, moreOpen, moreItems, func(trigger ui.Element) {
@@ -400,11 +407,13 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 						case "activity":
 							a.openTaskCenter(d.Task)
 						case "delete":
-							task := d.Task
-							a.deleteTask = &task
+							a.deleteTaskWithUndo(d.Task)
 						}
 					}
-					iconButton(c, "关闭", lucide.X()).Disabled(a.busy).OnClick(func() { a.requestTaskTransition(func() {}) })
+					iconButton(c, "关闭", lucide.X()).Tooltip("关闭详情 (Esc)").OnClick(func() {
+						a.detailNavDir = -1
+						a.requestTaskTransition(func() {})
+					})
 				})
 			})
 			nowFocused := a.taskTitleInput.Focused(c)
@@ -449,7 +458,7 @@ func (a *App) taskEditorContent(c *ui.Context, compact ...bool) {
 			if a.taskDraftOrphaned {
 				appButton(c, "另存为新任务", "secondary").Height(30).Disabled(a.busy).OnClick(a.saveDeletedDraftAsNew)
 			} else if d.Task.ID == 0 {
-				primaryButton(c, "创建任务", theme.Small).Height(30).Disabled(a.busy).Tooltip("创建任务 · ⌘S / ⌘Enter").OnClick(a.saveTask)
+				primaryButton(c, "创建任务", theme.Small).Height(30).Disabled(a.busy).Tooltip("创建任务 " + shortcutHint("S") + " / " + shortcutHint("Enter")).OnClick(a.saveTask)
 			} else if a.failure != "" || a.autosave.failure != "" {
 				appActionButton(c, "重试保存", action.ButtonProps{Variant: action.Text, Size: theme.Small}).Disabled(a.busy).OnClick(a.retryDetailAutosave)
 			}
@@ -469,7 +478,7 @@ func draftDateSummary(enabled bool, date time.Time, allDay bool) string {
 
 func draftScheduleChipText(d *Draft, now time.Time) string {
 	if !d.HasStart {
-		return "日期"
+		return "添加日期"
 	}
 	sameYear := d.Start.Year() == now.Year()
 	dayFmt := "01月02日"
@@ -530,11 +539,12 @@ func (a *App) taskMetaChip(c *ui.Context, key, label, value string, accent ui.Co
 }
 
 func estimateMetaChipWidth(value string, active bool) float32 {
-	if !active {
-		return 28
-	}
 	w, _ := ui.ShapeText(value, ui.Font{Size: 12, Weight: 400}, 0).Size()
-	return min(float32(168), w) + 34
+	pad := float32(30)
+	if active {
+		pad = 34
+	}
+	return min(float32(168), w) + pad
 }
 
 func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
@@ -547,7 +557,7 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 			categoryNames = append(categoryNames, strings.TrimSpace(cat.Emoji+" "+cat.Name))
 		}
 	}
-	categorySummary := "分类"
+	categorySummary := "添加分类"
 	if len(categoryNames) == 1 {
 		categorySummary = categoryNames[0]
 	} else if len(categoryNames) > 1 {
@@ -556,7 +566,7 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 
 	smart := a.previewSmartInput(d.Title)
 
-	priorityLabel := "普通"
+	priorityLabel := "添加优先级"
 	effectivePriority := d.Priority
 	if smart.HasPriority {
 		effectivePriority = smart.PriorityLabel
@@ -570,7 +580,7 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 		priorityLabel = "低"
 	}
 
-	reminderLabel := "默认提醒"
+	reminderLabel := "添加提醒"
 	switch d.Reminder {
 	case "不提醒":
 		reminderLabel = "静音"
@@ -604,15 +614,15 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 	schedText := draftScheduleChipText(d, now)
 	dueText := "截止 " + d.Due.Format("01/02")
 	repeatText := recurrenceSummary(d)
+	if d.Repeat == "不重复" {
+		repeatText = "添加重复"
+	}
 	statusActive := d.Status != "待办"
 	priorityActive := effectivePriority != "普通"
 	catActive := len(categoryNames) > 0
 	repeatActive := d.Repeat != "不重复"
 	reminderActive := d.Reminder != "跟随账户"
 
-	// Estimate natural single-row width so narrow drawers (e.g. Calendar side
-	// drawer) intentionally split into 2 balanced rows instead of stranding a
-	// lone tiny chip like "15m" on row 2.
 	estW := float32(0)
 	if d.Task.ID != 0 {
 		estW += estimateMetaChipWidth(d.Status, statusActive)
@@ -648,29 +658,21 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 
 	metaBox := ui.Column(c.Key("task-metadata")).Label("任务属性").Gap(2).FillWidth().MinWidth(0)
 	availW := metaBox.Bounds().W
-	splitTwoRows := availW > 120 && estW > availW-2
-
-	metaBox.Children(func() {
-		if splitTwoRows {
-			ui.Row(c.Key("task-metadata-primary")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
-				if d.Task.ID != 0 {
-					a.taskMetaChip(c, "status", "状态", d.Status, statusAccent, statusActive)
-				}
-				a.taskMetaChip(c, "start", "开始", schedText, schedAccent, d.HasStart)
-				if d.HasDue {
-					a.taskMetaChip(c, "due", "截止", dueText, dueAccent, true)
-				}
-				renderSmartPill()
-			})
-			ui.Row(c.Key("task-metadata-secondary")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
-				a.taskMetaChip(c, "priority", "优先级", priorityLabel, priorityAccent, priorityActive)
-				a.taskMetaChip(c, "categories", "分类", categorySummary, ui.Color{}, catActive)
-				a.taskMetaChip(c, "repeat", "重复", repeatText, ui.Color{}, repeatActive)
-				a.taskMetaChip(c, "reminder", "提醒", reminderLabel, ui.Color{}, reminderActive)
-			})
-			return
+	if availW <= 0 {
+		winW, _ := c.Size()
+		if a.page == "calendar" {
+			availW = min(winW, float32(440)) - 2*detailBodySidePadding
+		} else if winW >= 1180 {
+			availW = max(float32(280), winW-a.sidebarWidth-a.taskListFitWidth-1-2*detailBodySidePadding)
+		} else if winW >= 1050 {
+			availW = max(float32(280), winW-a.taskListFitWidth-2*detailBodySidePadding)
+		} else {
+			availW = winW - 2*detailBodySidePadding
 		}
-		ui.Row(c.Key("task-metadata-single")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
+	}
+	splitTwoRows := availW > 120 && estW > availW-2
+	metaBox.Children(func() {
+		ui.Row(c.Key("task-metadata-row")).Gap(2).Wrap().MinWidth(0).AlignItems(ui.Center).Children(func() {
 			if d.Task.ID != 0 {
 				a.taskMetaChip(c, "status", "状态", d.Status, statusAccent, statusActive)
 			}
@@ -678,11 +680,17 @@ func (a *App) taskMetadata(c *ui.Context, d *Draft, _ ...bool) {
 			if d.HasDue {
 				a.taskMetaChip(c, "due", "截止", dueText, dueAccent, true)
 			}
+			renderSmartPill()
+			brk := ui.Box(c.Key("task-metadata-break")).Height(0).AccessHidden(true)
+			if splitTwoRows {
+				brk.WidthPercent(100)
+			} else {
+				brk.Hidden(true)
+			}
 			a.taskMetaChip(c, "priority", "优先级", priorityLabel, priorityAccent, priorityActive)
 			a.taskMetaChip(c, "categories", "分类", categorySummary, ui.Color{}, catActive)
 			a.taskMetaChip(c, "repeat", "重复", repeatText, ui.Color{}, repeatActive)
 			a.taskMetaChip(c, "reminder", "提醒", reminderLabel, ui.Color{}, reminderActive)
-			renderSmartPill()
 		})
 	})
 }
@@ -829,12 +837,7 @@ func (a *App) confirmations(c *ui.Context) {
 			appActionButton(c, "保留", action.ButtonProps{}).Disabled(a.busy).OnClick(func() { a.deleteTask = nil; a.deleteCategory = nil; a.failure = "" })
 			appActionButton(c, "确认删除", action.ButtonProps{Variant: action.Primary}).Disabled(a.busy).OnClick(func() {
 				if t := a.deleteTask; t != nil {
-					a.mutate("DELETE", fmt.Sprintf("/tasks/%d", t.ID), nil, t.Revision, func() {
-						a.deleteTask = nil
-						if a.selectedTaskID == t.ID {
-							a.clearTaskSelection()
-						}
-					})
+					a.deleteTaskWithUndo(*t)
 				}
 				if cat := a.deleteCategory; cat != nil {
 					a.mutate("DELETE", fmt.Sprintf("/categories/%d", cat.ID), nil, 0, func() { a.deleteCategory = nil })

@@ -88,6 +88,7 @@ func (a *App) setTaskStatus(task api.Task, status string) {
 	if task.Status == status {
 		return
 	}
+	beforeTask := task
 	payload, err := taskStatusPayload(task, status)
 	if err != nil {
 		a.failure = err.Error()
@@ -102,22 +103,37 @@ func (a *App) setTaskStatus(task api.Task, status string) {
 	a.updateSelectedStatus(task, status)
 	a.updateTray()
 	a.scheduleTaskSync()
+	if beforeTask.Status == "pending" && status != "pending" {
+		verb := map[string]string{"completed": "已完成", "cancelled": "已取消", "skipped": "已跳过"}[status]
+		if verb == "" {
+			verb = "已更新"
+		}
+		a.pushUndoToast("status:"+taskRowKey(beforeTask), fmt.Sprintf("%s「%s」", verb, beforeTask.Title), "撤销", func() {
+			a.undoTaskStatus(beforeTask)
+		}, nil)
+	}
 }
 
 func (a *App) openTask(task api.Task) {
 	a.quick.Open = false
 	a.quick.Meta = ""
+	a.highlightPending = nil
+	a.highlightedTaskKey = taskRowKey(task)
 	if a.editing && a.draft.Task.ID == task.ID && task.InstanceID == "" {
+		a.detailNavDir = 1
 		a.taskDetailOpen = a.taskEditorInline
 		return
 	}
 	if a.selectedOccurrence != nil && taskRowKey(*a.selectedOccurrence) == taskRowKey(task) {
+		a.detailNavDir = 1
 		a.taskDetailOpen = a.taskEditorInline
 		return
 	}
 	a.requestTaskTransition(func() {
 		a.quick.Open = false
 		a.quick.Meta = ""
+		a.detailNavDir = 1
+		a.highlightedTaskKey = taskRowKey(task)
 		a.taskEditorInline = isTaskWorkspacePage(a.page)
 		a.taskDetailOpen = a.taskEditorInline
 		a.selectedTaskID = task.ID
@@ -170,8 +186,11 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 	// Borderless canvas-blended top drag / platform window-button clearance strip
 	detailTopStrip(c, "occurrence-top-strip", "", m, func() {
 		if isCompact {
-			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() { a.taskDetailOpen = false })
-			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.busy || a.syncing).OnClick(a.refreshCurrentPage)
+			iconButton(c, "‹ 返回任务列表", lucide.ArrowLeft()).OnClick(func() {
+				a.detailNavDir = -1
+				a.taskDetailOpen = false
+			})
+			iconButton(c, "刷新", lucide.RefreshCw()).Disabled(a.syncing).OnClick(a.refreshCurrentPage)
 		}
 	}, nil)
 
@@ -272,7 +291,7 @@ func (a *App) occurrenceContent(c *ui.Context, compact ...bool) {
 
 			// 3. Inline Schedule Editor when adjusting this occurrence's time
 			if a.occurrenceSchedule != nil {
-				ui.Scroll(c.Key("occurrence-schedule-scroll")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).Children(func() {
+				ui.Scroll(c.Key("occurrence-schedule-scroll")).Grow(1).Basis(0).MinHeight(0).MinWidth(0).ScrollbarInsets(12, 2, 16, 0).Children(func() {
 					ui.Column(c.Key("occurrence-schedule-card")).Padding(10, 12).Radius(8).Background(t.BgSubtle).Border(1, t.BorderSubtle).Gap(8).MinWidth(0).Children(func() {
 						a.occurrenceScheduleFields(c)
 					})
@@ -349,7 +368,7 @@ func (a *App) loadMoreHistory() {
 	}
 	client, cursor := a.client, a.cache.History.NextCursor
 	cache := syncer.Clone(a.cache)
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("history.more", func(ctx context.Context) (func(), error) {
 		page, err := client.OccurrenceHistory(ctx, cursor)
 		if err != nil {
 			return nil, err

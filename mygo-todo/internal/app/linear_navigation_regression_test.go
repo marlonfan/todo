@@ -11,7 +11,7 @@ func TestCompactCurrentNavigationItemClosesDrawer(t *testing.T) {
 	a := New(storage.Store{Dir: t.TempDir()})
 	defer a.Close()
 	a.client, _ = api.New(api.DefaultServer, "")
-	a.page = "categories"
+	a.page = "all"
 	tt := ui.NewTester(a.view, 1024, 800)
 	if err := tt.Click("展开导航"); err != nil {
 		t.Fatal(err)
@@ -19,13 +19,13 @@ func TestCompactCurrentNavigationItemClosesDrawer(t *testing.T) {
 	if !a.sidebarOverlay {
 		t.Fatal("drawer not opened")
 	}
-	if err := tt.Click("管理分类"); err != nil {
+	if err := tt.Click("全部任务"); err != nil {
 		t.Fatal(err)
 	}
 	if a.sidebarOverlay {
 		t.Fatal("current navigation item trapped the drawer")
 	}
-	if _, ok := tt.AccessByRole(ui.RoleButton, "新建分类"); !ok {
+	if _, ok := tt.AccessByRole(ui.RoleButton, "＋ 新建任务"); !ok {
 		t.Fatal("content remained behind drawer")
 	}
 }

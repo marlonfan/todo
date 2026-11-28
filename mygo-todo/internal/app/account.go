@@ -98,7 +98,7 @@ func (a *App) saveAccountProfile(payload map[string]any, message string, after f
 		return
 	}
 	client, session := a.client, a.session
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("account.profile", func(ctx context.Context) (func(), error) {
 		var user api.User
 		if err := client.Do(ctx, "PATCH", "/auth/profile", payload, &user, 0); err != nil {
 			return nil, err
@@ -178,7 +178,7 @@ func (a *App) changePassword() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("account.password", func(ctx context.Context) (func(), error) {
 		if err := client.Do(ctx, "PATCH", "/auth/password", p, nil, 0); err != nil {
 			return nil, fmt.Errorf("修改密码失败；请核对当前密码后重试。若连接中断，请先尝试用新密码登录确认结果：%w", err)
 		}

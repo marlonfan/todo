@@ -281,6 +281,7 @@ func (a *App) loadCalendar() {
 			a.calendarLoading = false
 			if err != nil {
 				a.failure = err.Error()
+				a.pushErrorToast(err, a.loadCalendar)
 				return
 			}
 			// Preserve any newer local task edits made while calendar was loading.

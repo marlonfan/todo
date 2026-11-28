@@ -80,8 +80,13 @@ func (a *App) aiEditors(c *ui.Context) {
 		})
 		aiFormError(c, a.failure)
 		ui.Row(c).Gap(8).Wrap().Justify(ui.End).Children(func() {
-			appActionButton(c, "取消 AI 配置", action.ButtonProps{}).Disabled(a.busy).OnClick(func() { a.aiConfigDraft = nil; a.failure = "" })
-			appActionButton(c, "保存 AI 配置", action.ButtonProps{Variant: action.Primary}).Disabled(a.busy).OnClick(a.saveAIConfig)
+			saving := a.isPending("ai.config.save") || a.busy
+			saveLbl := "保存 AI 配置"
+			if a.isPending("ai.config.save") {
+				saveLbl = "保存中…"
+			}
+			appActionButton(c, "取消 AI 配置", action.ButtonProps{}).Disabled(saving).OnClick(func() { a.aiConfigDraft = nil; a.failure = "" })
+			appActionButton(c, saveLbl, action.ButtonProps{Variant: action.Primary}).Disabled(saving).OnClick(a.saveAIConfig)
 		})
 	}).Width(600).MaxWidthPercent(95)
 	if !open && !a.busy && a.aiConfigDraft != nil {
@@ -122,8 +127,13 @@ func (a *App) aiEditors(c *ui.Context) {
 		})
 		aiFormError(c, a.failure)
 		ui.Row(c).Gap(8).Wrap().Justify(ui.End).Children(func() {
-			appActionButton(c, "取消提示词编辑", action.ButtonProps{}).Disabled(a.busy).OnClick(func() { a.aiPromptDraft = nil; a.failure = "" })
-			appActionButton(c, "保存提示词", action.ButtonProps{Variant: action.Primary}).Disabled(a.busy).OnClick(a.savePrompt)
+			saving := a.isPending("ai.prompt.save") || a.busy
+			saveLbl := "保存提示词"
+			if a.isPending("ai.prompt.save") {
+				saveLbl = "保存中…"
+			}
+			appActionButton(c, "取消提示词编辑", action.ButtonProps{}).Disabled(saving).OnClick(func() { a.aiPromptDraft = nil; a.failure = "" })
+			appActionButton(c, saveLbl, action.ButtonProps{Variant: action.Primary}).Disabled(saving).OnClick(a.savePrompt)
 		})
 	}).Width(600).MaxWidthPercent(95)
 	if !open && !a.busy && a.aiPromptDraft != nil {

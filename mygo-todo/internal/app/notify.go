@@ -94,7 +94,7 @@ func (a *App) loadNotify() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("notify.load", func(ctx context.Context) (func(), error) {
 		channels, err := client.NotifyChannels(ctx)
 		if err != nil {
 			return nil, err
@@ -120,7 +120,7 @@ func (a *App) saveNotify() {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("notify.save", func(ctx context.Context) (func(), error) {
 		var saved api.NotifySetting
 		if err := client.Do(ctx, "POST", "/notify/settings", p, &saved, 0); err != nil {
 			var connection *api.ConnectionError
@@ -148,7 +148,7 @@ func (a *App) notifyAction(method, path string, body any, success string, after 
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("notify.action", func(ctx context.Context) (func(), error) {
 		if err := client.Do(ctx, method, path, body, nil, 0); err != nil {
 			return nil, err
 		}
@@ -183,7 +183,7 @@ func (a *App) testNotifyRequest(id int64, body any) {
 		return
 	}
 	client := a.client
-	a.run(func(ctx context.Context) (func(), error) {
+	a.runScoped("notify.test", func(ctx context.Context) (func(), error) {
 		err := client.Do(ctx, "POST", "/notify/test", body, nil, 0)
 		result := notifyTestResult{At: time.Now()}
 		if err != nil {

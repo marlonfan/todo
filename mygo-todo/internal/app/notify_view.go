@@ -155,15 +155,24 @@ func (a *App) notifyEditor(c *ui.Context) {
 			ui.Scroll(c.Key("notify-draft-result")).MaxHeight(96).Children(func() { a.notifyResultView(c, "配置", *a.notifyDraftResult) })
 		}
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			appActionButton(c, "测试填写的配置", action.ButtonProps{}).Disabled(a.busy).OnClick(a.testNotifyDraft)
+			pending := a.isPending("notify.test") || a.isPending("notify.save") || a.busy
+			testLabel := "测试填写的配置"
+			if a.isPending("notify.test") {
+				testLabel = "测试中…"
+			}
+			saveLabel := "保存通知渠道"
+			if a.isPending("notify.save") {
+				saveLabel = "保存中…"
+			}
+			appActionButton(c, testLabel, action.ButtonProps{}).Disabled(pending).OnClick(a.testNotifyDraft)
 			ui.Spacer(c)
-			appActionButton(c, "取消渠道编辑", action.ButtonProps{}).Disabled(a.busy).OnClick(func() {
+			appActionButton(c, "取消渠道编辑", action.ButtonProps{}).Disabled(pending).OnClick(func() {
 				a.notifyEditing = false
 				a.notifyDraft = notifyDraft{}
 				a.failure = ""
 				a.notifyDraftResult = nil
 			})
-			appActionButton(c, "保存通知渠道", action.ButtonProps{Variant: action.Primary}).Disabled(a.busy).OnClick(a.saveNotify)
+			appActionButton(c, saveLabel, action.ButtonProps{Variant: action.Primary}).Disabled(pending).OnClick(a.saveNotify)
 		})
 	}).Width(610).MaxWidthPercent(95)
 	if !a.notifyEditing {

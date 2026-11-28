@@ -73,7 +73,7 @@ func TestTaskInteractionCheckedFeedbackAndReducedMotion(t *testing.T) {
 			} else if len(rows) != 1 || rows[0].Status != "completed" {
 				t.Fatal("missing checked feedback", rows)
 			}
-			if got := a.interactionTasks([]api.Task{task}, "all", "", now.Add(181*time.Millisecond)); len(got) != 0 {
+			if got := a.interactionTasks([]api.Task{task}, "all", "", now.Add(motionCompleteHold+20*time.Millisecond)); len(got) != 0 {
 				t.Fatal("row did not leave filter", got)
 			}
 			if got := a.interactionTasks([]api.Task{task}, "completed", "", now.Add(time.Second)); len(got) != 1 {

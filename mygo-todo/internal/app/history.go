@@ -15,9 +15,9 @@ import (
 )
 
 type historyFilter struct {
-	Basis, Range, Order, Priority string
-	CategoryID                    int64 // 0: all, -1: uncategorized
-	From, To                      time.Time
+	Status, Basis, Range, Order, Priority string
+	CategoryID                            int64 // 0: all, -1: uncategorized
+	From, To                              time.Time
 }
 
 func (f historyFilter) normalized() historyFilter {
@@ -38,7 +38,7 @@ func (f historyFilter) normalized() historyFilter {
 
 func (f historyFilter) isActive() bool {
 	n := f.normalized()
-	return n.Range != "全部时间" || n.Basis != "处理时间" || n.Order != "最新在前" || n.Priority != "全部优先级" || n.CategoryID != 0
+	return n.Status != "" || n.Range != "全部时间" || n.Basis != "处理时间" || n.Order != "最新在前" || n.Priority != "全部优先级" || n.CategoryID != 0
 }
 
 func (f historyFilter) extraCount() int {
@@ -57,7 +57,7 @@ func (f historyFilter) extraCount() int {
 }
 
 func isHistoryPage(page string) bool {
-	return page == "completed" || page == "cancelled" || page == "skipped"
+	return page == "processed" || page == "completed" || page == "cancelled" || page == "skipped"
 }
 
 func historyTime(task api.Task, basis string) time.Time {
@@ -121,6 +121,9 @@ func filterHistory(tasks []api.Task, f historyFilter, now time.Time) []api.Task 
 		return result
 	}
 	for _, task := range tasks {
+		if f.Status != "" && task.Status != f.Status {
+			continue
+		}
 		if f.CategoryID == -1 && len(task.Categories) != 0 {
 			continue
 		}
@@ -268,9 +271,39 @@ func (a *App) historyToolbar(c *ui.Context, now time.Time) {
 	customPickingEnd := ui.Local(holder, "custom-end", func() bool { return false })
 
 	holder.Children(func() {
+		if a.page == "processed" {
+			ui.Row(c.Key("processed-status-tabs")).Gap(4).AlignItems(ui.Center).Children(func() {
+				for _, tab := range []struct{ code, label string }{
+					{"", "全部"}, {"completed", "已完成"}, {"cancelled", "已取消"}, {"skipped", "已跳过"},
+				} {
+					item := tab
+					active := f.Status == item.code
+					btn := ui.ButtonBase(c.Key("hstatus-"+item.label)).Label(item.label).
+						Height(25).Padding(0, 10).Radius(6).Center().Cursor(ui.CursorPointer).
+						Transition(motionColorsFast()).
+						OnClick(func() { f.Status = item.code })
+					fg := t.TextSecondary
+					if active {
+						btn.Background(t.BgSelected)
+						fg = t.TextPrimary
+					} else if btn.Hovered() {
+						btn.Background(t.BgHover)
+						fg = t.TextPrimary
+					}
+					btn.Children(func() {
+						w := 400
+						if active {
+							w = 600
+						}
+						ui.Text(c, item.label).FontSize(11.5).FontWeight(w).TextColor(fg).SingleLine()
+					})
+				}
+			})
+		}
 		// Single Compact Toolbar Row: Search + Time Range Dropdown + Filter Popover + Sort Toggle
 		ui.Row(c.Key("history-search-row")).Gap(5).AlignItems(ui.Center).Children(func() {
 			placeholder := map[string]string{
+				"processed": "搜索已处理记录…",
 				"completed": "搜索已完成记录…",
 				"cancelled": "搜索已取消记录…",
 				"skipped":   "搜索已跳过记录…",
@@ -317,7 +350,7 @@ func (a *App) historyToolbar(c *ui.Context, now time.Time) {
 
 				if *rangeOpen {
 					ui.PopoverBase(c.Key("history-range-popover"), rangeAnchor, rangeOpen, func(panel ui.Element) {
-						panel.AttachTo(rangeAnchor, ui.AnchorBottomEnd, ui.AnchorBottomStart)
+						panel.AttachTo(rangeAnchor, ui.AnchorBottomEnd, ui.AnchorBottomStart).AttachedOrigin().Transition(motionPopup())
 						popWidth := float32(236)
 						if f.Range == "自定义日期" {
 							popWidth = 296
@@ -483,7 +516,7 @@ func (a *App) historyToolbar(c *ui.Context, now time.Time) {
 
 				if *filterOpen {
 					ui.PopoverBase(c.Key("history-filter-popover"), filterAnchor, filterOpen, func(panel ui.Element) {
-						panel.AttachTo(filterAnchor, ui.AnchorBottomEnd, ui.AnchorBottomStart)
+						panel.AttachTo(filterAnchor, ui.AnchorBottomEnd, ui.AnchorBottomStart).AttachedOrigin().Transition(motionPopup())
 						elevatePopup(c, panel.Width(284).Padding(12).Gap(12).Radius(popoverRadius).Background(t.BgElevated).Label("历史筛选面板"))
 						panel.Children(func() {
 							ui.Row(c).AlignItems(ui.Center).Children(func() {

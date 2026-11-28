@@ -76,7 +76,7 @@ func (a *App) syncView(c *ui.Context) {
 		ui.Column(c).Gap(10).Children(func() {
 			ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
 				ui.Text(c, fmt.Sprintf("%d 条本地修改", a.pendingChanges())).FontSize(fontTitle).FontWeight(600)
-				primaryButton(c, "立即同步").Disabled(a.busy).OnClick(a.refresh)
+				primaryButton(c, "立即同步").Disabled(a.syncing || a.busy).OnClick(a.refresh)
 			})
 			counts := map[string]int{}
 			for _, op := range a.cache.CategoryOutbox {
@@ -271,7 +271,11 @@ func (a *App) syncReauthentication(c *ui.Context) {
 			ui.Text(c, "登录失效时在此验证，待同步内容会保留。").TextColor(c.Theme().TextMuted)
 		}
 		ui.Field(c, "当前账户密码", func() { ui.TextInput(c, &a.reauthPassword).Password().OnSubmit(a.reauthenticate).MaxWidth(360) })
-		appActionButton(c, "验证并继续同步", action.ButtonProps{}).AlignSelf(ui.Start).Disabled(a.busy).OnClick(a.reauthenticate)
+		reauthLbl := "验证并继续同步"
+		if a.isPending("sync.reauth") {
+			reauthLbl = "验证中…"
+		}
+		appActionButton(c, reauthLbl, action.ButtonProps{}).AlignSelf(ui.Start).Disabled(a.isPending("sync.reauth") || a.busy).OnClick(a.reauthenticate)
 	})
 }
 

@@ -86,7 +86,7 @@ func (a *App) queueCategory(method, path string, body any, after func()) {
 		a.failure = err.Error()
 		return
 	}
-	a.run(func(context.Context) (func(), error) {
+	a.runScoped("category.save", func(context.Context) (func(), error) {
 		if err := a.store.SaveCache(state); err != nil {
 			return nil, fmt.Errorf("无法保存本地分类，请保留当前输入后重试：%w", err)
 		}

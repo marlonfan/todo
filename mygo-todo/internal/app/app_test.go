@@ -22,11 +22,17 @@ func TestNativeTaskNavigationAndValidation(t *testing.T) {
 	if !tt.HasText("准备发布") || tt.HasText("完成迁移调研") {
 		t.Fatalf("initial list: %v", tt.Texts())
 	}
-	if err := tt.Click("已完成"); err != nil {
+	if err := tt.Click("已处理"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("完成迁移调研") || tt.HasText("准备发布") {
-		t.Fatalf("completed list: %v", tt.Texts())
+		t.Fatalf("processed list: %v", tt.Texts())
+	}
+	if err := tt.Click("已完成"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("完成迁移调研") {
+		t.Fatalf("completed tab list: %v", tt.Texts())
 	}
 	if err := tt.Click("＋ 新建任务"); err != nil {
 		t.Fatal(err)
@@ -171,21 +177,20 @@ func TestSelectedOfflineTaskTracksServerID(t *testing.T) {
 
 func TestNativeNavigationWaitsForForegroundSync(t *testing.T) {
 	a := New(storage.Store{Dir: t.TempDir()})
+	defer a.Close()
 	a.client, _ = api.New(api.DefaultServer, "")
 	a.session.User = api.User{ID: 1, Username: "测试用户"}
-	a.page, a.busy = "sync", true
+	a.page, a.syncing = "sync", true
 	tt := ui.NewTester(a.view, 1280, 800)
 	node, ok := tt.AccessByRole(ui.RoleTreeItem, "全部任务")
-	if !ok || !node.Disabled {
-		t.Fatalf("navigation must expose its disabled state during sync: %+v", node)
+	if !ok || node.Disabled {
+		t.Fatalf("navigation must remain responsive during background/scoped sync: %+v", node)
 	}
-	a.busy = false
-	tt.Frame()
 	if err := tt.Click("全部任务"); err != nil {
 		t.Fatal(err)
 	}
 	if a.page != "all" {
-		t.Fatalf("navigation after sync: %s", a.page)
+		t.Fatalf("navigation during sync: %s", a.page)
 	}
 }
 

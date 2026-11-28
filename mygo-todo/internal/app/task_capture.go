@@ -72,7 +72,7 @@ func (a *App) activateQuickAdd() {
 }
 
 func (a *App) beginQuickAdd() {
-	if a.client == nil || a.busy || a.aiPanel != nil {
+	if a.client == nil || a.aiPanel != nil {
 		return
 	}
 	begin := func() {
@@ -151,7 +151,7 @@ func (a *App) quickAddBar(c *ui.Context) {
 		ui.Icon(c, lucide.Plus()).Size(15, 15).TextColor(iconCol).Shrink(0).AccessHidden(true)
 		input := ui.TextInputBase(c.Key("quick-title"), &q.Draft.Title).Ref(&q.Input).Grow(1).MinWidth(0).FontSize(fontBody).MinHeight(30).
 			Label("快捷添加标题").Placeholder("添加任务…").PlaceholderColor(t.TextReadable).
-			Disabled(a.busy).OnSubmit(a.submitQuickTask).OnChange(a.activateQuickAdd).OnClick(a.activateQuickAdd)
+			OnSubmit(a.submitQuickTask).OnChange(a.activateQuickAdd).OnClick(a.activateQuickAdd)
 		if input.Focused() && !*wasFocused {
 			a.activateQuickAdd()
 		}
@@ -211,7 +211,7 @@ func (a *App) quickAddBar(c *ui.Context) {
 		})
 
 		expandBtn := ui.ButtonBase(c.Key("quick-expand")).Label("详细编辑").Tooltip("展开完整详情").Size(26, 26).Radius(5).Center().
-			Cursor(ui.CursorPointer).Disabled(a.busy).OnClick(a.expandQuickTask)
+			Cursor(ui.CursorPointer).OnClick(a.expandQuickTask)
 		if expandBtn.Hovered() {
 			expandBtn.Background(t.BgHover)
 		}
@@ -221,7 +221,7 @@ func (a *App) quickAddBar(c *ui.Context) {
 
 		hasTitle := strings.TrimSpace(q.Draft.Title) != ""
 		submitBtn := ui.ButtonBase(c.Key("quick-submit")).Label("添加").Tooltip("创建任务 (Enter)").Size(26, 26).Radius(6).Center().
-			Cursor(ui.CursorPointer).Disabled(a.busy || !hasTitle).OnClick(a.submitQuickTask)
+			Cursor(ui.CursorPointer).Disabled(!hasTitle).OnClick(a.submitQuickTask)
 		if hasTitle {
 			submitBtn.Background(t.Accent)
 			if submitBtn.Hovered() {
@@ -242,7 +242,7 @@ func (a *App) quickAddBar(c *ui.Context) {
 
 func (a *App) quickProperty(c *ui.Context, key, label, value string, icon *ui.SVG, active bool, content func()) {
 	q := &a.quick
-	trigger := propertyTrigger(c, "quick-"+key, label, value, icon, active).Disabled(a.busy).OnClick(func() {
+	trigger := propertyTrigger(c, "quick-"+key, label, value, icon, active).OnClick(func() {
 		if q.Meta == key {
 			q.Meta = ""
 		} else {
@@ -263,6 +263,19 @@ func (a *App) quickProperty(c *ui.Context, key, label, value string, icon *ui.SV
 	}
 }
 
+func (a *App) syncSearchSelection() {
+	results := a.searchResults()
+	for i, task := range results {
+		if a.taskRowSelected(task) {
+			a.search.Index = i
+			return
+		}
+	}
+	if a.search.Index >= len(results) {
+		a.search.Index = max(0, len(results)-1)
+	}
+}
+
 func (a *App) openTaskSearch() {
 	if a.client == nil || a.aiPanel != nil {
 		return
@@ -273,27 +286,30 @@ func (a *App) openTaskSearch() {
 			a.query = ""
 			a.search.Open = true
 			a.search.Return = false
+			a.syncSearchSelection()
 			a.search.Input.Focus()
 		})
 		return
 	}
 	a.search.Open = true
 	a.search.Return = false
+	a.syncSearchSelection()
 	a.search.Input.Focus()
 }
 
 func (a *App) searchResults() []api.Task {
 	now := time.Now().In(a.location())
-	tasks := a.interactionTasks(projectTasks(a.tasks, a.nextOccurrences, a.history.Items), a.page, a.query, now)
-	if isHistoryPage(a.page) {
-		tasks = filterHistory(tasks, a.historyFilter, now)
-	}
-	return tasks
+	return a.cachedTaskList(a.page, a.query, now)
 }
 
 func (a *App) openSearchResult(task api.Task) {
 	a.search.Open, a.search.Return = false, true
+	a.highlightedTaskKey = taskRowKey(task)
+	a.highlightPending = nil
 	a.openTask(task)
+	if a.selectedTaskID == task.ID || (a.selectedOccurrence != nil && taskRowKey(*a.selectedOccurrence) == taskRowKey(task)) {
+		a.revealTaskID = task.ID
+	}
 }
 
 func (a *App) taskSearchPanel(c *ui.Context) {

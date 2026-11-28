@@ -1,8 +1,10 @@
 package app
 
 import (
-	"github.com/egoist/mygo/ui"
 	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
 	"todo-native/internal/api"
 	"todo-native/internal/storage"
 )
@@ -17,6 +19,10 @@ func TestLinearListKeysStayWithinListFocus(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Key(0, ui.KeyDown)
+	if a.highlightedTaskKey == "" || a.draft.Task.ID == 2 {
+		// Immediate highlight moves synchronously while detail load debounces 80ms
+	}
+	tt.Advance(100 * time.Millisecond)
 	if a.draft.Task.ID != 2 {
 		t.Fatal("list Down did not choose the next task", a.draft.Task.ID)
 	}
